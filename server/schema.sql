@@ -479,6 +479,23 @@ CREATE INDEX IF NOT EXISTS idx_case_findings_case ON case_findings (case_id);
 -- Записывается каждое обращение, а не сводка: сводку можно посчитать из
 -- строк, строки из сводки — нет. Именно по ним считается себестоимость
 -- задачи, и именно они нужны, когда модель начала отвечать хуже.
+--
+-- # Расход считается в долларах, а продажи — в рублях
+--
+-- Прежде здесь стояли копейки, и это была ошибка, замеченная при переносе
+-- двери к моделям: поставщики называют цену в долларах, и перевод её в
+-- рубли при записи вбил бы в строку курс того дня. Сумма за месяц после
+-- этого не сходится ни с чьим счётом: ни с долларовым счётом поставщика,
+-- ни с рублёвым нашим, — а починить её нельзя, потому что курс записи
+-- потерян.
+--
+-- Поэтому две валюты не смешиваются нигде: расход на модели — доллары,
+-- выручка и цены пакетов — рубли. Перевод делается при показе, по курсу
+-- на день показа, и остаётся видимым как перевод.
+--
+-- Единица — нанодоллар (10⁻⁹ USD), целым числом: деньги дробным числом не
+-- хранятся никогда, а цена одного токена — это миллионные доли доллара, и
+-- в копейках она округлилась бы в ноль.
 CREATE TABLE IF NOT EXISTS llm_calls (
     id             BIGSERIAL   PRIMARY KEY,
     job_id         BIGINT      NULL REFERENCES gen_jobs (id),
@@ -488,8 +505,17 @@ CREATE TABLE IF NOT EXISTS llm_calls (
     status         TEXT        NOT NULL DEFAULT 'ok',
     prompt_tokens  BIGINT      NOT NULL DEFAULT 0,
     output_tokens  BIGINT      NOT NULL DEFAULT 0,
-    -- Цена в копейках: деньги никогда не хранятся дробным числом.
-    cost_kopecks   BIGINT      NOT NULL DEFAULT 0,
+    cached_tokens  BIGINT      NOT NULL DEFAULT 0,
+    cache_write_tokens BIGINT  NOT NULL DEFAULT 0,
+
+    cost_nano_usd  BIGINT      NOT NULL DEFAULT 0,
+
+    -- Назвал ли цену поставщик. Расчётная цена не знает ни скидки
+    -- префиксного кэша, ни наценки шлюза и ошибается в разы там, где кэш
+    -- работает. Сложить её с названной в одну колонку без пометки значит
+    -- выдать оценку за факт.
+    cost_exact     BOOLEAN     NOT NULL DEFAULT FALSE,
+
     latency_ms     BIGINT      NOT NULL DEFAULT 0,
     request        JSONB       NULL,
     response       JSONB       NULL,
@@ -499,16 +525,33 @@ CREATE TABLE IF NOT EXISTS llm_calls (
 CREATE INDEX IF NOT EXISTS idx_llm_calls_time ON llm_calls (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_llm_calls_job  ON llm_calls (job_id);
 
--- Цены моделей: сколько стоит тысяча токенов у поставщика.
+-- Прайс моделей: сколько стоит один токен у поставщика, в нанодолларах.
 --
 -- В базе, а не в коде: цены меняются у поставщика, а не у нас, и сборка
 -- ради новой цены не выпускается.
+--
+-- Прайс — запасной путь для тех, кто цену не называет. Точную цену
+-- обращения называет маршрутизатор, и только он может назвать её честно:
+-- внутри него один и тот же запрос уходит разным поставщикам по разным
+-- ценам. Посчитанное по прайсу помечается как оценка (cost_exact = FALSE
+-- в llm_calls) и в сводке показывается отдельно.
+--
+-- За токен, а не за тысячу: тысяча — привычная единица прайс-листов, но
+-- она заставляет делить при каждом расчёте, и однажды разделят не там.
 CREATE TABLE IF NOT EXISTS model_prices (
-    provider        TEXT        NOT NULL,
-    model           TEXT        NOT NULL,
-    input_kopecks   BIGINT      NOT NULL DEFAULT 0,
-    output_kopecks  BIGINT      NOT NULL DEFAULT 0,
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    provider             TEXT        NOT NULL,
+    model                TEXT        NOT NULL,
+    prompt_nano_usd      BIGINT      NOT NULL DEFAULT 0,
+    completion_nano_usd  BIGINT      NOT NULL DEFAULT 0,
+
+    -- Цена токена, прочитанного из префиксного кэша и записанного в него.
+    -- Ноль означает «поставщик не сказал»: тогда кэшированный токен
+    -- считается по обычной цене входа, то есть расчёт завышает — и это
+    -- правильная сторона для ошибки в оценке.
+    cache_read_nano_usd  BIGINT      NOT NULL DEFAULT 0,
+    cache_write_nano_usd BIGINT      NOT NULL DEFAULT 0,
+
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (provider, model)
 );
 
