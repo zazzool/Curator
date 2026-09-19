@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
@@ -10,8 +11,8 @@ import (
 //
 // Каждый объявлен именем, называющим, кого он пускает: Open — всякого,
 // Keyed — сборку с ключом программы, Device — устройство с токеном.
-func Routes(door *Door, feed *Feed) {
-	r := &routes{accounts: door.accounts, feed: feed}
+func Routes(door *Door, feed *Feed, attempts *Attempts) {
+	r := &routes{accounts: door.accounts, feed: feed, attempts: attempts, now: time.Now}
 
 	// Справка о службе открыта всякому: её спрашивает и приложение до
 	// заведения устройства, и наблюдение снаружи. Ничего о враче она не
@@ -29,11 +30,21 @@ func Routes(door *Door, feed *Feed) {
 	door.Device("GET /v1/content/version", r.version)
 	door.Device("GET /v1/cases", r.cases)
 	door.Device("GET /v1/cases/{id}", r.oneCase)
+
+	door.Device("POST /v1/attempts", r.record)
+	door.Device("GET /v1/progress", r.progress)
+	door.Device("GET /v1/review", r.review)
 }
 
 type routes struct {
 	accounts *Accounts
 	feed     *Feed
+	attempts *Attempts
+
+	// now — источник времени. Полем, а не time.Now по месту: проверке
+	// нужно подвинуть часы, чтобы увидеть подошедший срок повторения, а
+	// ждать сутки она не может.
+	now func() time.Time
 }
 
 func (r *routes) health(w http.ResponseWriter, _ *http.Request) {
@@ -142,4 +153,74 @@ func (r *routes) oneCase(w http.ResponseWriter, req *http.Request, _ Caller) {
 		return
 	}
 	WriteJSON(w, http.StatusOK, caseJSON(one))
+}
+
+type recordRequest struct {
+	Attempts []Attempt `json:"attempts"`
+}
+
+// record принимает пачку попыток.
+//
+// Пачкой, а не по одной: приложение работает офлайн и досылает вечером
+// всё, что накопилось за день. Посылка по одной означала бы сотню
+// обращений подряд с телефона в метро — то есть сотню поводов оборваться.
+func (r *routes) record(w http.ResponseWriter, req *http.Request, caller Caller) {
+	var body recordRequest
+	if err := DecodeBody(req, &body); err != nil {
+		WriteError(w, http.StatusBadRequest, "Запрос не разобран")
+		return
+	}
+	if len(body.Attempts) > 500 {
+		// Потолок назван вслух и отказывает, а не молча обрезает:
+		// обрезанная пачка означает потерянный разбор, и врач об этом не
+		// узнает. Пятисот хватает на любой разумный офлайн.
+		WriteError(w, http.StatusBadRequest,
+			"Слишком много разборов в одной посылке. Пошлите их частями")
+		return
+	}
+
+	out, err := r.attempts.Record(req.Context(), caller.AccountID, body.Attempts, r.now())
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "Разборы не сохранились. Попробуйте ещё раз")
+		return
+	}
+	WriteJSON(w, http.StatusOK, map[string]any{
+		"accepted": out.Accepted,
+		"repeated": out.Repeated,
+		"xp":       out.XP,
+		"level":    out.Level,
+		"due":      out.Due,
+	})
+}
+
+func (r *routes) progress(w http.ResponseWriter, req *http.Request, caller Caller) {
+	out, err := r.attempts.Progress(req.Context(), caller.AccountID, r.now())
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "Не вышло прочитать ваш прогресс")
+		return
+	}
+	WriteJSON(w, http.StatusOK, map[string]any{
+		"xp": out.XP, "level": out.Level, "due": out.Due,
+	})
+}
+
+// review отдаёт задачи, которым пришёл срок повторения.
+func (r *routes) review(w http.ResponseWriter, req *http.Request, caller Caller) {
+	limit, _ := strconv.Atoi(req.URL.Query().Get("limit"))
+	list, err := r.attempts.Due(req.Context(), caller.AccountID, r.now(), limit)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "Не вышло получить задачи к повторению")
+		return
+	}
+	// Пустой список — [], а не null: «сегодня нечего повторять» — исправный
+	// случай, самый частый из всех.
+	out := make([]map[string]any, 0, len(list))
+	for _, one := range list {
+		out = append(out, map[string]any{
+			"id":    one.ID,
+			"body":  json.RawMessage(one.Body),
+			"dueAt": one.DueAt.Format(time.RFC3339),
+		})
+	}
+	WriteJSON(w, http.StatusOK, map[string]any{"cases": out})
 }

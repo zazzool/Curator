@@ -65,6 +65,7 @@ func TestЭталонОтветовЧитаетсяИНеПуст(t *testing.T) 
 	for _, want := range []string{
 		"GET /v1/health", "POST /v1/devices", "GET /v1/me",
 		"GET /v1/content/version", "GET /v1/cases", "GET /v1/cases/{id}",
+		"POST /v1/attempts", "GET /v1/progress", "GET /v1/review",
 	} {
 		if _, ok := c.Responses[want]; !ok {
 			t.Errorf("в эталоне нет ответа %q", want)

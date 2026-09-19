@@ -16,6 +16,7 @@ import (
 
 	"curator/server/internal/casestore"
 	"curator/server/internal/dbgate"
+	"curator/server/internal/progress"
 	"curator/server/internal/studio"
 )
 
@@ -51,7 +52,7 @@ func дверь(t *testing.T) (*httptest.Server, *dbgate.Gate, string) {
 	}
 
 	door := NewDoor(keys, NewAccounts(gate))
-	Routes(door, NewFeed(gate))
+	Routes(door, NewFeed(gate), NewAttempts(gate, progress.Default()))
 	srv := httptest.NewServer(door.Handler())
 	t.Cleanup(srv.Close)
 	return srv, gate, key
