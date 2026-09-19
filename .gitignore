@@ -1,0 +1,15 @@
+# Сборка
+/server/curator
+/web/dist
+/web/node_modules
+/app/build
+/app/.dart_tool
+
+# Настройки среды: пароли базы и ключи моделей живут в окружении, а не здесь.
+.env
+*.env
+!.env.example
+
+# Мусор редакторов
+.DS_Store
+*.swp
