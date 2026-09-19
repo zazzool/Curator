@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 import { Login } from './Login'
 import { Packs } from './Packs'
+import { Reports } from './Reports'
 import { Sales } from './Sales'
 import { SourceList } from './SourceList'
 import { SourceScreen } from './SourceScreen'
@@ -19,6 +20,7 @@ const SECTIONS = [
   { id: 'sources', title: 'Источники' },
   { id: 'packs', title: 'Наборы' },
   { id: 'sales', title: 'Продажи' },
+  { id: 'reports', title: 'Отчёты' },
 ] as const
 
 type Section = (typeof SECTIONS)[number]['id']
@@ -70,6 +72,8 @@ export function App() {
         <Packs me={me} />
       ) : section === 'sales' ? (
         <Sales me={me} />
+      ) : section === 'reports' ? (
+        <Reports me={me} />
       ) : openSource === null ? (
         <SourceList me={me} onOpen={setOpenSource} />
       ) : (

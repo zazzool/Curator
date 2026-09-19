@@ -197,6 +197,31 @@ export type Entitlement = {
   expiresAt: string
 }
 
+// Сводка по задаче: как её разбирают.
+export type CaseStats = {
+  caseId: string
+  attempts: number
+  correct: number
+  /** Доля верных разборов, 0…1. */
+  solveRate: number
+  medianMs: number
+  /** Сколько раз выбран каждый неверный вариант. */
+  confusion: Record<string, number>
+  origin: string
+  /**
+   * Хватает ли попыток, чтобы доле верить. Без этого доля у задачи с
+   * тремя попытками читается как приговор ей.
+   */
+  enough: boolean
+}
+
+export type EventCount = {
+  name: string
+  title: string
+  count: number
+  accounts: number
+}
+
 export type Me = {
   login: string
   displayName: string
@@ -453,6 +478,18 @@ export const api = {
 
   refundPayment: (id: number, note: string) =>
     request<{ status: string }>('POST', `/admin/api/payments/${id}/refund`, { note }),
+
+  reportCases: (limit = 20) =>
+    request<{ floor: number; easy: CaseStats[]; hard: CaseStats[] }>(
+      'GET',
+      `/admin/api/reports/cases?limit=${limit}`,
+    ),
+
+  reportEvents: (days = 7) =>
+    request<{ days: number; events: EventCount[] }>(
+      'GET',
+      `/admin/api/reports/events?days=${days}`,
+    ),
 
   contentVersion: () => request<{ version: number }>('GET', '/admin/api/content-version'),
 

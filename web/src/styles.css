@@ -264,3 +264,13 @@ button:disabled {
 .row-tools button {
   padding: 2px 8px;
 }
+
+/* Подзаголовок внутри раздела: та же плоскость, отличается только весом.
+   Волосяной черты здесь нет намеренно — она разделяет разделы, и лишняя
+   превратила бы список в решётку. */
+.sub {
+  margin: var(--gap-wide) 0 var(--gap);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
