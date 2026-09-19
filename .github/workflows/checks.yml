@@ -23,8 +23,9 @@
 # # Версия Go берётся из go.mod, а не пишется здесь
 #
 # Два места для одной версии расходятся молча. go.mod — единственное
-# место, где версия Go названа, и сторож читает её оттуда. Node назвать
-# больше негде, поэтому он назван здесь — и здесь же единственный раз.
+# место, где версия Go названа, и сторож читает её оттуда. Node и Flutter
+# назвать больше негде, поэтому они названы здесь — и здесь же
+# единственный раз.
 name: Проверки
 
 on:
@@ -91,6 +92,28 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+
+      # Flutter ставится руками, а не готовым действием. Цена названа
+      # вслух: полтора гигабайта на каждый прогон, минуты три. Взамен —
+      # уверенность, что оба сторожа поставят одно и то же: готовое
+      # действие пришлось бы проверять на Forgejo, а проверить его там
+      # можно только сломав всех, кто ждёт зелёного.
+      #
+      # Кэша нет намеренно, как и у остальных шагов: кэш — это четвёртое
+      # действие, ведущее себя у двух сторожей по-разному.
+      - name: Flutter
+        if: hashFiles('app/pubspec.yaml') != ''
+        run: |
+          set -euo pipefail
+          FLUTTER_VERSION=3.41.2
+          base=https://storage.googleapis.com/flutter_infra_release/releases/stable/linux
+          curl -sSL -o /tmp/flutter.tar.xz "$base/flutter_linux_$FLUTTER_VERSION-stable.tar.xz"
+          tar xf /tmp/flutter.tar.xz -C /opt
+          rm /tmp/flutter.tar.xz
+          # Набор распакован не тем, кто его запускает, и git считает
+          # такой каталог чужим — а flutter зовёт git при первом запуске.
+          git config --global --add safe.directory /opt/flutter
+          echo /opt/flutter/bin >> "$GITHUB_PATH"
 
       - name: Обязательные проверки
         run: ./tools/checks.sh
