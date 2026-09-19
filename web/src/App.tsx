@@ -1,13 +1,29 @@
 import { useState } from 'react'
 
 import { Login } from './Login'
+import { Packs } from './Packs'
 import { SourceList } from './SourceList'
 import { SourceScreen } from './SourceScreen'
 import { api, setToken } from './api'
 import type { Me } from './api'
 
+// Разделы студии.
+//
+// Вкладка видна всем, а закрывает раздел право на сервере. Спрятанная
+// вкладка при открытой ручке — подсказка, где искать, а не запрет:
+// человек, открывший инструменты разработчика, увидит и адрес, и ответ.
+// Поэтому прячется здесь только действие, которое всё равно отказало бы, и
+// рядом сказано, почему его нет.
+const SECTIONS = [
+  { id: 'sources', title: 'Источники' },
+  { id: 'packs', title: 'Наборы' },
+] as const
+
+type Section = (typeof SECTIONS)[number]['id']
+
 export function App() {
   const [me, setMe] = useState<Me | null>(null)
+  const [section, setSection] = useState<Section>('sources')
   const [openSource, setOpenSource] = useState<number | null>(null)
 
   if (!me) return <Login onEnter={setMe} />
@@ -20,6 +36,7 @@ export function App() {
     setToken('')
     setMe(null)
     setOpenSource(null)
+    setSection('sources')
   }
 
   return (
@@ -30,7 +47,26 @@ export function App() {
           {me.displayName || me.login} <button onClick={leave}>Выйти</button>
         </span>
       </header>
-      {openSource === null ? (
+
+      <nav className="tabs">
+        {SECTIONS.map((one) => (
+          <button
+            key={one.id}
+            className={one.id === section ? 'tab tab-here' : 'tab'}
+            aria-current={one.id === section ? 'page' : undefined}
+            onClick={() => {
+              setSection(one.id)
+              setOpenSource(null)
+            }}
+          >
+            {one.title}
+          </button>
+        ))}
+      </nav>
+
+      {section === 'packs' ? (
+        <Packs me={me} />
+      ) : openSource === null ? (
         <SourceList me={me} onOpen={setOpenSource} />
       ) : (
         <SourceScreen me={me} id={openSource} onBack={() => setOpenSource(null)} />

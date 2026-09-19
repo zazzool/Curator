@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -304,4 +305,114 @@ func TestPgМеткаНабораОтказываетВнятно(t *testing.T) 
 	if !contains(err.Error(), "уже заведён") {
 		t.Errorf("отказ не говорит, что метка занята: %q", err)
 	}
+}
+
+func TestPgСоставЧитаетсяНазваниямиЗадач(t *testing.T) {
+	// Состав можно было только переписать целиком, но не прочесть: список
+	// наборов знает лишь их число. Составитель, добавляющий одну задачу,
+	// затирал бы этим всё, что собрали до него.
+	store, gate, _ := лавка(t)
+	ctx := context.Background()
+	slug := набор(t, store)
+	первая := задача(t, gate, "published")
+	вторая := задача(t, gate, "published")
+	if _, err := store.SetItems(ctx, slug, []string{вторая, первая}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := store.One(ctx, slug)
+	if err != nil {
+		t.Fatalf("состав не прочитан: %v", err)
+	}
+	if len(out.Items) != 2 {
+		t.Fatalf("в составе %d задач, а клали две", len(out.Items))
+	}
+	// Порядок — тот, который задал составитель, а не порядок номеров.
+	if out.Items[0].ID != вторая || out.Items[1].ID != первая {
+		t.Errorf("порядок состава не тот, что задали: %s, %s",
+			out.Items[0].ID, out.Items[1].ID)
+	}
+	if out.Items[0].Title != "Срок" {
+		t.Errorf("задача названа %q, а по одному номеру её не узнать", out.Items[0].Title)
+	}
+	if out.Version != 0 {
+		t.Errorf("невыпущенный набор назвал выпуск номером %d", out.Version)
+	}
+}
+
+func TestPgПустойСоставЭтоПустойСписок(t *testing.T) {
+	// Только что заведённый набор пуст, и это исправный случай. Отдай он
+	// null — экран состава упал бы именно на новом наборе, то есть у
+	// всякого, кто заводит первый.
+	store, _, _ := лавка(t)
+	out, err := store.One(context.Background(), набор(t, store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Items == nil {
+		t.Fatal("пустой состав отдан пустым значением, а не пустым списком")
+	}
+	if len(out.Items) != 0 {
+		t.Errorf("в новом наборе оказалось %d задач", len(out.Items))
+	}
+}
+
+func TestPgСнятыйСВитриныНаборНеПоказывается(t *testing.T) {
+	// Состояние «снят» стояло в схеме, а поставить его было нечем: набор,
+	// который больше не продают, оставался на витрине навсегда.
+	store, gate, _ := лавка(t)
+	ctx := context.Background()
+	slug := набор(t, store)
+	if _, err := store.SetItems(ctx, slug, []string{задача(t, gate, "published")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Publish(ctx, slug, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if !наВитрине(t, store, slug) {
+		t.Fatal("выпущенный набор не попал на витрину")
+	}
+
+	if err := store.Update(ctx, slug, "Набор", "", "retired"); err != nil {
+		t.Fatalf("набор не снят: %v", err)
+	}
+	if наВитрине(t, store, slug) {
+		t.Error("снятый набор остался на витрине")
+	}
+
+	// Выпуск при этом никуда не делся: подписанное остаётся подписанным.
+	out, err := store.One(ctx, slug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Version != 1 {
+		t.Errorf("у снятого набора потерялся выпуск: версия %d", out.Version)
+	}
+}
+
+func TestPgСостоянияКоторогоНетНаборНеПринимает(t *testing.T) {
+	// Словарь состояний закрыт, и отказ называет само состояние: молча
+	// принятое «удалён» не сняло бы набор ни с витрины, ни откуда-либо.
+	store, _, _ := лавка(t)
+	err := store.Update(context.Background(), набор(t, store), "Набор", "", "удалён")
+	if err == nil {
+		t.Fatal("состояние не из словаря принято")
+	}
+	if !strings.Contains(err.Error(), "удалён") {
+		t.Errorf("отказ не назвал негодное состояние: %v", err)
+	}
+}
+
+func наВитрине(t *testing.T, store *Store, slug string) bool {
+	t.Helper()
+	shelf, err := store.Shelf(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, one := range shelf {
+		if one.Slug == slug {
+			return true
+		}
+	}
+	return false
 }

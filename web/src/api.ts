@@ -125,6 +125,34 @@ export type Prompt = {
   revision: number
 }
 
+// Набор задач в списке: столько, сколько нужно, чтобы выбрать нужный.
+export type Pack = {
+  slug: string
+  title: string
+  status: string
+  cases: number
+  /** Номер последнего выпуска; 0 — набор ещё не выпускался. */
+  version: number
+}
+
+// Задача в составе набора. Название и метка единицы едут рядом с номером
+// намеренно: состав из тридцати строк вида «c-1758…» нельзя ни проверить,
+// ни пересобрать — по нему не видно даже, та ли это тема.
+export type PackItem = {
+  id: string
+  ord: number
+  title: string
+  unitLabel: string
+  status: string
+}
+
+// Набор целиком: карточка и состав. Число задач сюда не едет — вместо
+// него сам состав, а считать его длину экран умеет и сам.
+export type PackContents = Omit<Pack, 'cases'> & {
+  summaryMd: string
+  items: PackItem[]
+}
+
 export type Me = {
   login: string
   displayName: string
@@ -300,6 +328,44 @@ export const api = {
   publishCase: (id: string) => request<Case>('POST', `/admin/api/cases/${id}/publish`),
 
   withdrawCase: (id: string) => request<Case>('POST', `/admin/api/cases/${id}/withdraw`),
+
+  packs: () => request<{ packs: Pack[] }>('GET', '/admin/api/packs'),
+
+  pack: async (slug: string) => {
+    const raw = await request<{
+      slug: string
+      title: string
+      summaryMd: string
+      status: string
+      version: number
+      cases: PackItem[]
+    }>('GET', `/admin/api/packs/${encodeURIComponent(slug)}`)
+    // Сервер зовёт состав «cases» — тем же словом, каким в списке наборов
+    // зовётся их число. Разводим имена здесь, у самой двери: экран,
+    // получающий под одним именем то число, то список, читается дважды.
+    const { cases, ...card } = raw
+    return { ...card, items: cases }
+  },
+
+  createPack: (pack: { slug: string; title: string; summaryMd: string }) =>
+    request<{ slug: string }>('POST', '/admin/api/packs', pack),
+
+  savePack: (slug: string, card: { title: string; summaryMd: string; status: string }) =>
+    request<{ status: string }>('PUT', `/admin/api/packs/${encodeURIComponent(slug)}`, card),
+
+  // Состав задаётся целиком: порядок списка и есть решение составителя, а
+  // правка по одной задаче превращает его в череду мелких решений, из
+  // которых порядок не виден никому.
+  setPackItems: (slug: string, cases: string[]) =>
+    request<{ cases: number }>('PUT', `/admin/api/packs/${encodeURIComponent(slug)}/items`, {
+      cases,
+    }),
+
+  releasePack: (slug: string) =>
+    request<{ slug: string; version: number; cases: number; keyId: string }>(
+      'POST',
+      `/admin/api/packs/${encodeURIComponent(slug)}/releases`,
+    ),
 
   contentVersion: () => request<{ version: number }>('GET', '/admin/api/content-version'),
 

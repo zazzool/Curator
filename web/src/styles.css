@@ -221,3 +221,46 @@ button:disabled {
   margin-bottom: var(--gap);
   white-space: pre-wrap;
 }
+
+/* Разделы студии. Волосяная черта под текущим, а не заливка и не тень:
+   вкладка лежит в странице, а не висит над ней. */
+.tabs {
+  display: flex;
+  gap: var(--gap);
+  margin-top: var(--gap);
+  border-bottom: 1px solid var(--line);
+}
+
+.tab {
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  padding: 6px 2px;
+  color: var(--ink-soft);
+}
+
+.tab-here {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+
+/* Строка списка с кнопками справа: состав набора правится прямо в строке,
+   и уводить кнопки в отдельный столбец значит оторвать их от того, над чем
+   они действуют. */
+.row-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--gap);
+}
+
+.row-tools {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+
+.row-tools button {
+  padding: 2px 8px;
+}

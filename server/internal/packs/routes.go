@@ -19,6 +19,8 @@ func Routes(desk *studio.Desk, store *Store) {
 	desk.Handle(studio.PermPacks, "PUT /admin/api/packs/{slug}/items", r.setItems)
 	desk.Handle(studio.PermPacks, "POST /admin/api/packs/{slug}/releases", r.release)
 	desk.Handle(studio.PermPacks, "GET /admin/api/packs", r.list)
+	desk.Handle(studio.PermPacks, "GET /admin/api/packs/{slug}", r.show)
+	desk.Handle(studio.PermPacks, "PUT /admin/api/packs/{slug}", r.update)
 }
 
 type routes struct {
@@ -94,4 +96,44 @@ func (r *routes) list(w http.ResponseWriter, req *http.Request, _ studio.User) {
 		})
 	}
 	studio.WriteJSON(w, http.StatusOK, map[string]any{"packs": out})
+}
+
+func (r *routes) show(w http.ResponseWriter, req *http.Request, _ studio.User) {
+	one, err := r.store.One(req.Context(), req.PathValue("slug"))
+	if err != nil {
+		studio.WriteError(w, http.StatusNotFound, studio.Sentence(err.Error()))
+		return
+	}
+	items := make([]map[string]any, 0, len(one.Items))
+	for _, item := range one.Items {
+		items = append(items, map[string]any{
+			"id": item.ID, "ord": item.Ord, "title": item.Title,
+			"unitLabel": item.UnitLabel, "status": item.Status,
+		})
+	}
+	studio.WriteJSON(w, http.StatusOK, map[string]any{
+		"slug": one.Slug, "title": one.Title, "summaryMd": one.SummaryMd,
+		"status": one.Status, "version": one.Version, "cases": items,
+	})
+}
+
+type updateRequest struct {
+	Title     string `json:"title"`
+	SummaryMd string `json:"summaryMd"`
+	Status    string `json:"status"`
+}
+
+func (r *routes) update(w http.ResponseWriter, req *http.Request, _ studio.User) {
+	var body updateRequest
+	if err := studio.DecodeBody(req, &body); err != nil {
+		studio.WriteError(w, http.StatusBadRequest, "Запрос не разобран: "+err.Error())
+		return
+	}
+	err := r.store.Update(req.Context(), req.PathValue("slug"),
+		body.Title, body.SummaryMd, body.Status)
+	if err != nil {
+		studio.WriteError(w, http.StatusBadRequest, studio.Sentence(err.Error()))
+		return
+	}
+	studio.WriteJSON(w, http.StatusOK, map[string]any{"status": body.Status})
 }
