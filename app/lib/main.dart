@@ -16,6 +16,9 @@ import 'package:flutter/material.dart';
 import 'api/client.dart';
 import 'api/token_store.dart';
 import 'cases/outbox.dart';
+import 'db/database.dart';
+import 'db/outbox_store.dart';
+import 'db/schedule.dart';
 import 'home.dart';
 import 'packs/manifest.dart';
 import 'packs/store.dart';
@@ -43,18 +46,48 @@ const _appKey = String.fromEnvironment('CURATOR_APP_KEY');
 /// должна делать прежние выпуски негодными все разом.
 const _packKeys = String.fromEnvironment('CURATOR_PACK_KEYS');
 
-void main() {
+Future<void> main() async {
+  // Плагины поднимаются до первого обращения к ним: база открывается
+  // раньше первого экрана, а без этой строки она отказала бы на старте.
+  WidgetsFlutterBinding.ensureInitialized();
+
   final api = Api(
     baseUrl: Uri.parse(_baseUrl),
     appKey: _appKey,
     tokens: PrefsTokenStore(),
   );
+
+  // База открывается до первого экрана: без неё повторение без сети
+  // показывало бы пусто, а пустой список врач читает как «сегодня нечего
+  // повторять» — то есть как правду.
+  //
+  // Не открылась — приложение всё равно поднимается, просто без работы
+  // без сети. Отказ на старте из-за испорченного файла базы оставил бы
+  // врача вообще без приложения, а лента и разбор от базы не зависят:
+  // непонятое не применяется, но и не роняет остального.
+  Schedule? schedule;
+  OutboxStore outboxStore = PrefsOutboxStore();
+  try {
+    final db = await openLocalDatabase();
+    final store = DbOutboxStore(db);
+    // Очередь, оставшаяся в настройках от прежней сборки, — это чей-то
+    // месяц занятий. Переносится один раз: после переноса там пусто.
+    await store.adopt(PrefsOutboxStore());
+    outboxStore = store;
+    schedule = Schedule(db);
+  } catch (error) {
+    // Пишется в журнал, а не показывается врачу: показать ему нечего —
+    // делать с этим он ничего не может, а приложение работает.
+    debugPrint('местная база не открылась: $error');
+  }
+
   runApp(
     CuratorApp(
       api: api,
-      outbox: Outbox(api, PrefsOutboxStore()),
+      outbox: Outbox(api, outboxStore),
       packs: FilePackStore(),
       keys: TrustedKeys.parse(_packKeys),
+      schedule: schedule,
     ),
   );
 }
@@ -66,12 +99,17 @@ class CuratorApp extends StatelessWidget {
     required this.outbox,
     required this.packs,
     required this.keys,
+    required this.schedule,
   });
 
   final Api api;
   final Outbox outbox;
   final PackStore packs;
   final TrustedKeys keys;
+
+  /// Расписание повторения на устройстве. Пусто — значит, местная база не
+  /// открылась, и работы без сети не будет; остальное работает.
+  final Schedule? schedule;
 
   @override
   Widget build(BuildContext context) {
@@ -84,7 +122,13 @@ class CuratorApp extends StatelessWidget {
         cardTheme: const CardThemeData(elevation: 0),
         appBarTheme: const AppBarTheme(elevation: 0, scrolledUnderElevation: 0),
       ),
-      home: StartScreen(api: api, outbox: outbox, packs: packs, keys: keys),
+      home: StartScreen(
+        api: api,
+        outbox: outbox,
+        packs: packs,
+        keys: keys,
+        schedule: schedule,
+      ),
     );
   }
 }
@@ -101,12 +145,17 @@ class StartScreen extends StatefulWidget {
     required this.outbox,
     required this.packs,
     required this.keys,
+    required this.schedule,
   });
 
   final Api api;
   final Outbox outbox;
   final PackStore packs;
   final TrustedKeys keys;
+
+  /// Расписание повторения на устройстве. Пусто — значит, местная база не
+  /// открылась, и работы без сети не будет; остальное работает.
+  final Schedule? schedule;
 
   @override
   State<StartScreen> createState() => _StartScreenState();
@@ -173,6 +222,7 @@ class _StartScreenState extends State<StartScreen> {
           outbox: widget.outbox,
           packs: widget.packs,
           keys: widget.keys,
+          schedule: widget.schedule,
         );
       },
     );

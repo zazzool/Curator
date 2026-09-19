@@ -7,9 +7,13 @@ library;
 
 import 'package:curator/api/client.dart';
 import 'package:curator/cases/feed.dart';
+import 'package:curator/db/database.dart';
+import 'package:curator/db/schedule.dart';
+import 'package:curator/progress/rules.dart';
 import 'package:curator/packs/manifest.dart';
 import 'package:curator/packs/store.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'fake_server.dart';
 
@@ -41,6 +45,8 @@ Release release(String slug) => Release.tryParse({
 })!;
 
 void main() {
+  setUpAll(sqfliteFfiInit);
+
   late FakeServer server;
   late Api api;
   late MemoryPackStore packs;
@@ -168,5 +174,91 @@ void main() {
     final page = await Feed(api, packs).page(limit: 20);
     expect(page.cases.single.id, 's-01');
     expect(page.version, 7);
+  });
+
+  group('повторение без сети', () {
+    late Database db;
+    late Schedule schedule;
+
+    setUp(() async {
+      db = await openLocalDatabase(
+        factory: databaseFactoryFfi,
+        path: inMemoryDatabasePath,
+      );
+      schedule = Schedule(db);
+    });
+
+    tearDown(() => db.close());
+
+    test('срок пришёл и задача лежит — задача показывается', () async {
+      // Ради этого местная база и заведена: сроки живут на сервере, а
+      // врач занимается в метро.
+      await install('cardio', ['c-01', 'c-02']);
+      final now = DateTime(2026, 9, 19, 10);
+      await schedule.put(
+        'c-01',
+        ReviewState(ease: 2.5, dueAt: now.subtract(const Duration(days: 1))),
+      );
+      await server.stop();
+
+      final due = await Feed(api, packs, schedule).due(now: now);
+
+      expect([for (final one in due) one.id], ['c-01']);
+    });
+
+    test('задача без содержания на устройстве пропускается', () async {
+      // Показать номер вместо условия значит показать пустой экран.
+      final now = DateTime(2026, 9, 19, 10);
+      await schedule.put('c-нет', ReviewState(ease: 2.5, dueAt: now));
+      await server.stop();
+
+      expect(await Feed(api, packs, schedule).due(now: now), isEmpty);
+    });
+
+    test('ещё не подошедший срок не показывается', () async {
+      await install('cardio', ['c-01']);
+      final now = DateTime(2026, 9, 19, 10);
+      await schedule.put(
+        'c-01',
+        ReviewState(ease: 2.5, dueAt: now.add(const Duration(days: 3))),
+      );
+      await server.stop();
+
+      expect(await Feed(api, packs, schedule).due(now: now), isEmpty);
+    });
+
+    test('отказ сервера местным расписанием НЕ подменяется', () async {
+      // «Войдите заново» и «нет сети» — разные беды.
+      await install('cardio', ['c-01']);
+      final now = DateTime(2026, 9, 19, 10);
+      await schedule.put('c-01', ReviewState(ease: 2.5, dueAt: now));
+      server.replies.add(Reply(401, {'error': 'Устройство не опознано'}));
+
+      await expectLater(
+        Feed(api, packs, schedule).due(now: now),
+        throwsA(isA<ApiFailure>().having((e) => e.status, 'код', 401)),
+      );
+    });
+
+    test('сроки с сервера ложатся на устройство', () async {
+      // Чтобы в следующий раз без сети было что показать.
+      await install('cardio', ['c-01']);
+      server.replies.add(
+        Reply(200, {
+          'cases': [
+            {
+              'id': 'c-01',
+              'body': body('Задача'),
+              'dueAt': '2026-09-20T10:00:00Z',
+            },
+          ],
+        }),
+      );
+
+      await Feed(api, packs, schedule).due();
+
+      final state = await schedule.state('c-01');
+      expect(state!.dueAt!.toUtc(), DateTime.utc(2026, 9, 20, 10));
+    });
   });
 }

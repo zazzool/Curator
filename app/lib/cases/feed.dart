@@ -13,6 +13,7 @@
 library;
 
 import '../api/client.dart';
+import '../db/schedule.dart';
 import '../packs/store.dart';
 import 'model.dart';
 
@@ -42,12 +43,16 @@ class FeedPage {
 
 /// Лента.
 class Feed {
-  Feed(this._api, [this._packs]);
+  Feed(this._api, [this._packs, this._schedule]);
 
   final Api _api;
 
   /// Наборы на устройстве. Без них лента просто не имеет запасного пути.
   final PackStore? _packs;
+
+  /// Расписание повторения на устройстве. Без него повторение без сети
+  /// невозможно в принципе: сроки живут на сервере.
+  final Schedule? _schedule;
 
   /// Что сегодня повторять.
   ///
@@ -56,15 +61,62 @@ class Feed {
   ///
   /// Пустой список — исправный случай и самый частый из всех: «сегодня
   /// нечего повторять» не отказ.
-  Future<List<CaseItem>> due() async {
-    final reply = await _api.get('/v1/review');
-    final rows = reply['cases'];
-    if (rows is! List) return [];
+  Future<List<CaseItem>> due({DateTime? now}) async {
+    try {
+      final reply = await _api.get('/v1/review');
+      final rows = reply['cases'];
+      if (rows is! List) return [];
+      final out = <CaseItem>[];
+      final fromServer = <String, DateTime>{};
+      for (final row in rows) {
+        if (row is! Map<String, dynamic>) continue;
+        final one = CaseItem.tryParse(row);
+        if (one == null) continue;
+        out.add(one);
+        final at = DateTime.tryParse(
+          row['dueAt'] is String ? row['dueAt'] as String : '',
+        );
+        if (at != null) fromServer[one.id] = at;
+      }
+      // Сроки с сервера кладутся на устройство, чтобы в следующий раз без
+      // сети было что показать. Хозяин расписания — сервер: он видит все
+      // устройства врача, а здесь только одно.
+      await _schedule?.accept(fromServer);
+      return out;
+    } on ApiFailure catch (failure) {
+      final schedule = _schedule;
+      final packs = _packs;
+      if (!failure.offline || schedule == null || packs == null) rethrow;
+      return _dueFromPacks(schedule, packs, now ?? DateTime.now());
+    }
+  }
+
+  /// Повторение без сети.
+  ///
+  /// Сроки берутся из местного расписания, а содержание — из скачанных
+  /// наборов. Задача, срок которой пришёл, но содержания которой на
+  /// устройстве нет, пропускается: показать номер вместо условия значит
+  /// показать пустой экран.
+  Future<List<CaseItem>> _dueFromPacks(
+    Schedule schedule,
+    PackStore packs,
+    DateTime now,
+  ) async {
+    final where = <String, String>{};
+    for (final slug in await packs.installed()) {
+      for (final id in await packs.have(slug)) {
+        where.putIfAbsent(id, () => slug);
+      }
+    }
+
     final out = <CaseItem>[];
-    for (final row in rows) {
-      if (row is! Map<String, dynamic>) continue;
-      final one = CaseItem.tryParse(row);
-      if (one != null) out.add(one);
+    for (final one in await schedule.due(now)) {
+      final slug = where[one.caseId];
+      if (slug == null) continue;
+      final body = await packs.caseBody(slug, one.caseId);
+      if (body is! Map<String, dynamic>) continue;
+      final item = CaseItem.tryParse({'id': one.caseId, 'body': body});
+      if (item != null) out.add(item);
     }
     return out;
   }

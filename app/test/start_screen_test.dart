@@ -42,6 +42,10 @@ void main() {
         outbox: Outbox(api, MemoryOutboxStore()),
         packs: MemoryPackStore(),
         keys: const TrustedKeys({}),
+        // Без расписания: этот экран о нём ничего не знает, а настоящая
+        // база внутри проверки виджетов не открывается — там подменено
+        // время, и ожидание ввода-вывода не наступает никогда.
+        schedule: null,
       ),
     );
     await tester.pumpAndSettle();

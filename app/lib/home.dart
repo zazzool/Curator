@@ -14,6 +14,7 @@ import 'package:flutter/material.dart';
 import 'api/client.dart';
 import 'cases/outbox.dart';
 import 'cases/practice_screen.dart';
+import 'db/schedule.dart';
 import 'packs/manifest.dart';
 import 'packs/download.dart';
 import 'packs/shelf.dart';
@@ -28,6 +29,7 @@ class Home extends StatefulWidget {
     required this.outbox,
     required this.packs,
     required this.keys,
+    required this.schedule,
   });
 
   final Api api;
@@ -37,6 +39,10 @@ class Home extends StatefulWidget {
   /// Открытые ключи, которым верит эта сборка. Приезжают сюда сверху, а не
   /// читаются по месту: ключ, взятый из двух мест, расходится молча.
   final TrustedKeys keys;
+
+  /// Расписание повторения на устройстве. Пусто — значит, местная база не
+  /// открылась, и повторения без сети не будет.
+  final Schedule? schedule;
 
   @override
   State<Home> createState() => _HomeState();
@@ -58,11 +64,13 @@ class _HomeState extends State<Home> {
             api: widget.api,
             outbox: widget.outbox,
             packs: widget.packs,
+            schedule: widget.schedule,
           ),
           PracticeScreen(
             api: widget.api,
             outbox: widget.outbox,
             packs: widget.packs,
+            schedule: widget.schedule,
             source: PracticeSource.review,
           ),
           ShelfScreen(

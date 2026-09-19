@@ -10,7 +10,9 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
+import '../db/schedule.dart';
 import '../packs/store.dart';
+import '../progress/rules.dart';
 import 'feed.dart';
 import 'model.dart';
 import 'outbox.dart';
@@ -32,6 +34,7 @@ class PracticeScreen extends StatefulWidget {
     required this.api,
     required this.outbox,
     this.packs,
+    this.schedule,
     this.source = PracticeSource.feed,
   });
 
@@ -42,6 +45,10 @@ class PracticeScreen extends StatefulWidget {
   /// работает и так: повторение без сети всё равно требует местной базы,
   /// которой пока нет.
   final PackStore? packs;
+
+  /// Расписание повторения на устройстве. Пока его нет, повторение без
+  /// сети невозможно: сроки живут на сервере.
+  final Schedule? schedule;
 
   final PracticeSource source;
 
@@ -75,7 +82,7 @@ class _PracticeScreenState extends State<PracticeScreen> {
       _failure = null;
     });
     try {
-      final feed = Feed(widget.api, widget.packs);
+      final feed = Feed(widget.api, widget.packs, widget.schedule);
       final cases = widget.source == PracticeSource.review
           ? await feed.due()
           : (await feed.page(limit: 20)).cases;
@@ -126,9 +133,31 @@ class _PracticeScreenState extends State<PracticeScreen> {
       ),
     );
 
+    // Срок следующего повторения считается здесь же и ложится на
+    // устройство. Иначе повторение без сети показывало бы вчерашний
+    // список: разбор, сделанный в метро, сервер увидит только назавтра,
+    // а расписание нужно врачу сегодня.
+    //
+    // Расчёт тот же самый, общий с сервером (`progress/rules.dart`), и
+    // второй его реализации здесь нет: сойтись они могут только так.
+    final schedule = widget.schedule;
+    if (schedule != null) {
+      final rules = Rules.defaults;
+      final before = await schedule.state(one.id) ?? rules.fresh;
+      await schedule.put(
+        one.id,
+        rules.next(before, one.isCorrect(option), DateTime.now()),
+      );
+    }
+
     // Отправка не ждётся и не показывается отказом: очередь сохранит
     // разбор, а врачу здесь важен разбор задачи, а не состояние сети.
-    await widget.outbox.flush();
+    final sent = await widget.outbox.flush();
+    // Доехавшее перестаёт быть «известным только нам»: с этого мгновения
+    // слово сервера о сроке старше нашего.
+    if (schedule != null && sent.sent > 0 && sent.failure == null) {
+      await schedule.markSynced([one.id]);
+    }
     await _refreshWaiting();
   }
 
