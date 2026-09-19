@@ -315,7 +315,12 @@ class _MineTile extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           if (busy)
-            _Progress(units: gotUnits, statements: gotStatements)
+            _Progress(
+              units: gotUnits,
+              statements: gotStatements,
+              unitWord: source.unitWord,
+              statementWord: source.statementWord,
+            )
           else
             Row(
               children: [
@@ -392,7 +397,12 @@ class _OfferTile extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           if (busy)
-            _Progress(units: gotUnits, statements: gotStatements)
+            _Progress(
+              units: gotUnits,
+              statements: gotStatements,
+              unitWord: source.unitWord,
+              statementWord: source.statementWord,
+            )
           else
             FilledButton.tonalIcon(
               onPressed: onPull,
@@ -433,10 +443,17 @@ class _Head extends StatelessWidget {
 }
 
 class _Progress extends StatelessWidget {
-  const _Progress({required this.units, required this.statements});
+  const _Progress({
+    required this.units,
+    required this.statements,
+    required this.unitWord,
+    required this.statementWord,
+  });
 
   final int units;
   final int statements;
+  final String unitWord;
+  final String statementWord;
 
   @override
   Widget build(BuildContext context) {
@@ -450,7 +467,12 @@ class _Progress extends StatelessWidget {
           // Двигающееся число вместо крутящегося кружка: закачка
           // справочника идёт десятки секунд, и кружок всё это время
           // неотличим от зависшего.
-          'Прочитано: ${grouped(units)} и ${grouped(statements)}',
+          //
+          // Числа названы словами источника, а не голыми: «954 и 765»
+          // заставляет врача гадать, что из них что, а до конца закачки
+          // проверить нечем.
+          '${counted(units, unitWord)}, '
+          '${counted(statements, statementWord).toLowerCase()}',
           style: theme.textTheme.labelMedium,
         ),
       ],

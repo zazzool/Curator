@@ -218,6 +218,11 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
             {units.map((unit) => (
               <li key={unit.label} style={{ paddingLeft: `${unit.depth * 16}px` }}>
                 <span className="label">{unit.label}</span> {unit.title}
+                {/* Род показывается только у раздела: по нему не спрашивают, и
+                    составитель, не видя этого, ищет пропавшие задачи в
+                    генерации, а не в разборе. У записи род — умолчание, и
+                    метка у каждой строки была бы шумом. */}
+                {unit.kind === 'group' && <span className="kind">раздел</span>}
               </li>
             ))}
           </ul>

@@ -51,8 +51,7 @@ IconData statementIcon(String kind) {
   // «Клинические описания» — самый частый род у МКБ-10 (561 блок из 765),
   // и общий знак статьи у него значил бы, что знака нет у большинства
   // критериев справочника.
-  if (has(['описан', 'характерист', 'картина']))
-    return Icons.menu_book_outlined;
+  if (has(['описан', 'картина'])) return Icons.menu_book_outlined;
   if (has(['обязанн', 'требован', 'предпис'])) return Icons.gavel_outlined;
   if (has(['диффер', 'путают', 'отлич'])) return Icons.compare_arrows_outlined;
   return Icons.article_outlined;

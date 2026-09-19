@@ -183,6 +183,17 @@ button:disabled {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+/* Волосяная рамка, а не заливка и не тень: метка лежит в строке списка,
+   а не висит над ней. */
+.kind {
+  margin-left: 8px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.78em;
+  color: var(--ink-soft);
+}
+
 .alarm {
   color: var(--alarm);
   max-width: var(--measure);

@@ -19,8 +19,8 @@ const SOURCE: Source = {
 }
 
 const UNITS: Unit[] = [
-  { label: '3', parentLabel: '', title: 'Порядок', path: '3', depth: 0, answerable: false, ord: 0 },
-  { label: '3.1', parentLabel: '3', title: 'Сроки', path: '3/3.1', depth: 1, answerable: true, ord: 1 },
+  { label: '3', parentLabel: '', title: 'Порядок', path: '3', depth: 0, kind: 'entry', answerable: false, ord: 0 },
+  { label: '3.1', parentLabel: '3', title: 'Сроки', path: '3/3.1', depth: 1, kind: 'entry', answerable: true, ord: 1 },
 ]
 
 function job(over: Partial<Job> = {}): Job {

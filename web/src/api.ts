@@ -25,6 +25,8 @@ export type Unit = {
   title: string
   path: string
   depth: number
+  /** Род единицы: 'group' — вход в навигацию, 'entry' — то, по чему спрашивают. */
+  kind: string
   answerable: boolean
   ord: number
 }
