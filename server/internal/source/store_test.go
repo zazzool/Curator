@@ -426,3 +426,35 @@ func TestPgПоложенияПодВыпущеннойЗадачейНеЗам�
 		t.Errorf("отказ приехал кодом нарушения, а не словами: %v", err)
 	}
 }
+
+func TestPgПриёмкаУвеличиваетВыпускСправочника(t *testing.T) {
+	// По этому числу устройство понимает, что лежащая у него офлайн-копия
+	// отстала. Не меняйся оно приёмкой — врач читал бы старые критерии,
+	// а приложение считало бы копию свежей: расхождение молчаливое и
+	// ровно в ту сторону, где ошибка опаснее всего.
+	ctx := context.Background()
+	gate := testGate(t)
+	s := NewStore(gate)
+	sourceID := newSource(t, s)
+
+	version := func() int {
+		t.Helper()
+		var v int
+		if err := gate.QueryRow(ctx,
+			`SELECT reference_version FROM sources WHERE id = $1`, sourceID).Scan(&v); err != nil {
+			t.Fatalf("выпуск справочника не прочитан: %v", err)
+		}
+		return v
+	}
+
+	before := version()
+	docID := draftDoc(t, s, sourceID,
+		[]Unit{{Label: "п1", Title: "Пункт первый"}},
+		[]Statement{{UnitLabel: "п1", Kind: "criterion", Designation: "абз. 1", Body: "Положение"}})
+	if _, err := s.AcceptDraft(ctx, sourceID, docID, "проверка"); err != nil {
+		t.Fatalf("приёмка отказала: %v", err)
+	}
+	if after := version(); after <= before {
+		t.Errorf("выпуск справочника не вырос: было %d, стало %d", before, after)
+	}
+}
