@@ -48,6 +48,8 @@ func newSource(t *testing.T, s *Store) int64 {
 		Title:         "Приказ для проверки",
 		UnitWord:      "пункт",
 		StatementWord: "положение",
+		Purpose:       PurposeLegal,
+		Hierarchy:     HierarchyPartOf,
 		Completeness:  CompletenessFragment,
 	})
 	if err != nil {
@@ -62,6 +64,7 @@ func TestPgИсточникБезСловаряНеЗаводится(t *testing
 	s := NewStore(testGate(t))
 	_, err := s.CreateSource(context.Background(), Source{
 		Slug: "без-словаря", Kind: KindDecree, Title: "Приказ",
+		Purpose: PurposeLegal, Hierarchy: HierarchyPartOf,
 		Completeness: CompletenessFragment,
 	})
 	if err == nil {
@@ -76,6 +79,7 @@ func TestPgИсточникБезПолнотыНеЗаводится(t *testing
 	_, err := s.CreateSource(context.Background(), Source{
 		Slug: "без-полноты", Kind: KindDecree, Title: "Приказ",
 		UnitWord: "пункт", StatementWord: "положение",
+		Purpose: PurposeLegal, Hierarchy: HierarchyPartOf,
 	})
 	if err == nil {
 		t.Fatal("источник без названной полноты заведён")
