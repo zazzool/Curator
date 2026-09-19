@@ -60,6 +60,11 @@ type Outcome struct {
 	XP       int64
 	Level    int
 	Due      int
+
+	// Metrics — величины каталога после этой пачки. Уезжают тем же
+	// ответом: иначе приложение спрашивало бы их вторым обращением сразу
+	// после первого, из того же метро, где второго может и не случиться.
+	Metrics Metrics
 }
 
 // ModeReview — разбор по расписанию повторения.
@@ -119,6 +124,19 @@ func (a *Attempts) Record(ctx context.Context, accountID int64, batch []Attempt,
 			return err
 		}
 		out.XP, out.Level = xp, level
+
+		// Величины пересчитываются по попыткам, а не наращиваются: пачка
+		// за понедельник приезжает в среду, и счётчик, растущий в порядке
+		// прихода, посчитал бы серию и дни занятий по порядку доставки.
+		// Пересчёт — один раз на пачку, а не на попытку.
+		metrics, err := computeMetrics(ctx, tx, accountID)
+		if err != nil {
+			return err
+		}
+		if err := saveMetrics(ctx, tx, accountID, metrics); err != nil {
+			return err
+		}
+		out.Metrics = metrics
 
 		out.Due, err = countDue(ctx, tx, accountID, now)
 		return err
@@ -223,12 +241,19 @@ func countDue(ctx context.Context, tx pgx.Tx, accountID int64, now time.Time) (i
 
 // Progress — что врач видит о своём продвижении.
 type Progress struct {
-	XP    int64
-	Level int
-	Due   int
+	XP      int64
+	Level   int
+	Due     int
+	Metrics Metrics
 }
 
 // Progress читает прогресс.
+//
+// Величины берутся снимком, а не пересчитываются: чтение прогресса — самое
+// частое обращение приложения, и сводить по таблице попыток на каждый
+// показ экрана значит платить за правду, которая не изменилась с прошлой
+// пачки. Снимок обновляется там, где величины и могут измениться, — при
+// приёме разборов.
 func (a *Attempts) Progress(ctx context.Context, accountID int64, now time.Time) (Progress, error) {
 	var out Progress
 	err := a.gate.InTx(ctx, func(tx pgx.Tx) error {
@@ -237,6 +262,9 @@ func (a *Attempts) Progress(ctx context.Context, accountID int64, now time.Time)
 			return err
 		}
 		out.XP, out.Level = xp, a.rules.Level(xp)
+		if out.Metrics, err = loadMetrics(ctx, tx, accountID); err != nil {
+			return err
+		}
 		out.Due, err = countDue(ctx, tx, accountID, now)
 		return err
 	})

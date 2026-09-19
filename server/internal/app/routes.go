@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"curator/server/internal/progress"
 )
 
 // Маршруты /v1.
@@ -190,6 +192,7 @@ func (r *routes) record(w http.ResponseWriter, req *http.Request, caller Caller)
 		"xp":       out.XP,
 		"level":    out.Level,
 		"due":      out.Due,
+		"metrics":  metricsJSON(out.Metrics),
 	})
 }
 
@@ -201,6 +204,7 @@ func (r *routes) progress(w http.ResponseWriter, req *http.Request, caller Calle
 	}
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"xp": out.XP, "level": out.Level, "due": out.Due,
+		"metrics": metricsJSON(out.Metrics),
 	})
 }
 
@@ -223,4 +227,18 @@ func (r *routes) review(w http.ResponseWriter, req *http.Request, caller Caller)
 		})
 	}
 	WriteJSON(w, http.StatusOK, map[string]any{"cases": out})
+}
+
+// metricsJSON — величины каталога, какими их видит приложение.
+//
+// Объект всегда полон: каталог перечисляется целиком, и у врача, ещё
+// ничего не решавшего, приезжают нули, а не пустой объект. Пустой объект
+// заставил бы приложение помнить, что ключа может не быть, — и однажды оно
+// забудет, причём на исправном случае: на новом враче.
+func metricsJSON(m Metrics) map[string]int64 {
+	out := make(map[string]int64, len(progress.Metrics()))
+	for _, one := range progress.Metrics() {
+		out[string(one.Key)] = m[one.Key]
+	}
+	return out
 }

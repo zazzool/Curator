@@ -350,9 +350,13 @@ func TestPgОтветыПовторенияСходятсяСЭталоном(t 
 		t.Fatalf("код %d: %s", status, raw)
 	}
 	matchShape(t, "POST /v1/attempts", accepted, contract.Responses["POST /v1/attempts"].Fields)
+	after, _ := accepted["metrics"].(map[string]any)
+	matchShape(t, "величины после посылки", after, contract.Metrics.Fields)
 
 	_, progressBody, _ := call(t, srv, "GET", "/v1/progress", auth, nil)
 	matchShape(t, "GET /v1/progress", progressBody, contract.Responses["GET /v1/progress"].Fields)
+	shown, _ := progressBody["metrics"].(map[string]any)
+	matchShape(t, "величины в прогрессе", shown, contract.Metrics.Fields)
 
 	// Часы переводятся вперёд, иначе список к повторению пуст и сверять в
 	// нём нечего: эталон описывает не только оболочку, но и задачу внутри.
