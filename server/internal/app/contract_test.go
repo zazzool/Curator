@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"curator/server/internal/casestore"
 )
 
 // Сверка с записанным эталоном ответов.
@@ -38,6 +40,7 @@ type contractShape struct {
 	Fields   map[string]string            `json:"fields"`
 	Each     map[string]map[string]string `json:"each"`
 	Optional map[string][]string          `json:"optional"`
+	Kinds    []string                     `json:"kinds"`
 }
 
 func loadContract(t *testing.T) contract {
@@ -82,6 +85,42 @@ func TestЭталонОтветовЧитаетсяИНеПуст(t *testing.T) 
 	}
 	if c.Errors.Fields["error"] != "string" {
 		t.Error("в эталоне не описан отказ с полем error")
+	}
+}
+
+// Словарь видов задачи обязан совпасть с эталоном.
+//
+// Сверка нужна именно двусторонняя, и именно через общий файл. Вид задачи
+// решает на сервере, чем сверять ответ — меткой варианта или его текстом
+// (casestore.Body.CorrectOption), — а на устройстве решает, понятна ли
+// задача вообще. Пока сверки не было, стороны разошлись: сервер считал
+// годной задачу-узнавание с вариантом без метки, устройство выбрасывало
+// её целиком, и врач не видел её вовсе. Со стороны устройства с тем же
+// списком сверяется app/test/case_kind_test.dart — один список, две
+// проверки, и разойтись молча больше нечем.
+func TestСловарьВидовСовпадаетСЭталоном(t *testing.T) {
+	c := loadContract(t)
+	if len(c.CaseBody.Kinds) == 0 {
+		t.Fatal("в эталоне не записан словарь видов задачи (caseBody.kinds): " +
+			"без него стороны снова разойдутся молча")
+	}
+
+	ours := map[string]bool{
+		casestore.KindRecognise: true,
+		casestore.KindAction:    true,
+	}
+	written := map[string]bool{}
+	for _, kind := range c.CaseBody.Kinds {
+		written[kind] = true
+		if !ours[kind] {
+			t.Errorf("эталон знает вид %q, а сервер такого не знает", kind)
+		}
+	}
+	for kind := range ours {
+		if !written[kind] {
+			t.Errorf("сервер знает вид %q, а в эталоне его нет — "+
+				"устройство о нём не узнает", kind)
+		}
 	}
 }
 
