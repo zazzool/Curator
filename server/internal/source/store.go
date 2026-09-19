@@ -179,9 +179,9 @@ func (s *Store) SaveDraft(ctx context.Context, docID int64, units []Unit, statem
 		}
 		for i, u := range units {
 			_, err := tx.Exec(ctx,
-				`INSERT INTO source_draft_units (document_id, label, parent_label, title, ord)
-				 VALUES ($1, $2, $3, $4, $5)`,
-				docID, u.Label, u.ParentLabel, u.Title, i)
+				`INSERT INTO source_draft_units (document_id, label, parent_label, title, kind, ord)
+				 VALUES ($1, $2, $3, $4, $5, $6)`,
+				docID, u.Label, u.ParentLabel, u.Title, kindOf(u.Kind), i)
 			if err != nil {
 				return fmt.Errorf("единица черновика %q не сохранена: %w", u.Label, err)
 			}
@@ -221,7 +221,7 @@ func (s *Store) AcceptDraft(ctx context.Context, sourceID, docID int64, decidedB
 	var accepted int
 	err := s.gate.InTx(ctx, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT label, parent_label, title, ord
+			`SELECT label, parent_label, title, kind, ord
 			   FROM source_draft_units
 			  WHERE document_id = $1
 			  ORDER BY ord`, docID)
@@ -231,11 +231,15 @@ func (s *Store) AcceptDraft(ctx context.Context, sourceID, docID int64, decidedB
 		var draft []Unit
 		for rows.Next() {
 			var u Unit
-			if err := rows.Scan(&u.Label, &u.ParentLabel, &u.Title, &u.Ord); err != nil {
+			if err := rows.Scan(&u.Label, &u.ParentLabel, &u.Title, &u.Kind, &u.Ord); err != nil {
 				rows.Close()
 				return fmt.Errorf("строка черновика не разобрана: %w", err)
 			}
-			u.Answerable = true
+			// Отдельной колонки «пригодна к ответу» в черновике нет: сегодня
+			// это ровно «не группа», а два места для одного факта расходятся
+			// молча. Появится источник, у которого запись не спрашивают, —
+			// колонка заведётся вместе с ним.
+			u.Answerable = u.Kind != KindGroup
 			draft = append(draft, u)
 		}
 		rows.Close()
@@ -258,14 +262,16 @@ func (s *Store) AcceptDraft(ctx context.Context, sourceID, docID int64, decidedB
 			_, err := tx.Exec(ctx,
 				`INSERT INTO source_units
 				     (source_id, kind, label, parent_label, title, path, depth, answerable, ord)
-				 VALUES ($1, 'entry', $2, $3, $4, $5, $6, $7, $8)
-				 ON CONFLICT (source_id, kind, label) DO UPDATE
-				    SET parent_label = EXCLUDED.parent_label,
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+				 ON CONFLICT (source_id, label) DO UPDATE
+				    SET kind         = EXCLUDED.kind,
+				        parent_label = EXCLUDED.parent_label,
 				        title        = EXCLUDED.title,
 				        path         = EXCLUDED.path,
 				        depth        = EXCLUDED.depth,
+				        answerable   = EXCLUDED.answerable,
 				        ord          = EXCLUDED.ord`,
-				sourceID, u.Label, u.ParentLabel, u.Title, u.Path, u.Depth, u.Answerable, u.Ord)
+				sourceID, kindOf(u.Kind), u.Label, u.ParentLabel, u.Title, u.Path, u.Depth, u.Answerable, u.Ord)
 			if err != nil {
 				return fmt.Errorf("единица %q не принята: %w", u.Label, err)
 			}
@@ -382,7 +388,7 @@ func (s *Store) AcceptDraft(ctx context.Context, sourceID, docID int64, decidedB
 // Units — все единицы источника по порядку.
 func (s *Store) Units(ctx context.Context, sourceID int64) ([]Unit, error) {
 	return s.units(ctx,
-		`SELECT label, parent_label, title, path, depth, answerable, ord
+		`SELECT label, parent_label, title, kind, path, depth, answerable, ord
 		   FROM source_units
 		  WHERE source_id = $1
 		  ORDER BY ord, label`, sourceID)
@@ -405,7 +411,7 @@ func (s *Store) SliceUnits(ctx context.Context, sourceID int64, path string) ([]
 		return s.Units(ctx, sourceID)
 	}
 	return s.units(ctx,
-		`SELECT label, parent_label, title, path, depth, answerable, ord
+		`SELECT label, parent_label, title, kind, path, depth, answerable, ord
 		   FROM source_units
 		  WHERE source_id = $1
 		    AND (path = $2 OR path LIKE $3 ESCAPE '\')
@@ -426,7 +432,8 @@ func (s *Store) units(ctx context.Context, sql string, args ...any) ([]Unit, err
 	out := []Unit{}
 	for rows.Next() {
 		var u Unit
-		if err := rows.Scan(&u.Label, &u.ParentLabel, &u.Title, &u.Path, &u.Depth, &u.Answerable, &u.Ord); err != nil {
+		if err := rows.Scan(&u.Label, &u.ParentLabel, &u.Title, &u.Kind,
+			&u.Path, &u.Depth, &u.Answerable, &u.Ord); err != nil {
 			return nil, fmt.Errorf("строка единицы не разобрана: %w", err)
 		}
 		out = append(out, u)
@@ -514,6 +521,28 @@ func (s *Store) SourceByID(ctx context.Context, id int64) (Source, error) {
 	src, err := scanSource(row)
 	if err != nil {
 		return Source{}, fmt.Errorf("источник %d не найден: %w", id, err)
+	}
+	return src, nil
+}
+
+// SourceBySlug находит источник по краткому имени.
+//
+// Нужен ввозу: он зовётся человеком по имени источника, а не по номеру, и
+// повторный заход обязан попасть в тот же источник. Без этого ввоз,
+// оборвавшийся на середине, не доделывается вовсе — заведённое имя занято,
+// а номера его человек не знает.
+//
+// Ненайденный источник — это отказ, а не пустой паспорт: пустой паспорт
+// ввоз принял бы за источник с номером ноль и записал бы дерево в никуда.
+func (s *Store) SourceBySlug(ctx context.Context, slug string) (Source, error) {
+	row := s.gate.QueryRow(ctx,
+		`SELECT id, slug, kind, title, unit_word, statement_word,
+		        purpose, hierarchy, completeness, edition, status
+		   FROM sources
+		  WHERE slug = $1`, slug)
+	src, err := scanSource(row)
+	if err != nil {
+		return Source{}, fmt.Errorf("источник %q не найден: %w", slug, err)
 	}
 	return src, nil
 }
@@ -617,8 +646,8 @@ func (s *Store) Fragments(ctx context.Context, docID int64) ([]Fragment, error) 
 // DraftUnits — единицы черновика разбора, в порядке разбора.
 func (s *Store) DraftUnits(ctx context.Context, docID int64) ([]Unit, error) {
 	return s.units(ctx,
-		`SELECT label, parent_label, title, '' AS path, 0 AS depth,
-		        TRUE AS answerable, ord
+		`SELECT label, parent_label, title, kind, '' AS path, 0 AS depth,
+		        kind <> 'group' AS answerable, ord
 		   FROM source_draft_units
 		  WHERE document_id = $1
 		  ORDER BY ord`, docID)
@@ -679,6 +708,26 @@ func (s *Store) UnitStatements(ctx context.Context, sourceID int64, unitLabel st
 		return nil, fmt.Errorf("положения дочитаны не до конца: %w", err)
 	}
 	return out, nil
+}
+
+// Роды единицы. Словарь закрыт схемой; здесь он назван, чтобы не писать
+// строку по месту: строка, разошедшаяся с проверкой схемы, роняет приёмку
+// целиком, причём на чужих данных.
+const (
+	KindGroup = "group"
+	KindEntry = "entry"
+)
+
+// kindOf подставляет род по умолчанию.
+//
+// Пусто — это 'entry': источник, ничего не сказавший о роде, состоит из
+// записей. Отказ здесь был бы отказом на исправном случае — на всяком
+// документе, разобранном до того, как род вообще появился.
+func kindOf(kind string) string {
+	if kind == KindGroup {
+		return KindGroup
+	}
+	return KindEntry
 }
 
 // Состояния источника. Словарь закрыт тем же, чем закрыт в схеме: состояние,

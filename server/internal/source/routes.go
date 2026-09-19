@@ -81,6 +81,7 @@ type unitJSON struct {
 	Title       string `json:"title"`
 	Path        string `json:"path"`
 	Depth       int    `json:"depth"`
+	Kind        string `json:"kind"`
 	Answerable  bool   `json:"answerable"`
 	Ord         int    `json:"ord"`
 }
@@ -93,7 +94,8 @@ func toUnitsJSON(units []Unit) []unitJSON {
 	for _, u := range units {
 		out = append(out, unitJSON{
 			Label: u.Label, ParentLabel: u.ParentLabel, Title: u.Title,
-			Path: u.Path, Depth: u.Depth, Answerable: u.Answerable, Ord: u.Ord,
+			Path: u.Path, Depth: u.Depth, Kind: u.Kind,
+			Answerable: u.Answerable, Ord: u.Ord,
 		})
 	}
 	return out
@@ -340,6 +342,11 @@ type draftRequest struct {
 		Label       string `json:"label"`
 		ParentLabel string `json:"parentLabel"`
 		Title       string `json:"title"`
+
+		// Род записи: 'group' — вход в навигацию, 'entry' (или пусто) —
+		// то, по чему спрашивают. Без него справочник в девятьсот строк
+		// остаётся без входа.
+		Kind string `json:"kind"`
 	} `json:"units"`
 	Statements []struct {
 		UnitLabel   string `json:"unitLabel"`
@@ -369,7 +376,8 @@ func (r *routes) putDraft(w http.ResponseWriter, req *http.Request, _ studio.Use
 	units := make([]Unit, 0, len(body.Units))
 	for _, u := range body.Units {
 		units = append(units, Unit{
-			Label: u.Label, ParentLabel: u.ParentLabel, Title: u.Title, Answerable: true,
+			Label: u.Label, ParentLabel: u.ParentLabel, Title: u.Title,
+			Kind: u.Kind, Answerable: u.Kind != KindGroup,
 		})
 	}
 	statements := make([]Statement, 0, len(body.Statements))

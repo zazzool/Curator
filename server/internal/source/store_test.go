@@ -533,3 +533,84 @@ func TestPgСостоянияВнеСловаряНеПринимаются(t *t
 		t.Fatal("состояние записано несуществующему источнику")
 	}
 }
+
+func TestPgРодЕдиницыДоезжаетДоИсточника(t *testing.T) {
+	// Род берётся у разбора, а не угадывается по виду метки: «если это
+	// МКБ» — дефект. Приёмка хранила его только в черновике и записывала
+	// всем «запись», и девятьсот диагнозов ложились одним плоским списком
+	// без единого входа в него.
+	ctx := context.Background()
+	s := NewStore(testGate(t))
+	srcID := newSource(t, s)
+	docID := draftDoc(t, s, srcID, []Unit{
+		{Label: "F30-F39", Title: "Расстройства настроения", Kind: KindGroup},
+		{Label: "F32", ParentLabel: "F30-F39", Title: "Депрессивный эпизод"},
+	}, nil)
+
+	if _, err := s.AcceptDraft(ctx, srcID, docID, "врач"); err != nil {
+		t.Fatal(err)
+	}
+	units, err := s.Units(ctx, srcID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(units) != 2 {
+		t.Fatalf("в источнике %d единиц", len(units))
+	}
+	byLabel := map[string]Unit{}
+	for _, u := range units {
+		byLabel[u.Label] = u
+	}
+	group := byLabel["F30-F39"]
+	if group.Kind != KindGroup {
+		t.Errorf("род группы %q, ожидался %q", group.Kind, KindGroup)
+	}
+	// Задача по группе — это задача «отгадайте раздел», и отгадывать в ней
+	// нечего: группа отвечаемой не бывает, и следует это из рода, а не из
+	// отдельного поля черновика.
+	if group.Answerable {
+		t.Error("группа объявлена отвечаемой: по разделу будет сгенерирована задача")
+	}
+	entry := byLabel["F32"]
+	if entry.Kind != KindEntry {
+		t.Errorf("род записи %q, ожидался %q", entry.Kind, KindEntry)
+	}
+	if !entry.Answerable {
+		t.Error("запись объявлена неотвечаемой: по ней не будет задач")
+	}
+}
+
+func TestPgПовторнаяПриёмкаМеняетРод(t *testing.T) {
+	// Разбор ошибся родом — второй заход обязан его исправить, а не
+	// оставить прежний. Прежний ключ включал род, и «F32» записью и «F32»
+	// группой уживались в таблице двумя строками: чтение по метке отдавало
+	// то одну, то другую, и какую именно — зависело от порядка вставки.
+	ctx := context.Background()
+	s := NewStore(testGate(t))
+	srcID := newSource(t, s)
+
+	first := draftDoc(t, s, srcID, []Unit{
+		{Label: "F32", Title: "Депрессивный эпизод", Kind: KindEntry},
+	}, nil)
+	if _, err := s.AcceptDraft(ctx, srcID, first, "врач"); err != nil {
+		t.Fatal(err)
+	}
+	second := draftDoc(t, s, srcID, []Unit{
+		{Label: "F32", Title: "Депрессивный эпизод", Kind: KindGroup},
+	}, nil)
+	if _, err := s.AcceptDraft(ctx, srcID, second, "врач"); err != nil {
+		t.Fatal(err)
+	}
+
+	units, err := s.Units(ctx, srcID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(units) != 1 {
+		t.Fatalf("метка «F32» легла %d строками, а не одной", len(units))
+	}
+	if units[0].Kind != KindGroup || units[0].Answerable {
+		t.Errorf("род остался %q (отвечаемость %v): повторная приёмка не исправила его",
+			units[0].Kind, units[0].Answerable)
+	}
+}

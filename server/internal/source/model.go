@@ -106,8 +106,14 @@ type Unit struct {
 	Label       string
 	ParentLabel string
 	Title       string
-	Answerable  bool
-	Ord         int
+
+	// Kind — род записи: 'group' (вход в навигацию) или 'entry' (то, по
+	// чему спрашивают). Пусто означает 'entry': источник, ничего не
+	// сказавший о роде, состоит из записей.
+	Kind string
+
+	Answerable bool
+	Ord        int
 
 	Path  string
 	Depth int

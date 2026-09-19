@@ -11,10 +11,25 @@
 /// # Подмножество, а не Markdown целиком
 ///
 /// Разбирается ровно то, что встречается в источниках: абзацы, маркерные
-/// и нумерованные списки, подзаголовки, полужирное, курсив и моноширинное.
-/// Полный Markdown — это зависимость, а зависимость здесь называется
-/// вслух вместе с тем, чего без неё нельзя; таблицы и ссылки в критериях
-/// не встречаются, и тянуть ради них пакет не за что.
+/// и нумерованные списки, подзаголовки, выноски, линейки, таблицы,
+/// полужирное, курсив и моноширинное. Полный Markdown — это зависимость, а
+/// зависимость здесь называется вслух вместе с тем, чего без неё нельзя.
+///
+/// Здесь было написано, что таблиц в критериях не встречается, и на этом
+/// основании их не разбирали. Довод оказался неверным — он был сделан до
+/// того, как появился материал: в критериях МКБ-10 таблица стоит в 182
+/// текстах из 765, а выноска «> Примечание:» — в 446 строках. Показанная
+/// абзацем таблица — это и есть та «стена слов со звёздочками», ради
+/// которой писался весь этот разбор, только хуже: в ней ещё и вертикальные
+/// черты между словами.
+///
+/// # Таблица на телефоне — не всегда таблица
+///
+/// Столбец шириной в телефон не вмещает трёх колонок по двести знаков, а
+/// боковая прокрутка прячет то, ради чего таблицу и читают, — сравнение.
+/// Поэтому вид выбирается по замеру самой таблицы: короткие ячейки
+/// показываются сеткой, длинные — построчно, где шапка становится
+/// подписью над значением. Порог замерен по материалу, а не выбран на глаз.
 ///
 /// # Непонятое показывается как текст, а не теряется
 ///
@@ -41,6 +56,16 @@ enum ProseKind {
 
   /// Подзаголовок внутри текста.
   heading,
+
+  /// Выноска: «> Примечание: …». Это не цитата чужого текста, а замечание
+  /// самого источника, и отделяется оно затем же, зачем отделено в нём.
+  quote,
+
+  /// Разделительная линейка между частями текста.
+  rule,
+
+  /// Таблица. Ячейки лежат в [ProseBlock.rows], текста у неё нет.
+  table,
 }
 
 /// Блок разобранного текста.
@@ -50,6 +75,8 @@ class ProseBlock {
     required this.text,
     this.level = 0,
     this.marker = '',
+    this.rows = const [],
+    this.heads = false,
   });
 
   final ProseKind kind;
@@ -62,16 +89,37 @@ class ProseBlock {
 
   /// Номер пункта, как он записан в источнике.
   final String marker;
+
+  /// Строки таблицы, ячейка за ячейкой. Первая строка — шапка, если под
+  /// ней в источнике стояла строка-разделитель.
+  final List<List<String>> rows;
+
+  /// Есть ли у таблицы шапка. У таблицы без разделителя первая строка —
+  /// такие же данные, и набрать её жирным значило бы соврать.
+  final bool heads;
 }
 
 final _bullet = RegExp(r'^(\s*)[-*•]\s+(.*)$');
 final _numbered = RegExp(r'^(\s*)(\d+)[.)]\s+(.*)$');
-final _heading = RegExp(r'^(#{1,4})\s+(.*)$');
+final _heading = RegExp(r'^(#{1,6})\s+(.*)$');
+final _quote = RegExp(r'^\s*>\s?(.*)$');
+final _rule = RegExp(r'^\s*(-{3,}|\*{3,}|_{3,})\s*$');
+final _row = RegExp(r'^\s*\|(.*)\|?\s*$');
+// Строка-разделитель шапки: «|---|:--:|». Она не данные, и показать её
+// четвёртой строкой таблицы значило бы показать разметку вместо текста.
+final _rowBreak = RegExp(r'^[\s|:-]+$');
 
 /// Разбирает размеченный текст на блоки.
 List<ProseBlock> parseProse(String md) {
   final blocks = <ProseBlock>[];
   final paragraph = StringBuffer();
+  // Выноска и таблица копятся по строкам: в источнике они многострочны, а
+  // блоком становятся целиком. Абзац копится тем же буфером, и оба закрытия
+  // зовутся перед всяким другим блоком — иначе «> Примечание» приклеилось
+  // бы к следующему подзаголовку.
+  final quote = StringBuffer();
+  final table = <List<String>>[];
+  var heads = false;
 
   void closeParagraph() {
     final text = paragraph.toString().trim();
@@ -80,10 +128,86 @@ List<ProseBlock> parseProse(String md) {
     blocks.add(ProseBlock(kind: ProseKind.paragraph, text: text));
   }
 
+  void closeQuote() {
+    final text = quote.toString().trim();
+    quote.clear();
+    if (text.isEmpty) return;
+    blocks.add(ProseBlock(kind: ProseKind.quote, text: text));
+  }
+
+  void closeTable() {
+    if (table.isEmpty) return;
+    final rows = [for (final one in table) List<String>.unmodifiable(one)];
+    final withHeads = heads;
+    table.clear();
+    heads = false;
+    // Таблица из одной строки таблицей не является: это строка с чертами,
+    // и сеткой она выглядела бы разметкой, показанной как содержимое.
+    if (rows.length < 2 && !withHeads) {
+      blocks.add(
+        ProseBlock(kind: ProseKind.paragraph, text: rows.first.join(' — ')),
+      );
+      return;
+    }
+    blocks.add(
+      ProseBlock(
+        kind: ProseKind.table,
+        text: '',
+        rows: List<List<String>>.unmodifiable(rows),
+        heads: withHeads,
+      ),
+    );
+  }
+
+  void closeAll() {
+    closeParagraph();
+    closeQuote();
+    closeTable();
+  }
+
   for (final raw in md.split('\n')) {
     final line = raw.trimRight();
     if (line.trim().isEmpty) {
+      closeAll();
+      continue;
+    }
+
+    final row = _row.firstMatch(line);
+    if (row != null) {
       closeParagraph();
+      closeQuote();
+      // Замыкающая черта — ограничитель, а не пустая ячейка: без её
+      // снятия у каждой строки появляется лишний пустой столбец, и шапка
+      // перестаёт сходиться с телом по числу колонок.
+      var inner = row.group(1)!.trimRight();
+      if (inner.endsWith('|')) inner = inner.substring(0, inner.length - 1);
+      final cells = [for (final cell in inner.split('|')) cell.trim()];
+      // Разделитель шапки помечает предыдущую строку шапкой и сам в
+      // таблицу не ложится.
+      if (_rowBreak.hasMatch(inner) &&
+          inner.contains('-') &&
+          table.length == 1) {
+        heads = true;
+        continue;
+      }
+      table.add(cells);
+      continue;
+    }
+    closeTable();
+
+    final quoted = _quote.firstMatch(line);
+    if (quoted != null) {
+      closeParagraph();
+      // Перенос внутри выноски склеивается так же, как внутри абзаца.
+      if (quote.isNotEmpty) quote.write(' ');
+      quote.write(quoted.group(1)!.trim());
+      continue;
+    }
+    closeQuote();
+
+    if (_rule.hasMatch(line)) {
+      closeParagraph();
+      blocks.add(const ProseBlock(kind: ProseKind.rule, text: ''));
       continue;
     }
 
@@ -133,7 +257,7 @@ List<ProseBlock> parseProse(String md) {
     if (paragraph.isNotEmpty) paragraph.write(' ');
     paragraph.write(line.trim());
   }
-  closeParagraph();
+  closeAll();
   return blocks;
 }
 
@@ -268,6 +392,9 @@ class Prose extends StatelessWidget {
     // Подзаголовок отделяется от предыдущего сильнее, чем абзац от
     // абзаца: он начинает новое, а не продолжает прежнее.
     ProseKind.heading => 16,
+    ProseKind.rule => 16,
+    ProseKind.table => 14,
+    ProseKind.quote => 12,
     ProseKind.paragraph => 10,
     _ => 6,
   };
@@ -280,6 +407,37 @@ class Prose extends StatelessWidget {
             ? theme.textTheme.titleSmall
             : theme.textTheme.labelLarge;
         return _line(block.text, style, hyphens: false);
+
+      case ProseKind.rule:
+        // Волосяная линия, а не тень и не полоса: она разделяет плоскости,
+        // лежащие на одной странице.
+        return Divider(
+          height: 1,
+          thickness: 1,
+          color: theme.colorScheme.outlineVariant,
+        );
+
+      case ProseKind.quote:
+        // Выноска отделена чертой слева, а не заливкой: заливка на светлой
+        // и тёмной теме ведёт себя по-разному, а черта — одинаково.
+        return Container(
+          padding: const EdgeInsets.only(left: 12),
+          decoration: BoxDecoration(
+            border: Border(
+              left: BorderSide(
+                color: theme.colorScheme.outlineVariant,
+                width: 2,
+              ),
+            ),
+          ),
+          child: _line(
+            block.text,
+            base?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+        );
+
+      case ProseKind.table:
+        return ProseTable(rows: block.rows, heads: block.heads, base: base);
 
       case ProseKind.paragraph:
         return _line(block.text, base);
@@ -319,4 +477,112 @@ class Prose extends StatelessWidget {
     ),
     textAlign: align,
   );
+}
+
+/// Таблица разметки, показанная по ширине телефона.
+///
+/// Вид выбирается по самой таблице, а не задаётся сверху. Короткие ячейки
+/// («F10.2 | Синдром зависимости») читаются сеткой: колонки стоят друг под
+/// другом, и глаз сравнивает строки. Длинные ячейки в сетке дают три
+/// колонки по паре слов в строке — столбик слов вместо сравнения, и каждая
+/// строка высотой в экран. Такие показываются построчно: шапка становится
+/// подписью над значением.
+///
+/// Порог замерен по материалу справочника, а не выбран на глаз: у таблиц с
+/// кодами ячейки короче сорока знаков, у дифференциального диагноза
+/// доходят до двухсот двадцати.
+class ProseTable extends StatelessWidget {
+  const ProseTable({
+    super.key,
+    required this.rows,
+    required this.heads,
+    this.base,
+  });
+
+  final List<List<String>> rows;
+  final bool heads;
+  final TextStyle? base;
+
+  /// Длина ячейки, после которой сетка перестаёт читаться.
+  static const int gridCell = 40;
+
+  /// Помещается ли таблица сеткой.
+  static bool asGrid(List<List<String>> rows) {
+    if (rows.isEmpty) return false;
+    // Больше трёх колонок сеткой на телефоне не помещается ни при какой
+    // длине ячейки: на колонку остаётся меньше сантиметра.
+    if (rows.any((row) => row.length > 3)) return false;
+    return rows.every((row) => row.every((cell) => cell.length <= gridCell));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    if (rows.isEmpty) return const SizedBox.shrink();
+    final hairline = BorderSide(color: theme.colorScheme.outlineVariant);
+    final headStyle = base?.copyWith(fontWeight: FontWeight.w600);
+
+    if (asGrid(rows)) {
+      return Table(
+        border: TableBorder(
+          horizontalInside: hairline,
+          top: hairline,
+          bottom: hairline,
+        ),
+        // Первая колонка таблиц справочника — это код или признак, и она
+        // узкая; ширина по содержимому не даёт ей разъехаться на пол-экрана.
+        defaultColumnWidth: const IntrinsicColumnWidth(),
+        columnWidths: const {1: FlexColumnWidth()},
+        defaultVerticalAlignment: TableCellVerticalAlignment.top,
+        children: [
+          for (var r = 0; r < rows.length; r++)
+            TableRow(
+              children: [
+                for (final cell in rows[r])
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(0, 7, 12, 7),
+                    child: Prose(
+                      cell,
+                      style: heads && r == 0 ? headStyle : base,
+                      hyphens: false,
+                    ),
+                  ),
+              ],
+            ),
+        ],
+      );
+    }
+
+    final header = heads ? rows.first : const <String>[];
+    final body = heads ? rows.skip(1).toList() : rows;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var r = 0; r < body.length; r++)
+          Container(
+            margin: EdgeInsets.only(top: r == 0 ? 0 : 10),
+            padding: const EdgeInsets.only(left: 12),
+            decoration: BoxDecoration(border: Border(left: hairline)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (var c = 0; c < body[r].length; c++) ...[
+                  if (c < header.length && header[c].isNotEmpty)
+                    Padding(
+                      padding: EdgeInsets.only(top: c == 0 ? 0 : 8, bottom: 2),
+                      child: Text(
+                        header[c],
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.primary,
+                        ),
+                      ),
+                    ),
+                  Prose(body[r][c], style: base),
+                ],
+              ],
+            ),
+          ),
+      ],
+    );
+  }
 }
