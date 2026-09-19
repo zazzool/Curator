@@ -68,6 +68,7 @@ func TestЭталонОтветовЧитаетсяИНеПуст(t *testing.T) 
 		"GET /v1/content/version", "GET /v1/cases", "GET /v1/cases/{id}",
 		"POST /v1/attempts", "GET /v1/progress", "GET /v1/review",
 		"GET /v1/signs",
+		"GET /v1/packs", "GET /v1/packs/{slug}", "GET /v1/packs/{slug}/cases",
 	} {
 		if _, ok := c.Responses[want]; !ok {
 			t.Errorf("в эталоне нет ответа %q", want)

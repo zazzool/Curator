@@ -1,0 +1,108 @@
+package app
+
+import (
+	"encoding/json"
+	"net/http"
+	"time"
+
+	"curator/server/internal/packs"
+)
+
+// Ручки пакетов: витрина и скачивание.
+//
+// # Открытого ключа здесь не отдаётся
+//
+// Выпуск несёт подпись и имя ключа, которым он подписан, — но не сам
+// ключ. Отдай мы ключ той же дверью, что и пакет, подпись перестала бы
+// значить что-либо: тот, кто подменил пакет по дороге, подменил бы и ключ.
+// Ключи, которым верит приложение, приезжают в его сборке; имя ключа нужно
+// лишь затем, чтобы выбрать верный из них при смене.
+func PackRoutes(door *Door, store *packs.Store) {
+	r := &packRoutes{store: store}
+	door.Device("GET /v1/packs", r.shelf)
+	door.Device("GET /v1/packs/{slug}", r.release)
+	door.Device("GET /v1/packs/{slug}/cases", r.bodies)
+}
+
+type packRoutes struct {
+	store *packs.Store
+}
+
+func (r *packRoutes) shelf(w http.ResponseWriter, req *http.Request, _ Caller) {
+	list, err := r.store.Shelf(req.Context())
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "Не вышло получить наборы задач")
+		return
+	}
+	out := make([]map[string]any, 0, len(list))
+	for _, one := range list {
+		out = append(out, map[string]any{
+			"slug": one.Slug, "title": one.Title, "summaryMd": one.SummaryMd,
+			"version": one.Version, "cases": one.Cases,
+		})
+	}
+	WriteJSON(w, http.StatusOK, map[string]any{"packs": out})
+}
+
+func (r *packRoutes) release(w http.ResponseWriter, req *http.Request, _ Caller) {
+	one, err := r.store.Latest(req.Context(), req.PathValue("slug"))
+	if err != nil {
+		WriteError(w, http.StatusNotFound, "Такого набора нет")
+		return
+	}
+	cases := make([]map[string]any, 0, len(one.Manifest.Cases))
+	for _, item := range one.Manifest.Cases {
+		cases = append(cases, map[string]any{
+			"id": item.ID, "ord": item.Ord, "hash": item.Hash,
+		})
+	}
+	WriteJSON(w, http.StatusOK, map[string]any{
+		"slug":       one.Slug,
+		"version":    one.Version,
+		"title":      one.Manifest.Title,
+		"releasedAt": one.Manifest.ReleasedAt.UTC().Format(time.RFC3339),
+		"signature":  one.Signature,
+		"keyId":      one.KeyID,
+		"cases":      cases,
+	})
+}
+
+// bodies отдаёт содержание задач набора страницей.
+//
+// Страницей, а не целиком: набор на тысячу задач весит мегабайты, и
+// телефон в метро не дотянет одну большую закачку. Оборвавшаяся закачка
+// продолжается с курсора, а не начинается заново.
+func (r *packRoutes) bodies(w http.ResponseWriter, req *http.Request, _ Caller) {
+	q := req.URL.Query()
+	limit := 0
+	if raw := q.Get("limit"); raw != "" {
+		limit = atoi(raw)
+	}
+	list, next, err := r.store.Bodies(req.Context(), req.PathValue("slug"), q.Get("after"), limit)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "Не вышло получить задачи набора")
+		return
+	}
+	out := make([]map[string]any, 0, len(list))
+	for _, one := range list {
+		out = append(out, map[string]any{
+			"id":   one.ID,
+			"body": json.RawMessage(one.Body),
+		})
+	}
+	WriteJSON(w, http.StatusOK, map[string]any{"cases": out, "next": next})
+}
+
+func atoi(raw string) int {
+	var out int
+	for _, r := range raw {
+		if r < '0' || r > '9' {
+			return 0
+		}
+		out = out*10 + int(r-'0')
+		if out > 1000 {
+			return 1000
+		}
+	}
+	return out
+}

@@ -28,6 +28,11 @@ const (
 	PermGenerate Permission = "generate"
 	PermPrompts  Permission = "prompts"
 
+	// Наборы задач: собрать набор и выпустить его. Выпуск — отдельное
+	// право, потому что выпустить значит подписать нашим ключом то, что
+	// встанет на устройства и переживёт любую правку: выпуск неизменяем.
+	PermPacks Permission = "packs"
+
 	// Клиенты, продажи и отчёты.
 	PermClients   Permission = "clients"
 	PermSales     Permission = "sales"
@@ -43,6 +48,7 @@ var All = []Permission{
 	PermSourceRead, PermSourceAccept,
 	PermCaseRead, PermCaseWrite,
 	PermGenerate, PermPrompts,
+	PermPacks,
 	PermClients, PermSales, PermAnalytics,
 	PermWorkshop,
 }
