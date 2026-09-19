@@ -34,6 +34,26 @@ class Feed {
 
   final Api _api;
 
+  /// Что сегодня повторять.
+  ///
+  /// Содержание задачи едет целиком, а не одним номером: повторение обязано
+  /// работать без сети, а без сети некуда сходить за содержанием.
+  ///
+  /// Пустой список — исправный случай и самый частый из всех: «сегодня
+  /// нечего повторять» не отказ.
+  Future<List<CaseItem>> due() async {
+    final reply = await _api.get('/v1/review');
+    final rows = reply['cases'];
+    if (rows is! List) return [];
+    final out = <CaseItem>[];
+    for (final row in rows) {
+      if (row is! Map<String, dynamic>) continue;
+      final one = CaseItem.tryParse(row);
+      if (one != null) out.add(one);
+    }
+    return out;
+  }
+
   /// Качает страницу.
   ///
   /// Страницами по курсору, а не по смещению: между двумя страницами

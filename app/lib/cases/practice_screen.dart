@@ -14,11 +14,28 @@ import 'feed.dart';
 import 'model.dart';
 import 'outbox.dart';
 
+/// Откуда берутся задачи.
+enum PracticeSource {
+  /// Лента: что решать дальше.
+  feed,
+
+  /// Расписание повторения. Попытка уезжает с пометкой режима — по ней
+  /// сервер начисляет другую награду: повторение это работа, а не
+  /// набивание опыта одной задачей.
+  review,
+}
+
 class PracticeScreen extends StatefulWidget {
-  const PracticeScreen({super.key, required this.api, required this.outbox});
+  const PracticeScreen({
+    super.key,
+    required this.api,
+    required this.outbox,
+    this.source = PracticeSource.feed,
+  });
 
   final Api api;
   final Outbox outbox;
+  final PracticeSource source;
 
   @override
   State<PracticeScreen> createState() => _PracticeScreenState();
@@ -50,10 +67,13 @@ class _PracticeScreenState extends State<PracticeScreen> {
       _failure = null;
     });
     try {
-      final page = await Feed(widget.api).page(limit: 20);
+      final feed = Feed(widget.api);
+      final cases = widget.source == PracticeSource.review
+          ? await feed.due()
+          : (await feed.page(limit: 20)).cases;
       if (!mounted) return;
       setState(() {
-        _cases = page.cases;
+        _cases = cases;
         _at = 0;
         _chosen = null;
         _shownAt = DateTime.now();
@@ -91,7 +111,7 @@ class _PracticeScreenState extends State<PracticeScreen> {
         caseId: one.id,
         correct: one.isCorrect(option),
         answer: one.chosenValue(option),
-        mode: '',
+        mode: widget.source == PracticeSource.review ? 'review' : '',
         spentMs: DateTime.now().difference(_shownAt).inMilliseconds,
         idemKey: key,
         happenedAt: DateTime.now(),
@@ -116,7 +136,9 @@ class _PracticeScreenState extends State<PracticeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Задачи'),
+        title: Text(
+          widget.source == PracticeSource.review ? 'Повторение' : 'Задачи',
+        ),
         bottom: _waiting == 0
             ? null
             // Число ждущих отправки показывается, а не прячется: врач,
@@ -145,9 +167,14 @@ class _PracticeScreenState extends State<PracticeScreen> {
     final one = _current;
     if (one == null) {
       return _Message(
-        text: _cases.isEmpty
-            ? 'Задач пока нет. Загляните позже'
-            : 'На сегодня всё. Возвращайтесь завтра',
+        text: switch ((widget.source, _cases.isEmpty)) {
+          // «Сегодня нечего повторять» — исправный случай и самый частый
+          // из всех, и сказать это надо так, чтобы врач не искал поломку.
+          (PracticeSource.review, true) => 'Сегодня повторять нечего',
+          (PracticeSource.review, false) => 'Повторение на сегодня закончено',
+          (_, true) => 'Задач пока нет. Загляните позже',
+          (_, false) => 'На сегодня всё. Возвращайтесь завтра',
+        },
         action: 'Обновить',
         onTap: _load,
       );

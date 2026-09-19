@@ -16,7 +16,7 @@ import 'package:flutter/material.dart';
 import 'api/client.dart';
 import 'api/token_store.dart';
 import 'cases/outbox.dart';
-import 'cases/practice_screen.dart';
+import 'home.dart';
 
 /// Адрес контура и ключ сборки задаются при сборке, а не литералом по
 /// месту: адрес, вписанный во второй файл, расходится молча, а ключ,
@@ -133,7 +133,7 @@ class _StartScreenState extends State<StartScreen> {
         // Заведение — это не экран, а порог: пройден, и врач сразу на
         // задачах. Отдельный экран «всё хорошо» здесь был бы препятствием
         // между человеком и тем, ради чего он поставил приложение.
-        return PracticeScreen(api: widget.api, outbox: widget.outbox);
+        return Home(api: widget.api, outbox: widget.outbox);
       },
     );
   }
