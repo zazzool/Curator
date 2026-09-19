@@ -65,6 +65,23 @@ class ReferenceSync {
   /// врач увидел бы как вечную закачку, и это хуже честного отказа.
   static const restartLimit = 3;
 
+  /// Сколько единиц берётся за раз.
+  ///
+  /// Единица — это метка, название и пара чисел: девятьсот пятьдесят
+  /// четыре рубрики МКБ-10 весят около сотни килобайт целиком, и страница
+  /// в двести строк не дотягивает и до тридцати.
+  static const unitsPage = 200;
+
+  /// Сколько положений берётся за раз.
+  ///
+  /// Втрое меньше единиц, и это замер, а не осторожность: тело критерия
+  /// доходит до семи тысяч знаков, и страница в двести положений в худшем
+  /// случае весит около мегабайта. Мегабайт одним ответом на связи в
+  /// отделении — это обрыв, после которого закачка начинается сначала;
+  /// пятьдесят дают четверть мегабайта, то есть шестнадцать посылок
+  /// вместо четырёх, и оборванная стоит вчетверо дешевле.
+  static const statementsPage = 50;
+
   /// Что сервер предлагает скачать.
   Future<List<RefSource>> available() async {
     final raw = await _api.get('/v1/reference');
@@ -108,12 +125,13 @@ class ReferenceSync {
         String path,
         RefPage<T> Function(Map<String, dynamic>) parse,
         void Function(List<T>) collect,
+        int limit,
       ) async {
         var after = '';
         while (true) {
           final raw = await _api.get(
             path,
-            query: {'limit': '200', if (after.isNotEmpty) 'after': after},
+            query: {'limit': '$limit', if (after.isNotEmpty) 'after': after},
           );
           final page = parse(raw);
           if (version == 0) {
@@ -136,6 +154,7 @@ class ReferenceSync {
         '/v1/reference/$slug/units',
         parseUnitsPage,
         units.addAll,
+        unitsPage,
       )) {
         stale = true;
       }
@@ -144,6 +163,7 @@ class ReferenceSync {
             '/v1/reference/$slug/statements',
             parseStatementsPage,
             statements.addAll,
+            statementsPage,
           )) {
         stale = true;
       }

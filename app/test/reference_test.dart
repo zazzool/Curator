@@ -289,6 +289,33 @@ void main() {
       expect((await store.children('icd10', '')).length, 2);
     });
 
+    test('положения берутся страницей меньше, чем единицы', () async {
+      // Замер: тело критерия доходит до семи тысяч знаков, и двести
+      // положений в худшем случае весят около мегабайта. Мегабайт одним
+      // ответом на связи в отделении — это обрыв, после которого закачка
+      // начинается сначала.
+      server.replies.addAll([
+        Reply(200, {
+          'units': [
+            {'label': 'F32', 'title': 'Депрессивный эпизод'},
+          ],
+          'next': '',
+          'version': 1,
+        }),
+        Reply(200, {'statements': [], 'next': '', 'version': 1}),
+      ]);
+
+      await sync.pull(icd);
+
+      final asked = server.taken.toList();
+      expect(asked.length, 2);
+      expect(asked[0].path, endsWith('/units'));
+      expect(asked[0].query['limit'], '${ReferenceSync.unitsPage}');
+      expect(asked[1].path, endsWith('/statements'));
+      expect(asked[1].query['limit'], '${ReferenceSync.statementsPage}');
+      expect(ReferenceSync.statementsPage, lessThan(ReferenceSync.unitsPage));
+    });
+
     test('совпавший выпуск не качается заново', () async {
       await store.replace(icd, [unit('F32')], const [], syncedAt: 1);
       final report = await sync.pull(icd);

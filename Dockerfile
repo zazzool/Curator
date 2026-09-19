@@ -33,7 +33,8 @@ COPY server/ ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/curator . && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/migrate ./cmd/migrate && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/user ./cmd/user && \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/import ./cmd/import
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/import ./cmd/import && \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/importcatalog ./cmd/importcatalog
 
 # --- Рантайм ---
 FROM alpine:3.21
@@ -57,6 +58,12 @@ COPY --from=server /out/user /app/user
 # другого продукта, и ходить ей надо из сети сервера, а не из чужого
 # терминала.
 COPY --from=server /out/import /app/import
+
+# Ввоз каталога файлом — та же работа, когда чужой базы под рукой нет.
+# Файл выгрузки внутрь образа не кладётся: он несёт чужой текст, а образ
+# собирается из открытого репозитория. Путь к нему называет человек, и
+# каталог с ним монтируется на время ввоза.
+COPY --from=server /out/importcatalog /app/importcatalog
 
 COPY --from=web /build/dist /app/web
 
