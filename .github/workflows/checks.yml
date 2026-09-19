@@ -72,12 +72,22 @@ jobs:
           fi
           psql --version
 
+      # Go и Node ставятся, только если есть что ими собирать. Это не
+      # пропуск проверок: сам набор идёт всегда и сам решает, что в дереве
+      # есть. Пропускается установка ИНСТРУМЕНТА под код, которого в ветке
+      # нет, — а появится код без go.mod, набор упадёт на нём вслух.
+      #
+      # Первый прогон сторожа упал ровно здесь: файл завёлся веткой от
+      # main, где сервера ещё нет, и setup-go отказал на «нет такого
+      # go.mod». Условие дешевле, чем помнить об этом.
       - name: Go
+        if: hashFiles('server/go.mod') != ''
         uses: actions/setup-go@v5
         with:
           go-version-file: server/go.mod
 
       - name: Node
+        if: hashFiles('web/package.json') != ''
         uses: actions/setup-node@v4
         with:
           node-version: '22'
