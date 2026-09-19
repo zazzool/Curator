@@ -10,6 +10,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
+import '../packs/store.dart';
 import 'feed.dart';
 import 'model.dart';
 import 'outbox.dart';
@@ -30,11 +31,18 @@ class PracticeScreen extends StatefulWidget {
     super.key,
     required this.api,
     required this.outbox,
+    this.packs,
     this.source = PracticeSource.feed,
   });
 
   final Api api;
   final Outbox outbox;
+
+  /// Наборы на устройстве. Без них лента без сети пуста — но экран
+  /// работает и так: повторение без сети всё равно требует местной базы,
+  /// которой пока нет.
+  final PackStore? packs;
+
   final PracticeSource source;
 
   @override
@@ -67,7 +75,7 @@ class _PracticeScreenState extends State<PracticeScreen> {
       _failure = null;
     });
     try {
-      final feed = Feed(widget.api);
+      final feed = Feed(widget.api, widget.packs);
       final cases = widget.source == PracticeSource.review
           ? await feed.due()
           : (await feed.page(limit: 20)).cases;

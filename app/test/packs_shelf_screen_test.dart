@@ -121,7 +121,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('без сети'), findsOneWidget);
+    expect(find.textContaining('открываются без сети'), findsOneWidget);
     expect(find.text('Убрать'), findsOneWidget);
     expect(find.text('Скачать'), findsNothing);
   });

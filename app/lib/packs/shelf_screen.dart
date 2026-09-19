@@ -250,7 +250,10 @@ class PackRow extends StatelessWidget {
         children: [
           const Icon(Icons.check, size: 18),
           const SizedBox(width: 8),
-          const Text('Скачан, работает без сети'),
+          // «Задачи», а не «приложение»: повторение по расписанию без
+          // сети пока не работает — расписание живёт на сервере, и
+          // обещать здесь больше, чем сделано, нельзя.
+          const Text('Скачан, задачи открываются без сети'),
           const Spacer(),
           TextButton(onPressed: onRemove, child: const Text('Убрать')),
         ],

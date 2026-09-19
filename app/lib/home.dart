@@ -54,10 +54,15 @@ class _HomeState extends State<Home> {
       body: IndexedStack(
         index: _at,
         children: [
-          PracticeScreen(api: widget.api, outbox: widget.outbox),
           PracticeScreen(
             api: widget.api,
             outbox: widget.outbox,
+            packs: widget.packs,
+          ),
+          PracticeScreen(
+            api: widget.api,
+            outbox: widget.outbox,
+            packs: widget.packs,
             source: PracticeSource.review,
           ),
           ShelfScreen(
