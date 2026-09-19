@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"log"
 	"net/http"
@@ -29,6 +30,7 @@ import (
 	"curator/server/internal/gen"
 	"curator/server/internal/llm"
 	"curator/server/internal/llmusage"
+	"curator/server/internal/packs"
 	"curator/server/internal/progress"
 	"curator/server/internal/signs"
 	"curator/server/internal/source"
@@ -113,6 +115,7 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 	// шлюз, отданный в хранилище пустым, отвечал бы не отказом, а паникой
 	// на первом же обращении.
 	var keys *app.Keys
+	var packStore *packs.Store
 	if gate != nil {
 		// Выпуски знаков заводятся при старте по каталогу: каталог
 		// остаётся единственным местом, где знак объявлен, а строки в базе
@@ -123,9 +126,26 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 			log.Fatalf("выпуски знаков не заведены: %v", err)
 		}
 
+		// Ключ подписи наборов приходит из окружения и в базу не попадает
+		// никогда: утёкшая база не должна давать права подписывать. Без
+		// ключа служба поднимается и раздаёт уже выпущенное — отказывает
+		// только выпуск нового, и отказывает словами, а не молчанием.
+		var signing ed25519.PrivateKey
+		if raw := os.Getenv("PACK_SIGNING_KEY"); raw != "" {
+			parsed, err := packs.ParsePrivateKey(raw)
+			if err != nil {
+				log.Fatalf("ключ подписи наборов негоден: %v", err)
+			}
+			signing = parsed
+		} else {
+			log.Print("ключ подписи наборов не задан: выпускать наборы нечем")
+		}
+		packStore = packs.NewStore(gate, signing, os.Getenv("PACK_SIGNING_KEY_ID"))
+
 		keys = app.NewKeys(gate)
 		door := app.NewDoor(keys, app.NewAccounts(gate))
 		app.Routes(door, app.NewFeed(gate), app.NewAttempts(gate, progress.Default()))
+		app.PackRoutes(door, packStore)
 		mux.Handle("/v1/", door.Handler())
 	}
 
@@ -138,6 +158,7 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 		source.Routes(desk, source.NewStore(gate))
 		casestore.Routes(desk, casestore.NewStore(gate))
 		app.KeyRoutes(desk, keys)
+		packs.Routes(desk, packStore)
 		generation(ctx, gate, desk)
 		mux.Handle("/admin/api/", desk.Handler())
 	}
