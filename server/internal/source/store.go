@@ -32,6 +32,12 @@ type Document struct {
 	MIME     string
 	SHA256   string
 	Body     []byte
+
+	// UploadedBy — кто принёс. Записывается, потому что в споре о том,
+	// откуда в источнике взялся пункт, отвечать будет он, а документ —
+	// начало этой цепочки.
+	UploadedBy string
+	ByteSize   int64
 }
 
 // CreateSource заводит источник и возвращает его номер.
@@ -41,11 +47,12 @@ func (s *Store) CreateSource(ctx context.Context, src Source) (int64, error) {
 	}
 	var id int64
 	err := s.gate.QueryRow(ctx,
-		`INSERT INTO sources (slug, kind, title, unit_word, statement_word, completeness, edition)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		`INSERT INTO sources
+		     (slug, kind, title, unit_word, statement_word, purpose, hierarchy, completeness, edition)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 RETURNING id`,
 		src.Slug, string(src.Kind), src.Title, src.UnitWord, src.StatementWord,
-		string(src.Completeness), src.Edition).Scan(&id)
+		string(src.Purpose), string(src.Hierarchy), string(src.Completeness), src.Edition).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("источник %q не заведён: %w", src.Slug, err)
 	}
@@ -66,6 +73,14 @@ func validateSource(src Source) error {
 		return errors.New("у источника нет названия")
 	case trim(src.UnitWord) == "" || trim(src.StatementWord) == "":
 		return errors.New("у источника не назван словарь интерфейса: как звать единицу и как положение")
+	case !knownKind(src.Kind):
+		return errors.New("у источника не назван вид: классификация это, приказ, рекомендации, стандарт или руководство")
+	case !knownPurpose(src.Purpose):
+		// Ось обязана быть названа: по ней подбор решает, складываются ли
+		// два источника в один список или стоят поперёк друг друга.
+		return errors.New("у источника не названа ось: по чему он делит материал")
+	case !knownHierarchy(src.Hierarchy):
+		return errors.New("у источника не назван смысл вложенности: часть целого это, разновидность или просто группировка")
 	case src.Completeness != CompletenessComplete && src.Completeness != CompletenessFragment:
 		// Полнота обязана быть названа, и умолчания здесь нет намеренно:
 		// разобранный кусок, объявленный полным, даёт ложные доли охвата —
@@ -88,11 +103,12 @@ func (s *Store) SaveDocument(ctx context.Context, doc Document) (int64, error) {
 	}
 	var id int64
 	err := s.gate.QueryRow(ctx,
-		`INSERT INTO source_documents (source_id, filename, mime, byte_size, sha256, body)
-		 VALUES ($1, $2, $3, $4, $5, $6)
+		`INSERT INTO source_documents (source_id, filename, mime, byte_size, sha256, body, uploaded_by)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
 		 ON CONFLICT (sha256) DO UPDATE SET filename = source_documents.filename
 		 RETURNING id`,
-		nullable(doc.SourceID), doc.Filename, doc.MIME, len(doc.Body), doc.SHA256, doc.Body).Scan(&id)
+		nullable(doc.SourceID), doc.Filename, doc.MIME, len(doc.Body), doc.SHA256,
+		doc.Body, doc.UploadedBy).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("документ %q не сохранён: %w", doc.Filename, err)
 	}
@@ -277,6 +293,28 @@ func (s *Store) AcceptDraft(ctx context.Context, sourceID, docID int64, decidedB
 			return fmt.Errorf("положения дочитаны не до конца: %w", err)
 		}
 
+		// Прежние положения принятых единиц убираются перед вставкой.
+		//
+		// Приёмку повторяют: разбор переделали, нашли пропущенный пункт,
+		// нажали «принять» второй раз. Без этой уборки положения легли бы
+		// вторым слоем поверх первого, и врач увидел бы каждое дважды —
+		// причём у единиц ничего подобного не случилось бы, там UPSERT.
+		// Убираются только у тех меток, что есть в черновике: положение
+		// единицы, которой этот документ не касается, чужое.
+		cleaned := map[string]bool{}
+		for _, st := range statements {
+			if cleaned[st.UnitLabel] {
+				continue
+			}
+			_, err := tx.Exec(ctx,
+				`DELETE FROM source_unit_statements WHERE source_id = $1 AND unit_label = $2`,
+				sourceID, st.UnitLabel)
+			if err != nil {
+				return fmt.Errorf("прежние положения единицы %q не убраны: %w", st.UnitLabel, err)
+			}
+			cleaned[st.UnitLabel] = true
+		}
+
 		for _, st := range statements {
 			_, err := tx.Exec(ctx,
 				`INSERT INTO source_unit_statements
@@ -359,4 +397,239 @@ func nullable(id int64) any {
 		return nil
 	}
 	return id
+}
+
+// knownKind, knownPurpose, knownHierarchy — сторожа закрытых словарей.
+//
+// Проверка стоит здесь, а не только ограничением в базе, ради текста
+// отказа: база скажет «нарушено ограничение sources_kind_check», и человек
+// пойдёт читать схему, а не исправлять поле.
+func knownKind(k Kind) bool {
+	switch k {
+	case KindClassification, KindDecree, KindGuidelines, KindStandard, KindHandbook, KindOther:
+		return true
+	}
+	return false
+}
+
+func knownPurpose(p Purpose) bool {
+	switch p {
+	case PurposeTopic, PurposeSystem, PurposeDiscipline, PurposeTask,
+		PurposeLevel, PurposeLegal, PurposeOther:
+		return true
+	}
+	return false
+}
+
+func knownHierarchy(h Hierarchy) bool {
+	switch h {
+	case HierarchyIsA, HierarchyPartOf, HierarchyGrouped:
+		return true
+	}
+	return false
+}
+
+// Sources — все источники, новые сверху.
+func (s *Store) Sources(ctx context.Context) ([]Source, error) {
+	rows, err := s.gate.Query(ctx,
+		`SELECT id, slug, kind, title, unit_word, statement_word,
+		        purpose, hierarchy, completeness, edition, status
+		   FROM sources
+		  ORDER BY id DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("источники не прочитаны: %w", err)
+	}
+	defer rows.Close()
+
+	// Пустой список — [], а не nil: он уедет в ответ ручки, и null вместо
+	// списка роняет студию на исправном случае — на пустой установке.
+	out := []Source{}
+	for rows.Next() {
+		src, err := scanSource(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, src)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("источники дочитаны не до конца: %w", err)
+	}
+	return out, nil
+}
+
+// SourceByID — паспорт одного источника.
+func (s *Store) SourceByID(ctx context.Context, id int64) (Source, error) {
+	row := s.gate.QueryRow(ctx,
+		`SELECT id, slug, kind, title, unit_word, statement_word,
+		        purpose, hierarchy, completeness, edition, status
+		   FROM sources
+		  WHERE id = $1`, id)
+	src, err := scanSource(row)
+	if err != nil {
+		return Source{}, fmt.Errorf("источник %d не найден: %w", id, err)
+	}
+	return src, nil
+}
+
+// scanRow — то общее у строки и у набора строк, что нужно чтению паспорта.
+type scanRow interface {
+	Scan(dest ...any) error
+}
+
+func scanSource(row scanRow) (Source, error) {
+	var src Source
+	err := row.Scan(&src.ID, &src.Slug, &src.Kind, &src.Title, &src.UnitWord,
+		&src.StatementWord, &src.Purpose, &src.Hierarchy, &src.Completeness,
+		&src.Edition, &src.Status)
+	if err != nil {
+		return Source{}, fmt.Errorf("строка источника не разобрана: %w", err)
+	}
+	return src, nil
+}
+
+// DocumentByID — паспорт документа без тела.
+//
+// Без тела намеренно: тело весит мегабайты, а ручке списка и ручке приёмки
+// нужен только номер источника, к которому документ принесли. Тело
+// поднимается отдельно и только тем, кому оно нужно.
+func (s *Store) DocumentByID(ctx context.Context, id int64) (Document, error) {
+	var doc Document
+	var sourceID *int64
+	err := s.gate.QueryRow(ctx,
+		`SELECT id, source_id, filename, mime, byte_size, sha256, uploaded_by
+		   FROM source_documents
+		  WHERE id = $1`, id).
+		Scan(&doc.ID, &sourceID, &doc.Filename, &doc.MIME, &doc.ByteSize,
+			&doc.SHA256, &doc.UploadedBy)
+	if err != nil {
+		return Document{}, fmt.Errorf("документ %d не найден: %w", id, err)
+	}
+	if sourceID != nil {
+		doc.SourceID = *sourceID
+	}
+	return doc, nil
+}
+
+// Documents — документы источника, новые сверху.
+func (s *Store) Documents(ctx context.Context, sourceID int64) ([]Document, error) {
+	rows, err := s.gate.Query(ctx,
+		`SELECT id, filename, mime, byte_size, sha256, uploaded_by
+		   FROM source_documents
+		  WHERE source_id = $1
+		  ORDER BY id DESC`, sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("документы не прочитаны: %w", err)
+	}
+	defer rows.Close()
+
+	out := []Document{}
+	for rows.Next() {
+		doc := Document{SourceID: sourceID}
+		if err := rows.Scan(&doc.ID, &doc.Filename, &doc.MIME, &doc.ByteSize,
+			&doc.SHA256, &doc.UploadedBy); err != nil {
+			return nil, fmt.Errorf("строка документа не разобрана: %w", err)
+		}
+		out = append(out, doc)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("документы дочитаны не до конца: %w", err)
+	}
+	return out, nil
+}
+
+// Fragments — куски документа по порядку.
+//
+// Заголовок в теле куска уже есть (его дописал fragmentBody при сохранении),
+// и обратно в Level с Title он не разбирается: разбор собранного текста
+// назад — вторая реализация того же правила, а такие пары расходятся молча.
+func (s *Store) Fragments(ctx context.Context, docID int64) ([]Fragment, error) {
+	rows, err := s.gate.Query(ctx,
+		`SELECT body_md, char_from, char_to
+		   FROM source_fragments
+		  WHERE document_id = $1
+		  ORDER BY ord`, docID)
+	if err != nil {
+		return nil, fmt.Errorf("куски не прочитаны: %w", err)
+	}
+	defer rows.Close()
+
+	out := []Fragment{}
+	for rows.Next() {
+		var f Fragment
+		if err := rows.Scan(&f.Body, &f.CharFrom, &f.CharTo); err != nil {
+			return nil, fmt.Errorf("строка куска не разобрана: %w", err)
+		}
+		out = append(out, f)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("куски дочитаны не до конца: %w", err)
+	}
+	return out, nil
+}
+
+// DraftUnits — единицы черновика разбора, в порядке разбора.
+func (s *Store) DraftUnits(ctx context.Context, docID int64) ([]Unit, error) {
+	return s.units(ctx,
+		`SELECT label, parent_label, title, '' AS path, 0 AS depth,
+		        TRUE AS answerable, ord
+		   FROM source_draft_units
+		  WHERE document_id = $1
+		  ORDER BY ord`, docID)
+}
+
+// DraftStatements — положения черновика разбора.
+func (s *Store) DraftStatements(ctx context.Context, docID int64) ([]Statement, error) {
+	rows, err := s.gate.Query(ctx,
+		`SELECT unit_label, kind, designation, body_md, place_ref, ord
+		   FROM source_draft_statements
+		  WHERE document_id = $1
+		  ORDER BY ord`, docID)
+	if err != nil {
+		return nil, fmt.Errorf("положения черновика не прочитаны: %w", err)
+	}
+	defer rows.Close()
+
+	out := []Statement{}
+	for rows.Next() {
+		var st Statement
+		if err := rows.Scan(&st.UnitLabel, &st.Kind, &st.Designation, &st.Body,
+			&st.PlaceRef, &st.Ord); err != nil {
+			return nil, fmt.Errorf("строка положения не разобрана: %w", err)
+		}
+		out = append(out, st)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("положения дочитаны не до конца: %w", err)
+	}
+	return out, nil
+}
+
+// UnitStatements — положения единицы, принятые в источник.
+//
+// Пустая метка означает «все положения источника»: студия показывает их
+// списком, когда человек смотрит источник целиком.
+func (s *Store) UnitStatements(ctx context.Context, sourceID int64, unitLabel string) ([]Statement, error) {
+	sql := `SELECT unit_label, kind, designation, body_md, place_ref, ord
+		      FROM source_unit_statements
+		     WHERE source_id = $1 AND ($2 = '' OR unit_label = $2)
+		     ORDER BY unit_label, ord`
+	rows, err := s.gate.Query(ctx, sql, sourceID, unitLabel)
+	if err != nil {
+		return nil, fmt.Errorf("положения не прочитаны: %w", err)
+	}
+	defer rows.Close()
+
+	out := []Statement{}
+	for rows.Next() {
+		var st Statement
+		if err := rows.Scan(&st.UnitLabel, &st.Kind, &st.Designation, &st.Body,
+			&st.PlaceRef, &st.Ord); err != nil {
+			return nil, fmt.Errorf("строка положения не разобрана: %w", err)
+		}
+		out = append(out, st)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("положения дочитаны не до конца: %w", err)
+	}
+	return out, nil
 }

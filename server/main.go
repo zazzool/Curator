@@ -24,6 +24,8 @@ import (
 
 	"curator/server/internal/dbgate"
 	"curator/server/internal/envfile"
+	"curator/server/internal/source"
+	"curator/server/internal/studio"
 )
 
 func main() {
@@ -94,6 +96,16 @@ func routes(gate *dbgate.Gate) http.Handler {
 		}
 		_, _ = w.Write([]byte("жив\n"))
 	})
+
+	// Редакционное API. Без базы его нет вовсе, и это честнее заглушки:
+	// поднятые ручки, отвечающие пустотой, работа примет за правду и
+	// запишет пустоту как результат.
+	if gate != nil {
+		desk := studio.NewDesk(studio.NewUsers(gate), studio.NewSessions(gate))
+		studio.Routes(desk)
+		source.Routes(desk, source.NewStore(gate))
+		mux.Handle("/admin/api/", desk.Handler())
+	}
 
 	// Статика студии. Пусто — раздача выключена, и это нормальный режим
 	// разработки: студия идёт своим сервером Vite.
