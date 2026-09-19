@@ -7,6 +7,8 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../account/account.dart';
+import '../account/account_screen.dart';
 import '../api/client.dart';
 import 'metrics.dart';
 import 'state.dart';
@@ -59,7 +61,24 @@ class _ProgressScreenState extends State<ProgressScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Знаки')),
+      appBar: AppBar(
+        title: const Text('Знаки'),
+        actions: [
+          // Доступ шестым разделом полосы не стал: мерка полосы — «без
+          // него врач не может заниматься», и карточка ей не отвечает.
+          // Но узнать, дошли ли деньги, было нельзя нигде, и место для
+          // этого — там же, где врач смотрит на себя.
+          IconButton(
+            icon: const Icon(Icons.account_circle_outlined),
+            tooltip: 'Мой доступ',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => AccountScreen(account: Account(widget.api)),
+              ),
+            ),
+          ),
+        ],
+      ),
       body: SafeArea(child: _body(context)),
     );
   }
