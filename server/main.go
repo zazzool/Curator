@@ -23,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	"curator/server/internal/analytics"
 	"curator/server/internal/app"
 	"curator/server/internal/casestore"
 	"curator/server/internal/dbgate"
@@ -36,6 +37,7 @@ import (
 	"curator/server/internal/signs"
 	"curator/server/internal/source"
 	"curator/server/internal/studio"
+	"curator/server/internal/telemetry"
 )
 
 func main() {
@@ -151,6 +153,7 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 		door := app.NewDoor(keys, app.NewAccounts(gate))
 		app.Routes(door, app.NewFeed(gate), app.NewAttempts(gate, progress.Default()))
 		app.PackRoutes(door, packStore, access, prices)
+		app.TelemetryRoutes(door, telemetry.NewStore(gate))
 		mux.Handle("/v1/", door.Handler())
 	}
 
@@ -165,6 +168,11 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 		app.KeyRoutes(desk, keys)
 		packs.Routes(desk, packStore)
 		sales.Routes(desk, sales.NewPayments(gate), prices, access)
+
+		rollup := analytics.NewRollup(gate)
+		analytics.Routes(desk, rollup)
+		go sweep(ctx, rollup)
+
 		generation(ctx, gate, desk)
 		mux.Handle("/admin/api/", desk.Handler())
 	}
@@ -175,6 +183,39 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 		mux.Handle("/", http.FileServer(http.Dir(dir)))
 	}
 	return mux
+}
+
+// sweep сводит решаемость задач в фоне.
+//
+// Не по обращению из студии: отчёт, считающий решаемость в момент показа,
+// перестаёт открываться ровно тогда, когда данных становится достаточно,
+// чтобы он был интересен. И не при каждой попытке: врач досылает пачку из
+// метро, и сведение в его транзакции — это его ожидание ради нашего отчёта.
+//
+// Отказ не валит службу и не останавливает часы: сведение — это отчёт, а не
+// работа врача. Упавший проход повторится следующим, и данные для него
+// никуда не делись — они в попытках.
+func sweep(ctx context.Context, rollup *analytics.Rollup) {
+	const every = 5 * time.Minute
+	tick := time.NewTicker(every)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			runCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+			touched, err := rollup.Run(runCtx, time.Now())
+			cancel()
+			if err != nil {
+				log.Printf("решаемость не сведена: %v", err)
+				continue
+			}
+			if touched > 0 {
+				log.Printf("решаемость сведена: задач %d", touched)
+			}
+		}
+	}
 }
 
 // generation поднимает второй этап пути: ручки заказа и исполнителя очереди.
