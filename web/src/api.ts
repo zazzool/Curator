@@ -48,6 +48,49 @@ export type Document = {
   uploadedBy: string
 }
 
+// Задание генерации, каким его видит студия.
+//
+// План сюда не едет: он весит килобайты, а на экране нужны состояние, шаг
+// и то, что написано.
+export type Job = {
+  id: number
+  sourceId: number
+  unitLabel: string
+  status: string
+  step: string
+  stepWord: string
+  attempts: number
+  error: string
+  createdAt: string
+  updatedAt: string
+  taskKind: string
+  unitTitle: string
+  unitWord: string
+  drafts?: Draft[]
+}
+
+// Черновик задачи, как его написала модель. Поля названы ровно так, как
+// их отдаёт сервер: переименование по дороге — это второе имя одного
+// поля, и расходятся такие пары молча.
+export type Draft = {
+  title: string
+  segments: { text: string; statements?: string[] }[]
+  options: { label?: string; text: string }[]
+  answer: string
+  explanationMd: string
+  difficulty: number
+}
+
+export type Prompt = {
+  id: string
+  name: string
+  node: string
+  nodeWord: string
+  systemMd: string
+  userMd: string
+  revision: number
+}
+
 export type Me = {
   login: string
   displayName: string
@@ -161,6 +204,29 @@ export const api = {
       'GET',
       `/admin/api/documents/${documentId}/draft`,
     ),
+
+  placeOrder: (
+    sourceId: number,
+    order: { unitLabel: string; kind?: string; targetStatement?: string; model?: string },
+  ) => request<Job>('POST', `/admin/api/sources/${sourceId}/orders`, order),
+
+  jobs: (sourceId: number, limit = 20) =>
+    request<{ jobs: Job[] }>('GET', `/admin/api/sources/${sourceId}/jobs?limit=${limit}`),
+
+  job: (id: number) => request<Job>('GET', `/admin/api/jobs/${id}`),
+
+  cancelJob: (id: number) =>
+    request<{ status: string }>('POST', `/admin/api/jobs/${id}/cancel`),
+
+  prompts: () => request<{ prompts: Prompt[] }>('GET', '/admin/api/prompts'),
+
+  savePrompt: (prompt: Pick<Prompt, 'id' | 'name' | 'systemMd' | 'userMd' | 'revision'>) =>
+    request<{ id: string; revision: number }>('PUT', `/admin/api/prompts/${prompt.id}`, {
+      name: prompt.name,
+      systemMd: prompt.systemMd,
+      userMd: prompt.userMd,
+      revision: prompt.revision,
+    }),
 
   accept: (documentId: number) =>
     request<{ sourceId: number; accepted: number }>(

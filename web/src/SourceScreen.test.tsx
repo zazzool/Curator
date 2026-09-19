@@ -43,6 +43,7 @@ describe('экран источника', () => {
     vi.restoreAllMocks()
     serve({
       '/admin/api/sources/1/units': { units: UNITS },
+      '/admin/api/sources/1/jobs': { jobs: [] },
       '/admin/api/sources/1/documents': { documents: [] },
       '/admin/api/sources/1': SOURCE,
     })
@@ -60,6 +61,19 @@ describe('экран источника', () => {
     await waitFor(() => expect(screen.getByText('3.2')).toBeTruthy())
     const nested = screen.getByText('3.2').closest('li')
     expect(nested?.style.paddingLeft).toBe('16px')
+  })
+
+  it('раздел, не прочитавший своё, не роняет остальной экран', async () => {
+    // Обнаружилось проверкой, а не на бою: ответ без списка заданий ронял
+    // весь экран источника белым — вместе с документами и принятым,
+    // к генерации отношения не имеющими.
+    serve({
+      '/admin/api/sources/1/units': { units: UNITS },
+      '/admin/api/sources/1/documents': { documents: [] },
+      '/admin/api/sources/1': SOURCE,
+    })
+    render(<SourceScreen me={РЕДАКТОР} id={1} onBack={() => {}} />)
+    await waitFor(() => expect(screen.getByText(/Принятые пункты/)).toBeTruthy())
   })
 
   it('не обещает принять PDF позже', async () => {

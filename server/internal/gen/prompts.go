@@ -238,3 +238,110 @@ func seeds() []Prompt {
 {варианты}`,
 	}}
 }
+
+// All отдаёт все задания по порядку узлов.
+//
+// Порядок — прохождения конвейера, а не алфавита: составитель читает
+// список сверху вниз как путь задачи, и «слепая сверка» выше «написания»
+// сбила бы его с того, что за чем идёт.
+func (p *Prompts) All(ctx context.Context) ([]Prompt, error) {
+	rows, err := p.gate.Query(ctx,
+		`SELECT id, name, node, system_md, user_md, revision
+		   FROM prompts
+		  ORDER BY node, id`)
+	if err != nil {
+		return nil, fmt.Errorf("задания не прочитаны: %w", err)
+	}
+	defer rows.Close()
+
+	byNode := map[string][]Prompt{}
+	for rows.Next() {
+		var one Prompt
+		if err := rows.Scan(&one.ID, &one.Name, &one.Node, &one.SystemMd,
+			&one.UserMd, &one.Revision); err != nil {
+			return nil, fmt.Errorf("задание не прочитано: %w", err)
+		}
+		byNode[one.Node] = append(byNode[one.Node], one)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("задания не дочитаны: %w", err)
+	}
+
+	// Пустой список — [], а не nil: студия ходит по нему циклом, и на
+	// свежей установке, где заданий ещё нет, nil уехал бы наружу как null.
+	out := make([]Prompt, 0, len(byNode))
+	for _, node := range Nodes {
+		out = append(out, byNode[node]...)
+		delete(byNode, node)
+	}
+	// Задание неизвестного узла не прячется: оно уже лежит в базе, и
+	// спрятанное от составителя, оно продолжит работать незамеченным.
+	for _, left := range byNode {
+		out = append(out, left...)
+	}
+	return out, nil
+}
+
+// Save правит задание, сверяя редакцию.
+//
+// Редакция сверяется условием самого UPDATE, а не чтением перед записью:
+// между чтением и записью успевает вклиниться второй составитель, и
+// проверка «сперва прочитали — совпало» пропустит ровно тот случай, ради
+// которого заведена. Прежний текст уезжает в историю в той же транзакции:
+// сравнить «до» и «после» нужно тогда, когда качество задач поехало, а
+// помнить, что меняли неделю назад, уже некому.
+func (p *Prompts) Save(ctx context.Context, edit Prompt, login string) (Prompt, error) {
+	if strings.TrimSpace(edit.SystemMd) == "" && strings.TrimSpace(edit.UserMd) == "" {
+		return Prompt{}, errors.New("задание пустым не сохраняется: модель на пустое задание ответит чем угодно")
+	}
+
+	var out Prompt
+	err := p.gate.InTx(ctx, func(tx pgx.Tx) error {
+		var prevSystem, prevUser string
+		var prevRevision int
+		err := tx.QueryRow(ctx,
+			`SELECT system_md, user_md, revision FROM prompts WHERE id = $1 FOR UPDATE`,
+			edit.ID).Scan(&prevSystem, &prevUser, &prevRevision)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("задания %q нет", edit.ID)
+		}
+		if err != nil {
+			return fmt.Errorf("задание %q не прочитано: %w", edit.ID, err)
+		}
+		if edit.Revision != prevRevision {
+			return fmt.Errorf(
+				"задание правили, пока вы его открывали: у вас редакция %d, в студии уже %d — перечитайте и внесите правку заново",
+				edit.Revision, prevRevision)
+		}
+
+		// В историю уходит ПРЕЖНИЙ текст под прежним номером: так номер
+		// редакции в истории означает «что было в этой редакции», а не
+		// «что её сменило».
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO prompt_revisions (prompt_id, revision, system_md, user_md, saved_by)
+			 VALUES ($1, $2, $3, $4, $5)
+			 ON CONFLICT (prompt_id, revision) DO NOTHING`,
+			edit.ID, prevRevision, prevSystem, prevUser, login); err != nil {
+			return fmt.Errorf("прежняя редакция задания %q не сохранена: %w", edit.ID, err)
+		}
+
+		name := strings.TrimSpace(edit.Name)
+		err = tx.QueryRow(ctx,
+			`UPDATE prompts
+			    SET name = COALESCE(NULLIF($2, ''), name),
+			        system_md = $3, user_md = $4,
+			        revision = revision + 1, updated_at = NOW()
+			  WHERE id = $1 AND revision = $5
+			 RETURNING id, name, node, system_md, user_md, revision`,
+			edit.ID, name, edit.SystemMd, edit.UserMd, prevRevision).
+			Scan(&out.ID, &out.Name, &out.Node, &out.SystemMd, &out.UserMd, &out.Revision)
+		if err != nil {
+			return fmt.Errorf("задание %q не сохранено: %w", edit.ID, err)
+		}
+		return nil
+	})
+	if err != nil {
+		return Prompt{}, err
+	}
+	return out, nil
+}
