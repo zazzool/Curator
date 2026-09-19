@@ -100,7 +100,19 @@ func (r *Rollup) Run(ctx context.Context, now time.Time) (int, error) {
 		       (case_id, attempts, correct, solve_rate, median_ms, confusion, origin, updated_at)
 		SELECT c.case_id, c.attempts, c.correct,
 		       c.correct::real / c.attempts,
-		       round(c.median_ms)::bigint,
+		       -- Через numeric, и это замер, а не педантизм. round() у
+		       -- double precision округляет половину к ЧЁТНОМУ — так
+		       -- велит платформенный rint, и документация Postgres прямо
+		       -- называет это поведение зависящим от платформы. У numeric
+		       -- половина округляется ОТ НУЛЯ, и ровно так считает
+		       -- math.Round в Go. Медиана чётного ряда — середина между
+		       -- двумя средними, то есть ровно половина там, где сумма
+		       -- нечётна: 22280.5 давало 22280 здесь и 22281 в Go, и
+		       -- поймала это сверка с независимым расчётом. Число
+		       -- расходилось на миллисекунду и ни на что не влияло —
+		       -- но расходились ДВЕ РЕАЛИЗАЦИИ ОДНОГО ПРАВИЛА, а они
+		       -- расходятся молча и дальше уже не на миллисекунду.
+		       round(c.median_ms::numeric)::bigint,
 		       coalesce(p.confusion, '{}'::jsonb),
 		       'live', $2
 		  FROM сводка c
