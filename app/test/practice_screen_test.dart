@@ -2,6 +2,7 @@ import 'package:curator/api/client.dart';
 import 'package:curator/cases/model.dart';
 import 'package:curator/cases/outbox.dart';
 import 'package:curator/cases/practice_screen.dart';
+import 'package:curator/text/hyphenation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -21,6 +22,17 @@ class _StubOutbox extends Outbox {
     tokens: MemoryTokenStore(),
   );
 }
+
+/// Ищет текст, показанный размеченным.
+///
+/// `find.text` смотрит только на `Text.data`, а условие, варианты и разбор
+/// показываются `Text.rich` — с разобранной разметкой и расставленными
+/// мягкими переносами. Переносы при сверке снимаются: они свойство показа,
+/// и проверять их здесь значило бы проверять раскладку.
+Finder prose(String text) => find.byWidgetPredicate(
+  (w) =>
+      w is RichText && w.text.toPlainText().replaceAll(softHyphen, '') == text,
+);
 
 void main() {
   testWidgets('без сети экран говорит словами и даёт повторить', (
@@ -78,10 +90,10 @@ void main() {
       ),
     );
 
-    expect(find.text('Больной жалуется на…'), findsOneWidget);
-    expect(find.text('Потому что так'), findsNothing);
+    expect(prose('Больной жалуется на…'), findsOneWidget);
+    expect(prose('Потому что так'), findsNothing);
 
-    await tester.tap(find.text('Первый'));
+    await tester.tap(prose('Первый'));
     expect(chosen, isNotNull);
 
     // Разбор показывается после ответа, и верный вариант виден всегда:
@@ -102,7 +114,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Неверно'), findsOneWidget);
-    expect(find.text('Потому что так'), findsOneWidget);
+    expect(prose('Потому что так'), findsOneWidget);
     expect(find.text('Дальше'), findsOneWidget);
 
     await tester.tap(find.text('Дальше'));

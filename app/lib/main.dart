@@ -18,6 +18,7 @@ import 'api/token_store.dart';
 import 'cases/outbox.dart';
 import 'db/database.dart';
 import 'db/outbox_store.dart';
+import 'db/reference_store.dart';
 import 'db/schedule.dart';
 import 'home.dart';
 import 'packs/manifest.dart';
@@ -66,6 +67,7 @@ Future<void> main() async {
   // врача вообще без приложения, а лента и разбор от базы не зависят:
   // непонятое не применяется, но и не роняет остального.
   Schedule? schedule;
+  ReferenceStore? reference;
   OutboxStore outboxStore = PrefsOutboxStore();
   try {
     final db = await openLocalDatabase();
@@ -75,6 +77,7 @@ Future<void> main() async {
     await store.adopt(PrefsOutboxStore());
     outboxStore = store;
     schedule = Schedule(db);
+    reference = ReferenceStore(db);
   } catch (error) {
     // Пишется в журнал, а не показывается врачу: показать ему нечего —
     // делать с этим он ничего не может, а приложение работает.
@@ -88,6 +91,7 @@ Future<void> main() async {
       packs: FilePackStore(),
       keys: TrustedKeys.parse(_packKeys),
       schedule: schedule,
+      reference: reference,
     ),
   );
 }
@@ -100,6 +104,7 @@ class CuratorApp extends StatelessWidget {
     required this.packs,
     required this.keys,
     required this.schedule,
+    this.reference,
   });
 
   final Api api;
@@ -110,6 +115,9 @@ class CuratorApp extends StatelessWidget {
   /// Расписание повторения на устройстве. Пусто — значит, местная база не
   /// открылась, и работы без сети не будет; остальное работает.
   final Schedule? schedule;
+
+  /// Справочник на устройстве. Пусто по той же причине.
+  final ReferenceStore? reference;
 
   @override
   Widget build(BuildContext context) {
@@ -128,6 +136,7 @@ class CuratorApp extends StatelessWidget {
         packs: packs,
         keys: keys,
         schedule: schedule,
+        reference: reference,
       ),
     );
   }
@@ -146,6 +155,7 @@ class StartScreen extends StatefulWidget {
     required this.packs,
     required this.keys,
     required this.schedule,
+    this.reference,
   });
 
   final Api api;
@@ -156,6 +166,9 @@ class StartScreen extends StatefulWidget {
   /// Расписание повторения на устройстве. Пусто — значит, местная база не
   /// открылась, и работы без сети не будет; остальное работает.
   final Schedule? schedule;
+
+  /// Справочник на устройстве. Пусто по той же причине.
+  final ReferenceStore? reference;
 
   @override
   State<StartScreen> createState() => _StartScreenState();
@@ -223,6 +236,7 @@ class _StartScreenState extends State<StartScreen> {
           packs: widget.packs,
           keys: widget.keys,
           schedule: widget.schedule,
+          reference: widget.reference,
         );
       },
     );

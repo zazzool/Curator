@@ -92,6 +92,77 @@ const migrations = <String>[
   //    уехать должен раньше — иначе расписание на сервере пересчитается
   //    задом наперёд.
   'CREATE INDEX IF NOT EXISTS outbox_order ON outbox (happened_at)',
+
+  // 5. Справочник на устройстве: какие источники скачаны и какого они
+  //    выпуска.
+  //
+  //    Выпуск хранится рядом с копией, а не в настройках: настройки и
+  //    база — два места, которые расходятся при любом обрыве посреди
+  //    закачки, и разойдясь, они дают худшее из возможного — число
+  //    говорит «свежая», а лежат половина рубрик.
+  '''
+  CREATE TABLE IF NOT EXISTS ref_sources (
+    slug           TEXT PRIMARY KEY,
+    title          TEXT    NOT NULL DEFAULT '',
+    unit_word      TEXT    NOT NULL DEFAULT '',
+    statement_word TEXT    NOT NULL DEFAULT '',
+    edition        TEXT    NOT NULL DEFAULT '',
+    version        INTEGER NOT NULL DEFAULT 0,
+    units          INTEGER NOT NULL DEFAULT 0,
+    statements     INTEGER NOT NULL DEFAULT 0,
+    synced_at      INTEGER NOT NULL DEFAULT 0
+  )
+  ''',
+
+  // 6. Единицы справочника. Ключ составной: метка уникальна внутри
+  //    источника, а не вообще — «п. 1» есть в каждом приказе.
+  '''
+  CREATE TABLE IF NOT EXISTS ref_units (
+    source_slug  TEXT    NOT NULL,
+    label        TEXT    NOT NULL,
+    parent_label TEXT    NOT NULL DEFAULT '',
+    title        TEXT    NOT NULL DEFAULT '',
+    path         TEXT    NOT NULL DEFAULT '',
+    depth        INTEGER NOT NULL DEFAULT 0,
+    kind         TEXT    NOT NULL DEFAULT 'entry',
+    answerable   INTEGER NOT NULL DEFAULT 1,
+    statements   INTEGER NOT NULL DEFAULT 0,
+    ord          INTEGER NOT NULL DEFAULT 0,
+
+    -- Метка и название одной строкой, свёрнутые в нижний регистр. Заведена
+    -- ради поиска: LIKE в SQLite нечувствителен к регистру только для
+    -- латиницы, и «депресс» не находило «Депрессивный эпизод» — то есть
+    -- поиск не работал ровно на том языке, на котором написан справочник.
+    -- Свёртка делается в Dart: LOWER() в SQLite спотыкается на кириллице
+    -- так же, как LIKE.
+    search       TEXT    NOT NULL DEFAULT '',
+
+    PRIMARY KEY (source_slug, label)
+  )
+  ''',
+
+  // 7. Спуск по дереву — то, чем открывается справочник, и без указателя
+  //    это перебор всех рубрик на каждое касание.
+  'CREATE INDEX IF NOT EXISTS ref_units_children ON ref_units (source_slug, parent_label, ord)',
+
+  // 8. Положения единиц: критерии, пункты, абзацы.
+  '''
+  CREATE TABLE IF NOT EXISTS ref_statements (
+    id          INTEGER NOT NULL,
+    source_slug TEXT    NOT NULL,
+    unit_label  TEXT    NOT NULL,
+    kind        TEXT    NOT NULL DEFAULT '',
+    designation TEXT    NOT NULL DEFAULT '',
+    place_ref   TEXT    NOT NULL DEFAULT '',
+    body_md     TEXT    NOT NULL DEFAULT '',
+    ord         INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (source_slug, id)
+  )
+  ''',
+
+  // 9. Критерии открываемой рубрики — второй по частоте запрос после
+  //    спуска по дереву.
+  'CREATE INDEX IF NOT EXISTS ref_statements_unit ON ref_statements (source_slug, unit_label, ord)',
 ];
 
 /// Версия схемы — это просто число шагов.

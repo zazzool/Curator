@@ -13,6 +13,7 @@ import '../api/client.dart';
 import '../db/schedule.dart';
 import '../packs/store.dart';
 import '../progress/rules.dart';
+import '../text/prose.dart';
 import 'feed.dart';
 import 'model.dart';
 import 'outbox.dart';
@@ -229,6 +230,18 @@ class _PracticeScreenState extends State<PracticeScreen> {
 ///
 /// Открыт проверке намеренно: показ задачи — самое, что здесь есть, и
 /// проверять его через сеть значит проверять сеть.
+///
+/// # Условие показывается так же, как критерии справочника
+///
+/// Тем же `Prose` и с теми же переносами. Врач читает то и другое подряд —
+/// сверяет условие с критериями, — и два разных набора кеглей и отступов
+/// на соседних экранах читаются как два разных приложения.
+///
+/// # Разметка показывается после ответа, а не до
+///
+/// Обозначения положений, которые подтверждает кусок условия, — это и
+/// есть подсказка: показанные до ответа, они превращают задачу в чтение
+/// с ответом на полях.
 class CaseView extends StatelessWidget {
   const CaseView({
     super.key,
@@ -247,35 +260,38 @@ class CaseView extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final answered = chosen != null;
+    final right = answered && one.isCorrect(chosen!);
 
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
       children: [
-        if (one.unitLabel.isNotEmpty)
-          Text(one.unitLabel, style: theme.textTheme.labelMedium),
+        _Marks(one: one, showMarkup: answered),
         if (one.title.isNotEmpty) ...[
-          const SizedBox(height: 4),
-          Text(one.title, style: theme.textTheme.titleMedium),
+          const SizedBox(height: 10),
+          Prose(one.title, style: theme.textTheme.titleLarge),
         ],
-        const SizedBox(height: 12),
+        const SizedBox(height: 16),
 
         // Условие идёт кусками, а не одним текстом: кусок — это то, что
         // подтверждает положение источника, и в разборе он подсвечивается
         // отдельно.
         for (final segment in one.segments) ...[
-          Text(segment.text, style: theme.textTheme.bodyLarge),
+          Prose(segment.text, style: theme.textTheme.bodyLarge),
           if (answered && segment.statements.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: Text(
-                segment.statements.join(', '),
-                style: theme.textTheme.labelSmall,
+              padding: const EdgeInsets.only(top: 6),
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final mark in segment.statements) _Mark(text: mark),
+                ],
               ),
             ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 12),
         ],
 
-        const SizedBox(height: 8),
+        const SizedBox(height: 6),
         for (final option in one.options)
           _OptionTile(
             option: option,
@@ -284,16 +300,32 @@ class CaseView extends StatelessWidget {
           ),
 
         if (answered) ...[
-          const SizedBox(height: 16),
-          Text(
-            one.isCorrect(chosen!) ? 'Верно' : 'Неверно',
-            style: theme.textTheme.titleMedium,
+          const SizedBox(height: 20),
+          Row(
+            children: [
+              Icon(
+                right ? Icons.check_circle : Icons.cancel_outlined,
+                size: 22,
+                color: right
+                    ? theme.colorScheme.primary
+                    : theme.colorScheme.error,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                right ? 'Верно' : 'Неверно',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  color: right
+                      ? theme.colorScheme.primary
+                      : theme.colorScheme.error,
+                ),
+              ),
+            ],
           ),
           if (one.explanationMd.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text(one.explanationMd, style: theme.textTheme.bodyMedium),
+            const SizedBox(height: 12),
+            Prose(one.explanationMd, style: theme.textTheme.bodyMedium),
           ],
-          const SizedBox(height: 16),
+          const SizedBox(height: 20),
           FilledButton(onPressed: onNext, child: const Text('Дальше')),
         ],
       ],
@@ -322,36 +354,169 @@ class _OptionTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
     final color = switch (state) {
       _OptionState.plain => scheme.outlineVariant,
       _OptionState.right => scheme.primary,
       _OptionState.wrong => scheme.error,
     };
+    // Знак исхода вместо одного цвета рамки: цвет различают не все, и
+    // задача, разобранная по цвету, у части врачей не разбирается вовсе.
+    final mark = switch (state) {
+      _OptionState.plain => null,
+      _OptionState.right => Icons.check,
+      _OptionState.wrong => Icons.close,
+    };
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.only(bottom: 10),
       child: InkWell(
         onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
         child: Container(
           width: double.infinity,
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           decoration: BoxDecoration(
             // Волосяная граница, а не тень: тень допустима только у того,
             // что физически висит над страницей.
-            border: Border.all(color: color),
-            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: color,
+              width: state == _OptionState.plain ? 1 : 1.5,
+            ),
+            borderRadius: BorderRadius.circular(10),
           ),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               if (option.label.isNotEmpty) ...[
-                Text(option.label),
+                // Метка в кружке постоянного размера: у меток «А» и «VIII»
+                // разная ширина, и без кружка текст вариантов начинается
+                // с разных мест.
+                Container(
+                  width: 26,
+                  height: 26,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: color),
+                  ),
+                  child: Text(
+                    option.label,
+                    style: theme.textTheme.labelMedium?.copyWith(color: color),
+                  ),
+                ),
                 const SizedBox(width: 12),
               ],
-              Expanded(child: Text(option.text)),
+              Expanded(
+                child: Prose(option.text, style: theme.textTheme.bodyLarge),
+              ),
+              if (mark != null) ...[
+                const SizedBox(width: 10),
+                Icon(mark, size: 18, color: color),
+              ],
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Полоска над задачей: вид, рубрика, трудность, объём разметки.
+///
+/// Отвечает на то, что врач оценивает взглядом до чтения: откуда задача и
+/// насколько она тяжёлая. Объём разметки показывается только после
+/// ответа — до ответа он говорит, сколько в условии значащих кусков, а это
+/// подсказка.
+class _Marks extends StatelessWidget {
+  const _Marks({required this.one, required this.showMarkup});
+
+  final CaseItem one;
+  final bool showMarkup;
+
+  @override
+  Widget build(BuildContext context) {
+    final marked = one.segments.where((s) => s.statements.isNotEmpty).length;
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        _Fact(icon: Icons.category_outlined, text: one.kind.word),
+        if (one.unitLabel.isNotEmpty)
+          _Fact(icon: Icons.label_outline, text: one.unitLabel),
+        if (one.difficulty > 0)
+          _Fact(
+            icon: Icons.speed_outlined,
+            text: 'Трудность: ${one.difficulty}',
+          ),
+        if (showMarkup && marked > 0)
+          _Fact(
+            icon: Icons.link,
+            text: 'Подтверждают: $marked из ${one.segments.length}',
+          ),
+      ],
+    );
+  }
+}
+
+class _Fact extends StatelessWidget {
+  const _Fact({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: theme.colorScheme.onSurfaceVariant),
+          const SizedBox(width: 6),
+          Text(text, style: theme.textTheme.labelMedium),
+        ],
+      ),
+    );
+  }
+}
+
+/// Обозначение положения, которое подтверждает кусок условия.
+class _Mark extends StatelessWidget {
+  const _Mark({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        border: Border.all(
+          color: theme.colorScheme.primary.withValues(alpha: 0.4),
+        ),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.link, size: 12, color: theme.colorScheme.primary),
+          const SizedBox(width: 5),
+          Text(
+            text,
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.primary,
+            ),
+          ),
+        ],
       ),
     );
   }
