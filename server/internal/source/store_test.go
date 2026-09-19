@@ -458,3 +458,206 @@ func TestPgПриёмкаУвеличиваетВыпускСправочник�
 		t.Errorf("выпуск справочника не вырос: было %d, стало %d", before, after)
 	}
 }
+
+func TestPgПустойИсточникДействующимНеОбъявляется(t *testing.T) {
+	// Объявленный действующим источник без единой единицы врач увидит как
+	// пустую книгу и решит, что приложение сломано. Сломано при этом не
+	// приложение, а решение, и сказать об этом надо тому, кто его
+	// принимает.
+	ctx := context.Background()
+	s := NewStore(testGate(t))
+	sourceID := newSource(t, s)
+
+	err := s.SetStatus(ctx, sourceID, StatusActive)
+	if err == nil {
+		t.Fatal("пустой источник объявлен действующим")
+	}
+	if !strings.Contains(err.Error(), "примите разбор") {
+		t.Errorf("отказ не говорит, что делать: %v", err)
+	}
+
+	src, err := s.SourceByID(ctx, sourceID)
+	if err != nil {
+		t.Fatalf("паспорт не прочитан: %v", err)
+	}
+	if src.Status != StatusDraft {
+		t.Errorf("состояние поменялось вопреки отказу: %q", src.Status)
+	}
+}
+
+func TestPgИсточникОбъявляетсяДействующимИОбратно(t *testing.T) {
+	// До этого вызова источника для устройства не существует: справочник
+	// отдаёт только действующие. Не будь этого действия вовсе — а его и не
+	// было, — офлайн-справочник был бы пуст у всех и всегда.
+	ctx := context.Background()
+	s := NewStore(testGate(t))
+	sourceID := newSource(t, s)
+	docID := draftDoc(t, s, sourceID,
+		[]Unit{{Label: "п1", Title: "Пункт первый"}},
+		[]Statement{{UnitLabel: "п1", Kind: "criterion", Body: "Положение"}})
+	if _, err := s.AcceptDraft(ctx, sourceID, docID, "проверка"); err != nil {
+		t.Fatalf("приёмка отказала: %v", err)
+	}
+
+	if err := s.SetStatus(ctx, sourceID, StatusActive); err != nil {
+		t.Fatalf("источник не объявлен действующим: %v", err)
+	}
+	src, _ := s.SourceByID(ctx, sourceID)
+	if src.Status != StatusActive {
+		t.Fatalf("состояние не записано: %q", src.Status)
+	}
+
+	// Обратно — можно: источник, объявленный по ошибке, снимается тем же
+	// действием, а не правкой в базе руками.
+	if err := s.SetStatus(ctx, sourceID, StatusRetired); err != nil {
+		t.Fatalf("источник не отменён: %v", err)
+	}
+	src, _ = s.SourceByID(ctx, sourceID)
+	if src.Status != StatusRetired {
+		t.Errorf("состояние не записано: %q", src.Status)
+	}
+}
+
+func TestPgСостоянияВнеСловаряНеПринимаются(t *testing.T) {
+	// Словарь закрыт тем же, чем закрыт в схеме: состояние, появившееся
+	// строкой в коде, прошло бы проверку схемы и осталось бы невидимым для
+	// всех списков.
+	ctx := context.Background()
+	s := NewStore(testGate(t))
+	sourceID := newSource(t, s)
+
+	if err := s.SetStatus(ctx, sourceID, "опубликован"); err == nil {
+		t.Fatal("придуманное состояние принято")
+	}
+	if err := s.SetStatus(ctx, 10_000_000, StatusDraft); err == nil {
+		t.Fatal("состояние записано несуществующему источнику")
+	}
+}
+
+func TestPgРодЕдиницыДоезжаетДоИсточника(t *testing.T) {
+	// Род берётся у разбора, а не угадывается по виду метки: «если это
+	// МКБ» — дефект. Приёмка хранила его только в черновике и записывала
+	// всем «запись», и девятьсот диагнозов ложились одним плоским списком
+	// без единого входа в него.
+	ctx := context.Background()
+	s := NewStore(testGate(t))
+	srcID := newSource(t, s)
+	docID := draftDoc(t, s, srcID, []Unit{
+		{Label: "F30-F39", Title: "Расстройства настроения", Kind: KindGroup},
+		{Label: "F32", ParentLabel: "F30-F39", Title: "Депрессивный эпизод"},
+	}, nil)
+
+	if _, err := s.AcceptDraft(ctx, srcID, docID, "врач"); err != nil {
+		t.Fatal(err)
+	}
+	units, err := s.Units(ctx, srcID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(units) != 2 {
+		t.Fatalf("в источнике %d единиц", len(units))
+	}
+	byLabel := map[string]Unit{}
+	for _, u := range units {
+		byLabel[u.Label] = u
+	}
+	group := byLabel["F30-F39"]
+	if group.Kind != KindGroup {
+		t.Errorf("род группы %q, ожидался %q", group.Kind, KindGroup)
+	}
+	// Задача по группе — это задача «отгадайте раздел», и отгадывать в ней
+	// нечего: группа отвечаемой не бывает, и следует это из рода, а не из
+	// отдельного поля черновика.
+	if group.Answerable {
+		t.Error("группа объявлена отвечаемой: по разделу будет сгенерирована задача")
+	}
+	entry := byLabel["F32"]
+	if entry.Kind != KindEntry {
+		t.Errorf("род записи %q, ожидался %q", entry.Kind, KindEntry)
+	}
+	if !entry.Answerable {
+		t.Error("запись объявлена неотвечаемой: по ней не будет задач")
+	}
+}
+
+func TestPgПовторнаяПриёмкаМеняетРод(t *testing.T) {
+	// Разбор ошибся родом — второй заход обязан его исправить, а не
+	// оставить прежний. Прежний ключ включал род, и «F32» записью и «F32»
+	// группой уживались в таблице двумя строками: чтение по метке отдавало
+	// то одну, то другую, и какую именно — зависело от порядка вставки.
+	ctx := context.Background()
+	s := NewStore(testGate(t))
+	srcID := newSource(t, s)
+
+	first := draftDoc(t, s, srcID, []Unit{
+		{Label: "F32", Title: "Депрессивный эпизод", Kind: KindEntry},
+	}, nil)
+	if _, err := s.AcceptDraft(ctx, srcID, first, "врач"); err != nil {
+		t.Fatal(err)
+	}
+	second := draftDoc(t, s, srcID, []Unit{
+		{Label: "F32", Title: "Депрессивный эпизод", Kind: KindGroup},
+	}, nil)
+	if _, err := s.AcceptDraft(ctx, srcID, second, "врач"); err != nil {
+		t.Fatal(err)
+	}
+
+	units, err := s.Units(ctx, srcID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(units) != 1 {
+		t.Fatalf("метка «F32» легла %d строками, а не одной", len(units))
+	}
+	if units[0].Kind != KindGroup || units[0].Answerable {
+		t.Errorf("род остался %q (отвечаемость %v): повторная приёмка не исправила его",
+			units[0].Kind, units[0].Answerable)
+	}
+}
+
+func TestPgПарыПутаютСЗамещаютсяЦеликом(t *testing.T) {
+	// Разбор источника переделывают, и пары прошлого разбора рядом с
+	// новыми — это два ответа на вопрос «с чем это путают». Подбор
+	// неверных вариантов взял бы из них случайный.
+	ctx := context.Background()
+	s := NewStore(testGate(t))
+	srcID := newSource(t, s)
+
+	if err := s.SaveDifferentials(ctx, srcID, []Differential{
+		{UnitLabel: "F32", Counterpart: "F41.2", Ord: 0},
+		{UnitLabel: "F32", Counterpart: "F33", Ord: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveDifferentials(ctx, srcID, []Differential{
+		{UnitLabel: "F32", Counterpart: "F41.2", Ord: 0},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.Differentials(ctx, srcID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Counterpart != "F41.2" {
+		t.Fatalf("после второго разбора пар %d: %v", len(got), got)
+	}
+}
+
+func TestPgПустыхПарЭтоПустойСписок(t *testing.T) {
+	// У источника без такой разметки пар просто нет, и это исправный
+	// случай: пустое значение вместо списка роняет читающего белым
+	// экраном именно на хороших источниках.
+	ctx := context.Background()
+	s := NewStore(testGate(t))
+	got, err := s.Differentials(ctx, newSource(t, s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Error("пустой список отдан пустым значением")
+	}
+	if len(got) != 0 {
+		t.Errorf("у нового источника %d пар", len(got))
+	}
+}

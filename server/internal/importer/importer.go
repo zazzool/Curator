@@ -237,11 +237,17 @@ func units(ctx context.Context, old, fresh Rows, oldSourceID, sourceID int64) (i
 		// только на повторном заходе — и там отчёт о «пяти ввезённых
 		// единицах» при пяти уже лежащих означал бы, что ввоз задвоил
 		// дерево. Он не задвоил, но по отчёту этого не отличить.
+		//
+		// Ключ — метка без рода: в прежней базе он стоял вместе с родом, и
+		// «F00» как группа уживалась с «F00» как записью. Чтение по метке
+		// отдавало бы тогда то одну, то другую. Если в доноре такая пара
+		// всё же есть, вторая единица не ляжет, и ввоз назовёт её числом —
+		// прочитано столько, записано меньше.
 		tag, err := fresh.Exec(ctx, `
 			INSERT INTO source_units (source_id, kind, label, parent_label, title,
 			                          path, depth, answerable, ord, attrs)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-			ON CONFLICT (source_id, kind, label) DO NOTHING`,
+			ON CONFLICT (source_id, label) DO NOTHING`,
 			sourceID, one.kind, one.label, one.parent, one.title,
 			path, depthOf(path), one.answerable, one.ord, one.attrs)
 		if err != nil {

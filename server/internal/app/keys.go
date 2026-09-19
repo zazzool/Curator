@@ -90,11 +90,24 @@ func (k *Keys) Issue(ctx context.Context, keyID, title string) (string, error) {
 	}
 	secret := base64.RawURLEncoding.EncodeToString(raw)
 
-	_, err := k.gate.Exec(ctx,
-		`INSERT INTO app_keys (key_id, secret_hash, title) VALUES ($1, $2, $3)`,
+	// ON CONFLICT DO NOTHING, а не отказ базы наружу: отказ базы приезжает
+	// человеку строкой вида «duplicate key value violates unique constraint
+	// "app_keys_pkey" (SQLSTATE 23505)», и по ней не понять ни что
+	// случилось, ни что делать. Повтор номера — обычная человеческая
+	// ошибка, и говорить о ней надо словами.
+	//
+	// Именно DO NOTHING, а не DO UPDATE: перезапись подменила бы отпечаток
+	// живого ключа, и все сборки, ходящие со старым, отказали бы разом —
+	// молча и не у нас, а на руках у врачей.
+	tag, err := k.gate.Exec(ctx,
+		`INSERT INTO app_keys (key_id, secret_hash, title) VALUES ($1, $2, $3)
+		 ON CONFLICT (key_id) DO NOTHING`,
 		keyID, fingerprint(secret), title)
 	if err != nil {
 		return "", fmt.Errorf("ключ программы %q не заведён: %w", keyID, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return "", fmt.Errorf("ключ программы с номером %q уже заведён: возьмите другой номер или отключите прежний", keyID)
 	}
 	return keyID + "." + secret, nil
 }

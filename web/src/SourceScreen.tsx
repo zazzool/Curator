@@ -82,6 +82,25 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
     }
   }
 
+  async function setStatus(status: string) {
+    setBusy(true)
+    setFailure('')
+    setNote('')
+    try {
+      const updated = await api.setSourceStatus(id, status)
+      setSource(updated)
+      setNote(
+        updated.status === 'active'
+          ? 'Источник объявлен действующим: врачи увидят его в справочнике приложения.'
+          : 'Источник снят: в приложении его больше нет.',
+      )
+    } catch (error) {
+      setFailure(error instanceof ApiError ? error.message : 'Состояние не записано')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   if (!source) {
     return (
       <div>
@@ -106,6 +125,29 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
 
       {failure && <p className="alarm">{failure}</p>}
       {note && <p className="done">{note}</p>}
+
+      <section className="page-section">
+        <div className="page-head">
+          <h2>Состояние</h2>
+          {canAccept &&
+            (source.status === 'active' ? (
+              <button onClick={() => void setStatus('retired')} disabled={busy}>
+                Снять с раздачи
+              </button>
+            ) : (
+              <button onClick={() => void setStatus('active')} disabled={busy}>
+                Объявить действующим
+              </button>
+            ))}
+        </div>
+        <p className="hint">
+          {source.status === 'active'
+            ? 'Действующий: врачи видят его в справочнике приложения и скачивают на устройство.'
+            : source.status === 'retired'
+              ? 'Снят с раздачи: в приложении его нет. Принятый разбор при этом цел — снятие не стирает ничего.'
+              : 'Черновик: для приложения этого источника не существует. Объявите действующим, когда разбор принят и выверен.'}
+        </p>
+      </section>
 
       <section className="page-section">
         <div className="page-head">
@@ -176,6 +218,11 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
             {units.map((unit) => (
               <li key={unit.label} style={{ paddingLeft: `${unit.depth * 16}px` }}>
                 <span className="label">{unit.label}</span> {unit.title}
+                {/* Род показывается только у раздела: по нему не спрашивают, и
+                    составитель, не видя этого, ищет пропавшие задачи в
+                    генерации, а не в разборе. У записи род — умолчание, и
+                    метка у каждой строки была бы шумом. */}
+                {unit.kind === 'group' && <span className="kind">раздел</span>}
               </li>
             ))}
           </ul>

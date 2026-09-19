@@ -138,12 +138,22 @@ CREATE TABLE IF NOT EXISTS source_units (
     -- есть не совпадал бы.
     ord          INTEGER   NOT NULL DEFAULT 0,
     attrs        JSONB     NOT NULL DEFAULT '{}'
-                           CHECK (attrs <> 'null'::jsonb),
-
-    -- Две единицы под одной меткой — два источника правды об одном
-    -- понятии.
-    UNIQUE (source_id, kind, label)
+                           CHECK (attrs <> 'null'::jsonb)
 );
+
+-- Две единицы под одной меткой — два источника правды об одном понятии.
+-- Род в ключ не входит: с ним «F00» как группа и «F00» как запись
+-- уживались бы в одной таблице, и чтение по метке отдавало бы то одну, то
+-- другую. Ключ и стоял так — (source_id, kind, label), — вопреки этому же
+-- доводу, написанному рядом с ним.
+--
+-- Указателем, а не UNIQUE внутри CREATE TABLE, и это не украшение:
+-- объявление внутри таблицы ставится только на пустой базе, а накат
+-- догоняет колонки, но не ключи. Пара «снять прежний — поставить нынешний»
+-- идемпотентна и отрабатывает и на чистой базе, и на живой.
+ALTER TABLE source_units DROP CONSTRAINT IF EXISTS source_units_source_id_kind_label_key;
+CREATE UNIQUE INDEX IF NOT EXISTS source_units_source_label_key
+    ON source_units (source_id, label);
 CREATE INDEX IF NOT EXISTS idx_source_units_order
     ON source_units (source_id, kind, ord);
 
@@ -301,6 +311,14 @@ CREATE TABLE IF NOT EXISTS source_draft_units (
     label        TEXT      NOT NULL CHECK (label <> ''),
     parent_label TEXT      NOT NULL DEFAULT '',
     title        TEXT      NOT NULL,
+
+    -- Род записи доезжает до приёмки через черновик. Без этой колонки
+    -- приёмка ставила всем 'entry', и групп не бывало вовсе — а без них
+    -- справочник в девятьсот строк остаётся без входа: ровно та поломка,
+    -- ради которой род и заведён.
+    kind         TEXT      NOT NULL DEFAULT 'entry'
+                           CHECK (kind IN ('group', 'entry')),
+
     ord          INTEGER   NOT NULL DEFAULT 0,
     attrs        JSONB     NOT NULL DEFAULT '{}' CHECK (attrs <> 'null'::jsonb),
     UNIQUE (document_id, label)

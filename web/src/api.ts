@@ -25,6 +25,8 @@ export type Unit = {
   title: string
   path: string
   depth: number
+  /** Род единицы: 'group' — вход в навигацию, 'entry' — то, по чему спрашивают. */
+  kind: string
   answerable: boolean
   ord: number
 }
@@ -209,6 +211,11 @@ export const api = {
     request<{ id: number }>('POST', '/admin/api/sources', source),
 
   source: (id: number) => request<Source>('GET', `/admin/api/sources/${id}`),
+
+  // Объявление источника действующим: до него источника для устройства не
+  // существует — ни в списке справочников, ни в раздаче.
+  setSourceStatus: (id: number, status: string) =>
+    request<Source>('PUT', `/admin/api/sources/${id}/status`, { status }),
 
   // Пустой путь означает весь источник: срез по пути — то, ради чего путь
   // вообще считается, и отдельной ручки под «всё» заводить незачем.

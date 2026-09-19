@@ -19,8 +19,26 @@ const SOURCE: Source = {
 }
 
 const UNITS: Unit[] = [
-  { label: '3', parentLabel: '', title: 'Порядок', path: '3', depth: 0, answerable: true, ord: 0 },
-  { label: '3.2', parentLabel: '3', title: 'Сроки', path: '3/3.2', depth: 1, answerable: true, ord: 1 },
+  {
+    label: '3',
+    parentLabel: '',
+    title: 'Порядок',
+    path: '3',
+    depth: 0,
+    kind: 'group',
+    answerable: false,
+    ord: 0,
+  },
+  {
+    label: '3.2',
+    parentLabel: '3',
+    title: 'Сроки',
+    path: '3/3.2',
+    depth: 1,
+    kind: 'entry',
+    answerable: true,
+    ord: 1,
+  },
 ]
 
 function serve(answers: Record<string, unknown>) {
@@ -93,5 +111,45 @@ describe('экран источника', () => {
     await waitFor(() => expect(screen.getByText(/Принятые пункты/)).toBeTruthy())
     expect(screen.queryByText('Принять разбор')).toBeNull()
     expect(screen.getByText(/кому выдано право принимать/)).toBeTruthy()
+  })
+
+  it('черновик говорит, что для приложения его не существует', async () => {
+    // Состояния источника не было вовсе: ставилось умолчание «черновик», а
+    // менять его было нечем — и справочник в приложении оставался пуст у
+    // всех и всегда.
+    render(<SourceScreen me={РЕДАКТОР} id={1} onBack={() => {}} />)
+    await waitFor(() =>
+      expect(screen.getByText(/для приложения этого источника не существует/i)).toBeTruthy(),
+    )
+    expect(screen.getByText('Объявить действующим')).toBeTruthy()
+  })
+
+  it('действующий источник предлагает снять, а не объявить заново', async () => {
+    serve({
+      '/admin/api/sources/1/units': { units: UNITS },
+      '/admin/api/sources/1/jobs': { jobs: [] },
+      '/admin/api/cases': { cases: [] },
+      '/admin/api/sources/1/documents': { documents: [] },
+      '/admin/api/sources/1': { ...SOURCE, status: 'active' },
+    })
+    render(<SourceScreen me={РЕДАКТОР} id={1} onBack={() => {}} />)
+    await waitFor(() => expect(screen.getByText('Снять с раздачи')).toBeTruthy())
+  })
+
+  it('раздел помечен, а запись нет', async () => {
+    // По разделу не спрашивают, и составитель, не видя этого, ищет
+    // пропавшие задачи в генерации, а не в разборе. У записи род —
+    // умолчание, и метка у каждой строки была бы шумом.
+    render(<SourceScreen me={РЕДАКТОР} id={1} onBack={() => {}} />)
+    await screen.findByText('Порядок')
+    expect(screen.getAllByText('раздел')).toHaveLength(1)
+  })
+
+  it('человеку без права приёмки состояние менять нечем', async () => {
+    // Решить, что источник теперь учит врача, — то же решение, что принять
+    // разбор, и право у них одно.
+    render(<SourceScreen me={ЧИТАТЕЛЬ} id={1} onBack={() => {}} />)
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Состояние' })).toBeTruthy())
+    expect(screen.queryByText('Объявить действующим')).toBeNull()
   })
 })
