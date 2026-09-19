@@ -10,7 +10,7 @@
 одной версии расходятся так же молча, как два места для одного числа.
 
 ```bash
-grep -A1 flutter-version .github/workflows/checks.yml
+grep FLUTTER_VERSION .github/workflows/checks.yml
 ```
 
 Без набора Flutter `tools/checks.sh` **отказывает**, а не пропускает
