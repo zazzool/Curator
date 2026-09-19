@@ -92,11 +92,18 @@ func validateSource(src Source) error {
 
 // SaveDocument кладёт документ и возвращает его номер.
 //
-// Один и тот же файл, принесённый дважды, — один документ: иначе разбор
-// пойдёт по обеим копиям и даст две редакции одного источника. Повтор
-// узнаётся по отпечатку и возвращает прежний номер, а не отказ: человек,
-// загрузивший файл второй раз, хотел работать с ним, а не читать
-// сообщение об ошибке.
+// Один и тот же файл, принесённый дважды в один источник, — один
+// документ: иначе разбор пойдёт по обеим копиям и даст две редакции одного
+// источника. Повтор узнаётся по отпечатку и возвращает прежний номер, а не
+// отказ: человек, загрузивший файл второй раз, хотел работать с ним, а не
+// читать сообщение об ошибке.
+//
+// Отпечаток сверяется ВНУТРИ источника. Сверка по всей базе стоила
+// отказа: тот же файл, положенный во второй источник, возвращал документ
+// первого вместе с его источником, и дальше всё шло мимо — куски
+// переписывались у чужого документа, а приёмка разбора принимала его в
+// источник, которого составитель не открывал. Ответ при этом был
+// успешным, и заметить подмену было нечем.
 func (s *Store) SaveDocument(ctx context.Context, doc Document) (int64, error) {
 	if len(doc.Body) == 0 {
 		return 0, errors.New("документ пуст")
@@ -105,7 +112,7 @@ func (s *Store) SaveDocument(ctx context.Context, doc Document) (int64, error) {
 	err := s.gate.QueryRow(ctx,
 		`INSERT INTO source_documents (source_id, filename, mime, byte_size, sha256, body, uploaded_by)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)
-		 ON CONFLICT (sha256) DO UPDATE SET filename = source_documents.filename
+		 ON CONFLICT (COALESCE(source_id, 0), sha256) DO UPDATE SET filename = source_documents.filename
 		 RETURNING id`,
 		nullable(doc.SourceID), doc.Filename, doc.MIME, len(doc.Body), doc.SHA256,
 		doc.Body, doc.UploadedBy).Scan(&id)
@@ -306,7 +313,36 @@ func (s *Store) AcceptDraft(ctx context.Context, sourceID, docID int64, decidedB
 			if cleaned[st.UnitLabel] {
 				continue
 			}
-			_, err := tx.Exec(ctx,
+
+			// Спрашиваем заранее, не ссылается ли на эти положения
+			// разметка уже выпущенных задач.
+			//
+			// База такую уборку и так не даст — на case_chunks стоит
+			// внешний ключ, — но её отказ приезжает составителю кодом
+			// нарушения и именем ограничения. Человек читает его как
+			// поломку студии, хотя случилось ровно то, что должно:
+			// положение, на которое показывает выпущенная задача, не
+			// заменяется молча, иначе разметка у врача повисла бы в
+			// никуда. Спросив сами, мы называем и единицу, и число задач.
+			var linked int
+			err := tx.QueryRow(ctx,
+				`SELECT COUNT(DISTINCT ch.case_id)
+				   FROM case_chunks ch
+				   JOIN source_unit_statements s ON s.id = ch.statement_id
+				  WHERE s.source_id = $1 AND s.unit_label = $2`,
+				sourceID, st.UnitLabel).Scan(&linked)
+			if err != nil {
+				return fmt.Errorf("не проверено, связаны ли положения единицы %q с задачами: %w", st.UnitLabel, err)
+			}
+			if linked > 0 {
+				return fmt.Errorf(
+					"на положения единицы %q ссылается разметка уже выпущенных задач (%d) — "+
+						"замена оборвала бы её, и врач увидел бы задачу без обоснования. "+
+						"Заведите новую редакцию источника: старые задачи останутся при своих положениях",
+					st.UnitLabel, linked)
+			}
+
+			_, err = tx.Exec(ctx,
 				`DELETE FROM source_unit_statements WHERE source_id = $1 AND unit_label = $2`,
 				sourceID, st.UnitLabel)
 			if err != nil {
