@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"curator/server/internal/app"
 	"curator/server/internal/casestore"
 	"curator/server/internal/dbgate"
 	"curator/server/internal/envfile"
@@ -101,6 +102,22 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 		_, _ = w.Write([]byte("жив\n"))
 	})
 
+	// Дверь приложения. За ней стоит не сотрудник, а установленная
+	// сборка, которую никто не обновит по нашей просьбе, — потому она и
+	// отдельная: правила у неё другие, и смешивать их со студией значит
+	// однажды поменять формат ради удобства студии.
+	// Ключи программ нужны обеим дверям: /v1 их сверяет, студия заводит.
+	// Объявлены снаружи обоих блоков и заполняются только при базе —
+	// шлюз, отданный в хранилище пустым, отвечал бы не отказом, а паникой
+	// на первом же обращении.
+	var keys *app.Keys
+	if gate != nil {
+		keys = app.NewKeys(gate)
+		door := app.NewDoor(keys, app.NewAccounts(gate))
+		app.Routes(door, app.NewFeed(gate))
+		mux.Handle("/v1/", door.Handler())
+	}
+
 	// Редакционное API. Без базы его нет вовсе, и это честнее заглушки:
 	// поднятые ручки, отвечающие пустотой, работа примет за правду и
 	// запишет пустоту как результат.
@@ -109,6 +126,7 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 		studio.Routes(desk)
 		source.Routes(desk, source.NewStore(gate))
 		casestore.Routes(desk, casestore.NewStore(gate))
+		app.KeyRoutes(desk, keys)
 		generation(ctx, gate, desk)
 		mux.Handle("/admin/api/", desk.Handler())
 	}
