@@ -168,7 +168,7 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 		casestore.Routes(desk, casestore.NewStore(gate))
 		app.KeyRoutes(desk, keys)
 		packs.Routes(desk, packStore)
-		sales.Routes(desk, sales.NewPayments(gate), prices, access)
+		sales.Routes(desk, sales.NewPayments(gate), prices, access, sales.NewClients(gate))
 
 		rollup := analytics.NewRollup(gate)
 		analytics.Routes(desk, rollup)

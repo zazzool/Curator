@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 
+import { счётом } from './words'
 import { ApiError, api } from './api'
 import type { Case, Me, Pack, PackContents, PackItem } from './api'
 
@@ -453,13 +454,3 @@ function Picker({ chosen, onAdd }: { chosen: string[]; onAdd: (one: Case) => voi
   )
 }
 
-// Множественное число берётся по основе, а не по последней букве слова:
-// «рубрикы» вместо «рубрик» мы уже написали однажды в приложении.
-function счётом(n: number, one: string, few: string, many: string): string {
-  const last = n % 10
-  const tens = n % 100
-  if (tens >= 11 && tens <= 14) return `${n} ${many}`
-  if (last === 1) return `${n} ${one}`
-  if (last >= 2 && last <= 4) return `${n} ${few}`
-  return `${n} ${many}`
-}

@@ -153,6 +153,50 @@ export type PackContents = Omit<Pack, 'cases'> & {
   items: PackItem[]
 }
 
+// Клиент глазами оператора. Одна и та же строка в списке и в карточке:
+// оператор ищет человека и тут же решает, тот ли он, — и решает по тому
+// же, что видел в списке.
+export type Client = {
+  id: number
+  email: string
+  displayName: string
+  createdAt: string
+  /** Пусто — врач ещё ни разу не заходил. */
+  lastSeen: string
+  blocked: boolean
+  devices: number
+  /** Живых прав: отозванное и истёкшее сюда не идут. */
+  rights: number
+}
+
+// Цена. Копейки, а не рубли: рубль с копейками, приехавший дробным
+// числом, теряет копейку на первом же переводе в двоичную дробь.
+export type Price = {
+  purpose: string
+  kopecks: number
+  enabled: boolean
+}
+
+export type Payment = {
+  id: number
+  source: string
+  purpose: string
+  kopecks: number
+  status: string
+  note: string
+  by: string
+  at: string
+}
+
+export type Entitlement = {
+  kind: string
+  pack: string
+  origin: string
+  startsAt: string
+  /** Пусто — бессрочно. */
+  expiresAt: string
+}
+
 export type Me = {
   login: string
   displayName: string
@@ -366,6 +410,49 @@ export const api = {
       'POST',
       `/admin/api/packs/${encodeURIComponent(slug)}/releases`,
     ),
+
+  clients: (q = '', limit = 50) =>
+    request<{ clients: Client[] }>(
+      'GET',
+      `/admin/api/clients?limit=${limit}${q ? `&q=${encodeURIComponent(q)}` : ''}`,
+    ),
+
+  client: (id: number) => request<Client>('GET', `/admin/api/clients/${id}`),
+
+  setClientBlocked: (id: number, blocked: boolean) =>
+    request<{ blocked: boolean }>('PUT', `/admin/api/clients/${id}/blocked`, { blocked }),
+
+  clientPayments: (id: number) =>
+    request<{ payments: Payment[] }>('GET', `/admin/api/clients/${id}/payments`),
+
+  clientRights: (id: number) =>
+    request<{ entitlements: Entitlement[] }>('GET', `/admin/api/clients/${id}/entitlements`),
+
+  prices: () => request<{ prices: Price[] }>('GET', '/admin/api/prices'),
+
+  setPrice: (price: Price) => request<Price>('PUT', '/admin/api/prices', price),
+
+  // Ключ повтора обязателен и придумывается здесь: оператор, нажавший
+  // дважды, не должен принять деньги дважды. Сервер отвечает на повтор
+  // прежним платежом, а не отказом, — и это говорит оператору, что приход
+  // уже оформлен.
+  acceptPayment: (income: {
+    accountId: number
+    purpose: string
+    kopecks: number
+    idemKey: string
+    note: string
+  }) =>
+    request<{
+      id: number
+      purpose: string
+      kopecks: number
+      status: string
+      repeated: boolean
+    }>('POST', '/admin/api/payments', income),
+
+  refundPayment: (id: number, note: string) =>
+    request<{ status: string }>('POST', `/admin/api/payments/${id}/refund`, { note }),
 
   contentVersion: () => request<{ version: number }>('GET', '/admin/api/content-version'),
 

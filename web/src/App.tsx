@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 import { Login } from './Login'
 import { Packs } from './Packs'
+import { Sales } from './Sales'
 import { SourceList } from './SourceList'
 import { SourceScreen } from './SourceScreen'
 import { api, setToken } from './api'
@@ -17,6 +18,7 @@ import type { Me } from './api'
 const SECTIONS = [
   { id: 'sources', title: 'Источники' },
   { id: 'packs', title: 'Наборы' },
+  { id: 'sales', title: 'Продажи' },
 ] as const
 
 type Section = (typeof SECTIONS)[number]['id']
@@ -66,6 +68,8 @@ export function App() {
 
       {section === 'packs' ? (
         <Packs me={me} />
+      ) : section === 'sales' ? (
+        <Sales me={me} />
       ) : openSource === null ? (
         <SourceList me={me} onOpen={setOpenSource} />
       ) : (
