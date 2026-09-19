@@ -525,6 +525,60 @@ func (s *Store) SourceByID(ctx context.Context, id int64) (Source, error) {
 	return src, nil
 }
 
+// SaveDifferentials кладёт пары «путают с», заменяя прежние.
+//
+// Замена, а не добавление: разбор источника переделывают, и пары прошлого
+// разбора рядом с новыми — это два ответа на вопрос «с чем это путают».
+// Подбор неверных вариантов взял бы из них случайный.
+//
+// Текста различий здесь нет намеренно: он лежит положением, которое читает
+// врач, а два места для одного текста расходятся молча. Здесь — связь, и
+// место для неё в схеме ровно одно.
+func (s *Store) SaveDifferentials(ctx context.Context, sourceID int64, list []Differential) error {
+	return s.gate.InTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM source_unit_differentials WHERE source_id = $1`, sourceID); err != nil {
+			return fmt.Errorf("прежние пары не убраны: %w", err)
+		}
+		for _, one := range list {
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO source_unit_differentials
+				     (source_id, unit_label, counterpart, features_md, ord)
+				 VALUES ($1, $2, $3, '', $4)`,
+				sourceID, one.UnitLabel, one.Counterpart, one.Ord); err != nil {
+				return fmt.Errorf("пара %q ↔ %q не записана: %w",
+					one.UnitLabel, one.Counterpart, err)
+			}
+		}
+		return nil
+	})
+}
+
+// Differentials — пары «путают с» источника.
+func (s *Store) Differentials(ctx context.Context, sourceID int64) ([]Differential, error) {
+	rows, err := s.gate.Query(ctx,
+		`SELECT unit_label, counterpart, ord
+		   FROM source_unit_differentials
+		  WHERE source_id = $1
+		  ORDER BY ord, unit_label`, sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("пары не прочитаны: %w", err)
+	}
+	defer rows.Close()
+
+	// Пустой список — это [], а не nil: у источника без такой разметки
+	// пар просто нет, и это исправный случай.
+	out := []Differential{}
+	for rows.Next() {
+		var one Differential
+		if err := rows.Scan(&one.UnitLabel, &one.Counterpart, &one.Ord); err != nil {
+			return nil, err
+		}
+		out = append(out, one)
+	}
+	return out, rows.Err()
+}
+
 // SourceBySlug находит источник по краткому имени.
 //
 // Нужен ввозу: он зовётся человеком по имени источника, а не по номеру, и

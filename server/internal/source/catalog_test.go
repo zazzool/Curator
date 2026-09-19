@@ -13,7 +13,8 @@ const catalogSample = `{
   "diagnoses": [
     {"code": "F32.1", "title": "Умеренный эпизод", "detail": null, "group_code": "F30-F39"},
     {"code": "F32", "title": "Депрессивный эпизод", "detail": null, "group_code": "F30-F39"},
-    {"code": "F3", "title": "Расстройства настроения (обобщённо)", "detail": null, "group_code": "F30-F39"}
+    {"code": "F3", "title": "Расстройства настроения (обобщённо)", "detail": null, "group_code": "F30-F39"},
+    {"code": "F41.2", "title": "Смешанное тревожное расстройство", "detail": null, "group_code": "F30-F39"}
   ],
   "criteria": [
     {"code": "F32", "criteria_type": "cddg", "content_md": "Сниженное настроение…",
@@ -27,25 +28,26 @@ const catalogSample = `{
   ]
 }`
 
-func parsed(t *testing.T, raw string) ([]Unit, []Statement, CatalogReport) {
+func parsed(t *testing.T, raw string) Catalog {
 	t.Helper()
-	units, statements, report, err := ParseCatalog([]byte(raw))
+	catalog, err := ParseCatalog([]byte(raw))
 	if err != nil {
 		t.Fatalf("разбор отказал: %v", err)
 	}
-	return units, statements, report
+	return catalog
 }
 
 func TestКаталогРазложенНаРодыИСчитан(t *testing.T) {
-	units, statements, report := parsed(t, catalogSample)
+	catalog := parsed(t, catalogSample)
+	units, statements, report := catalog.Units, catalog.Statements, catalog.Report
 
-	if report.Groups != 1 || report.Entries != 3 {
-		t.Errorf("разделов %d, записей %d; ожидалось 1 и 3", report.Groups, report.Entries)
+	if report.Groups != 1 || report.Entries != 4 {
+		t.Errorf("разделов %d, записей %d; ожидалось 1 и 4", report.Groups, report.Entries)
 	}
 	if report.Criteria != 2 || report.Different != 1 {
 		t.Errorf("критериев %d, отличий %d; ожидалось 2 и 1", report.Criteria, report.Different)
 	}
-	if len(units) != 4 || len(statements) != 3 {
+	if len(units) != 5 || len(statements) != 3 {
 		t.Fatalf("единиц %d, положений %d", len(units), len(statements))
 	}
 	if len(report.Dropped) != 0 {
@@ -65,7 +67,7 @@ func TestРодительБерётсяСамойДлиннойМеткой(t *t
 	// Главное правило разбора. Возьми первую подошедшую, и «F32.1» встало
 	// бы под «F3» — на уровень выше своего места, — а в срезе по «F32»
 	// его бы не было вовсе. Заметить это можно только открыв F32.
-	units, _, _ := parsed(t, catalogSample)
+	units := parsed(t, catalogSample).Units
 	byLabel := map[string]Unit{}
 	for _, u := range units {
 		byLabel[u.Label] = u
@@ -87,7 +89,7 @@ func TestРазобранныйКаталогСобираетсяВПути(t *t
 	// Разбор и построение путей — соседние шаги, и первый обязан отдавать
 	// то, что второй примет: оборванная цепочка родителей роняет приёмку
 	// целиком, и узнать об этом на разборе дешевле, чем на приёмке.
-	units, _, _ := parsed(t, catalogSample)
+	units := parsed(t, catalogSample).Units
 	withPaths, err := BuildPaths(units)
 	if err != nil {
 		t.Fatalf("пути не посчитались: %v", err)
@@ -103,7 +105,7 @@ func TestСловоРодаПереводитсяВРазборе(t *testing.T) 
 	// «cddg» на экране сказало бы врачу, что приложение не знает, что
 	// показывает. Перевод стоит здесь, а не в приложении: приложение
 	// показывает слово источника, каким бы источник ни был.
-	_, statements, _ := parsed(t, catalogSample)
+	statements := parsed(t, catalogSample).Statements
 	kinds := map[string]bool{}
 	for _, s := range statements {
 		kinds[s.Kind] = true
@@ -119,7 +121,7 @@ func TestСловоРодаПереводитсяВРазборе(t *testing.T) 
 }
 
 func TestОтличиеНесётСЧемПутают(t *testing.T) {
-	_, statements, _ := parsed(t, catalogSample)
+	statements := parsed(t, catalogSample).Statements
 	for _, s := range statements {
 		if s.Kind != catalogDifferential {
 			continue
@@ -136,7 +138,7 @@ func TestПоложенияОдногоКодаНеДелятОдинНомер(
 	// Порядок положений внутри рубрики задаётся номером, и два положения
 	// с нулём показались бы в порядке, зависящем от базы, — то есть в
 	// разном при каждом чтении.
-	_, statements, _ := parsed(t, catalogSample)
+	statements := parsed(t, catalogSample).Statements
 	seen := map[string]map[int]bool{}
 	for _, s := range statements {
 		if seen[s.UnitLabel] == nil {
@@ -152,7 +154,7 @@ func TestПоложенияОдногоКодаНеДелятОдинНомер(
 func TestЧужаяВерсияКаталогаОтбрасываетсяЦеликом(t *testing.T) {
 	// Наполовину понятый каталог кладёт наполовину верный справочник, и
 	// заметить это можно только открыв нужную рубрику.
-	_, _, _, err := ParseCatalog([]byte(`{"schemaVersion": 2, "groups": []}`))
+	_, err := ParseCatalog([]byte(`{"schemaVersion": 2, "groups": []}`))
 	if err == nil {
 		t.Fatal("каталог чужой версии разобран")
 	}
@@ -164,12 +166,13 @@ func TestЧужаяВерсияКаталогаОтбрасываетсяЦел�
 func TestСиротаСчитаетсяИНазывается(t *testing.T) {
 	// Молча выброшенный критерий выглядит как «столько в выгрузке и
 	// было», и объяснить это потом нечем.
-	_, statements, report := parsed(t, `{
+	catalog := parsed(t, `{
 	  "schemaVersion": 1,
 	  "groups": [], "diagnoses": [],
 	  "criteria": [{"code": "F99", "criteria_type": "cddg", "content_md": "Текст", "source_citation": ""}],
 	  "differential": []
 	}`)
+	statements, report := catalog.Statements, catalog.Report
 	if len(statements) != 0 {
 		t.Error("критерий без своей рубрики всё-таки лёг")
 	}
@@ -178,5 +181,44 @@ func TestСиротаСчитаетсяИНазывается(t *testing.T) {
 	}
 	if _, named := report.Dropped["F99"]; !named {
 		t.Errorf("отброшенное не названо: %v", report.Dropped)
+	}
+}
+
+func TestПараПутаютСДоезжаетДоПодбора(t *testing.T) {
+	// Подбор неверных вариантов опирается на пары: без них он берёт
+	// соседей по родителю, то есть случайных. Текста различий в паре нет
+	// намеренно — он лежит положением, которое читает врач.
+	catalog := parsed(t, catalogSample)
+	if len(catalog.Differentials) != 1 {
+		t.Fatalf("пар %d, ожидалась одна: %v", len(catalog.Differentials), catalog.Differentials)
+	}
+	pair := catalog.Differentials[0]
+	if pair.UnitLabel != "F32" || pair.Counterpart != "F41.2" {
+		t.Errorf("пара %q ↔ %q", pair.UnitLabel, pair.Counterpart)
+	}
+}
+
+func TestПараВПустотуНеПишетсяИНазывается(t *testing.T) {
+	// Пара, ссылающаяся на метку, которой нет, увела бы подбор на
+	// несуществующую единицу, и заметить это можно было бы только по
+	// странным вариантам в готовой задаче.
+	catalog := parsed(t, `{
+	  "schemaVersion": 1,
+	  "groups": [],
+	  "diagnoses": [{"code": "F32", "title": "Эпизод", "detail": null, "group_code": ""}],
+	  "criteria": [],
+	  "differential": [{"code": "F32", "differential_with": "F99.9",
+	                    "distinguishing_features_md": "Текст"}]
+	}`)
+	if len(catalog.Differentials) != 0 {
+		t.Error("пара в пустоту всё-таки записана")
+	}
+	// Само положение при этом остаётся: врач читает различия и тогда,
+	// когда второй рубрики в этом каталоге нет.
+	if len(catalog.Statements) != 1 {
+		t.Errorf("положений %d, ожидалось одно", len(catalog.Statements))
+	}
+	if _, named := catalog.Report.Dropped["F32 ↔ F99.9"]; !named {
+		t.Errorf("отброшенная пара не названа: %v", catalog.Report.Dropped)
 	}
 }

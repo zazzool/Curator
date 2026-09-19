@@ -84,6 +84,27 @@ type CatalogReport struct {
 	Dropped map[string]string
 }
 
+// Differential — пара «путают с» и текст различий.
+//
+// Отдельно от положения, хотя текст у них общего происхождения, и это не
+// задвоение: положение — то, что ЧИТАЕТ врач, а пара — типизированная
+// связь, по которой генерация подбирает неверные варианты. Текст лежит в
+// положении, здесь — только связь: два места для одного текста расходятся
+// молча, а место для связи в схеме ровно одно.
+type Differential struct {
+	UnitLabel   string
+	Counterpart string
+	Ord         int
+}
+
+// Catalog — что получилось из выгрузки.
+type Catalog struct {
+	Units         []Unit
+	Statements    []Statement
+	Differentials []Differential
+	Report        CatalogReport
+}
+
 // ParseCatalog разбирает выгрузку каталога в единицы и положения.
 //
 // Родитель записи ищется по САМОЙ ДЛИННОЙ чужой метке, которая является
@@ -91,13 +112,13 @@ type CatalogReport struct {
 // метки выгрузки и одинаково работает для «F32.1» внутри «F32» и для
 // пункта «3.2.1» внутри «3.2». Не нашлось ничего — родителем становится
 // раздел, названный самой выгрузкой.
-func ParseCatalog(raw []byte) ([]Unit, []Statement, CatalogReport, error) {
+func ParseCatalog(raw []byte) (Catalog, error) {
 	var file catalogFile
 	if err := json.Unmarshal(raw, &file); err != nil {
-		return nil, nil, CatalogReport{}, fmt.Errorf("каталог не разобран: %w", err)
+		return Catalog{}, fmt.Errorf("каталог не разобран: %w", err)
 	}
 	if file.SchemaVersion != CatalogSchema {
-		return nil, nil, CatalogReport{}, fmt.Errorf(
+		return Catalog{}, fmt.Errorf(
 			"каталог версии %d, а разбор понимает %d: чужая версия не применяется целиком",
 			file.SchemaVersion, CatalogSchema)
 	}
@@ -198,6 +219,7 @@ func ParseCatalog(raw []byte) ([]Unit, []Statement, CatalogReport, error) {
 		report.Criteria++
 	}
 
+	differentials := make([]Differential, 0, len(file.Differential))
 	for i, d := range file.Differential {
 		code := strings.TrimSpace(d.Code)
 		body := strings.TrimSpace(d.Features)
@@ -220,11 +242,29 @@ func ParseCatalog(raw []byte) ([]Unit, []Statement, CatalogReport, error) {
 			Body:        body,
 			Ord:         ord[code],
 		})
+		// Связь пишется только тогда, когда обе стороны — единицы этого
+		// же каталога. Пара, ссылающаяся в пустоту, увела бы подбор
+		// неверных вариантов на метку, которой нет, и заметить это можно
+		// было бы только по странным вариантам в готовой задаче.
+		if with != "" && known[with] {
+			differentials = append(differentials, Differential{
+				UnitLabel:   code,
+				Counterpart: with,
+				Ord:         i,
+			})
+		} else if with != "" {
+			report.Dropped[code+" ↔ "+with] = "пара ссылается на метку, которой нет в каталоге"
+		}
 		ord[code]++
 		report.Different++
 	}
 
-	return units, statements, report, nil
+	return Catalog{
+		Units:         units,
+		Statements:    statements,
+		Differentials: differentials,
+		Report:        report,
+	}, nil
 }
 
 // catalogParent ищет родителя записи среди чужих меток.

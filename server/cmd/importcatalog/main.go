@@ -78,18 +78,18 @@ func main() {
 
 	// Разбор идёт до всякого соединения: ругаться на чужую версию схемы
 	// после минуты ожидания базы значит потратить эту минуту зря.
-	units, statements, report, err := source.ParseCatalog(raw)
+	catalog, err := source.ParseCatalog(raw)
 	if err != nil {
 		log.Fatalf("%v", err)
 	}
 	// Пути считаются здесь же, хотя их посчитает и приёмка: оборванная
 	// цепочка родителей роняет приёмку целиком, и узнать об этом до
 	// записи дешевле, чем после.
-	if _, err := source.BuildPaths(units); err != nil {
+	if _, err := source.BuildPaths(catalog.Units); err != nil {
 		log.Fatalf("дерево не сходится: %v", err)
 	}
 
-	show(report, len(units), len(statements))
+	show(catalog)
 
 	if !*apply {
 		log.Println("\nпоказ: в базу ничего не записано (для записи нужен -apply)")
@@ -152,7 +152,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("%v", err)
 	}
-	if err := store.SaveDraft(ctx, docID, units, statements); err != nil {
+	if err := store.SaveDraft(ctx, docID, catalog.Units, catalog.Statements); err != nil {
 		log.Fatalf("черновик разбора не сохранён: %v", err)
 	}
 	// Приёмка, а не запись напрямую: второго пути от разбора к источнику
@@ -162,7 +162,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("приёмка отказала: %v", err)
 	}
-	fmt.Printf("\nисточник %s (номер %d), принято единиц: %d\n", *slug, sourceID, taken)
+	// Пары пишутся после приёмки: они ссылаются на метки единиц, и до
+	// приёмки ссылаться им не на что.
+	if err := store.SaveDifferentials(ctx, sourceID, catalog.Differentials); err != nil {
+		log.Fatalf("%v", err)
+	}
+	fmt.Printf("\nисточник %s (номер %d), принято единиц: %d, пар «путают с»: %d\n",
+		*slug, sourceID, taken, len(catalog.Differentials))
 
 	if *activate {
 		if err := store.SetStatus(ctx, sourceID, source.StatusActive); err != nil {
@@ -177,13 +183,16 @@ func main() {
 // Отброшенное называется поимённо и с причиной. Число без причин не
 // говорит ничего: по причинам видно, чего не хватает выгрузке, а по числу
 // — только что «часть не доехала».
-func show(report source.CatalogReport, units, statements int) {
+func show(catalog source.Catalog) {
+	report := catalog.Report
 	fmt.Printf("разобрано:\n")
 	fmt.Printf("  разделов:    %d\n", report.Groups)
 	fmt.Printf("  записей:     %d\n", report.Entries)
 	fmt.Printf("  критериев:   %d\n", report.Criteria)
 	fmt.Printf("  отличий:     %d\n", report.Different)
-	fmt.Printf("  всего единиц %d, положений %d\n", units, statements)
+	fmt.Printf("  пар «путают с»: %d\n", len(catalog.Differentials))
+	fmt.Printf("  всего единиц %d, положений %d\n",
+		len(catalog.Units), len(catalog.Statements))
 
 	if len(report.Dropped) == 0 {
 		return

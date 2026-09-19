@@ -614,3 +614,50 @@ func TestPgПовторнаяПриёмкаМеняетРод(t *testing.T) {
 			units[0].Kind, units[0].Answerable)
 	}
 }
+
+func TestPgПарыПутаютСЗамещаютсяЦеликом(t *testing.T) {
+	// Разбор источника переделывают, и пары прошлого разбора рядом с
+	// новыми — это два ответа на вопрос «с чем это путают». Подбор
+	// неверных вариантов взял бы из них случайный.
+	ctx := context.Background()
+	s := NewStore(testGate(t))
+	srcID := newSource(t, s)
+
+	if err := s.SaveDifferentials(ctx, srcID, []Differential{
+		{UnitLabel: "F32", Counterpart: "F41.2", Ord: 0},
+		{UnitLabel: "F32", Counterpart: "F33", Ord: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveDifferentials(ctx, srcID, []Differential{
+		{UnitLabel: "F32", Counterpart: "F41.2", Ord: 0},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.Differentials(ctx, srcID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Counterpart != "F41.2" {
+		t.Fatalf("после второго разбора пар %d: %v", len(got), got)
+	}
+}
+
+func TestPgПустыхПарЭтоПустойСписок(t *testing.T) {
+	// У источника без такой разметки пар просто нет, и это исправный
+	// случай: пустое значение вместо списка роняет читающего белым
+	// экраном именно на хороших источниках.
+	ctx := context.Background()
+	s := NewStore(testGate(t))
+	got, err := s.Differentials(ctx, newSource(t, s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Error("пустой список отдан пустым значением")
+	}
+	if len(got) != 0 {
+		t.Errorf("у нового источника %d пар", len(got))
+	}
+}
