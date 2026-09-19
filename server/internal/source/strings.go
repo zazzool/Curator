@@ -1,10 +1,6 @@
 package source
 
-import (
-	"strings"
-	"unicode"
-	"unicode/utf8"
-)
+import "strings"
 
 // Мелкие обёртки над strings, чтобы разбор читался в одном стиле. Отдельным
 // файлом, а не в каждом месте: одно имя одного действия.
@@ -21,17 +17,4 @@ func repeat(s string, n int) string { return strings.Repeat(s, n) }
 func escapeLike(s string) string {
 	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 	return r.Replace(s)
-}
-
-// capitalize поднимает первую букву.
-//
-// Отказы собираются из кусков («источник %q не заведён: …»), и наружу
-// уезжает готовая фраза. С маленькой буквы она читается как обрывок
-// журнала, а человеку показывают предложение.
-func capitalize(s string) string {
-	if s == "" {
-		return s
-	}
-	r, size := utf8.DecodeRuneInString(s)
-	return string(unicode.ToUpper(r)) + s[size:]
 }

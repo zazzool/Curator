@@ -4,8 +4,6 @@ import (
 	"net/http"
 	"strconv"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"curator/server/internal/studio"
 )
@@ -65,7 +63,7 @@ func (r *routes) place(w http.ResponseWriter, req *http.Request, _ studio.User) 
 		// Текст отказа уезжает как есть: он написан словарём источника и
 		// говорит, что не так. «Проверьте поля» отправило бы составителя
 		// перебирать их вслепую.
-		studio.WriteError(w, http.StatusBadRequest, capitalize(err.Error()))
+		studio.WriteError(w, http.StatusBadRequest, studio.Sentence(err.Error()))
 		return
 	}
 	job, err := r.jobs.Place(req.Context(), order, plan)
@@ -118,7 +116,7 @@ func (r *routes) cancel(w http.ResponseWriter, req *http.Request, _ studio.User)
 		return
 	}
 	if err := r.jobs.Cancel(req.Context(), id); err != nil {
-		studio.WriteError(w, http.StatusBadRequest, capitalize(err.Error()))
+		studio.WriteError(w, http.StatusBadRequest, studio.Sentence(err.Error()))
 		return
 	}
 	studio.WriteJSON(w, http.StatusOK, map[string]any{"status": "cancelled"})
@@ -163,7 +161,7 @@ func (r *routes) savePrompt(w http.ResponseWriter, req *http.Request, user studi
 		SystemMd: body.SystemMd, UserMd: body.UserMd, Revision: body.Revision,
 	}, user.Login)
 	if err != nil {
-		studio.WriteError(w, http.StatusConflict, capitalize(err.Error()))
+		studio.WriteError(w, http.StatusConflict, studio.Sentence(err.Error()))
 		return
 	}
 	studio.WriteJSON(w, http.StatusOK, map[string]any{
@@ -210,17 +208,4 @@ func pathID(w http.ResponseWriter, req *http.Request) (int64, bool) {
 		return 0, false
 	}
 	return id, true
-}
-
-// capitalize поднимает первую букву.
-//
-// Отказы собираются из кусков («единицы %q в источнике нет: …»), и наружу
-// уезжает готовая фраза. С маленькой буквы она читается как обрывок
-// журнала, а человеку показывают предложение.
-func capitalize(s string) string {
-	if s == "" {
-		return s
-	}
-	r, size := utf8.DecodeRuneInString(s)
-	return string(unicode.ToUpper(r)) + s[size:]
 }

@@ -81,6 +81,38 @@ export type Draft = {
   difficulty: number
 }
 
+// Опубликованная задача: то, что доезжает до обучающегося. Поля названы
+// ровно так, как их отдаёт сервер: переименование по дороге — это второе
+// имя одного поля, и расходятся такие пары молча.
+export type Case = {
+  id: string
+  sourceId: number
+  unitLabel: string
+  unitPath: string
+  status: string
+  statusWord: string
+  revision: number
+  origin: string
+  body: CaseBody
+  createdAt: string
+  updatedAt: string
+  publishedAt?: string
+}
+
+export type CaseBody = {
+  title: string
+  kind: string
+  segments: { text: string; statements?: string[] }[]
+  options: { label?: string; text: string }[]
+  answer: string
+  explanationMd: string
+  difficulty: number
+}
+
+// Замечание, мешающее раздавать задачу. Сервер называет все разом, а не
+// первое: правка идёт в один заход.
+export type Fault = { where: string; what: string }
+
 export type Prompt = {
   id: string
   name: string
@@ -105,9 +137,17 @@ export type Me = {
 export class ApiError extends Error {
   readonly status: number
 
-  constructor(status: number, message: string) {
+  // Замечания, если сервер прислал их списком. Публикация задачи
+  // отказывает именно так: составитель правит её в один заход, и отказ,
+  // называющий одну беду из четырёх, заставляет ходить по кругу четырежды.
+  // Потеряй мы список по дороге — и от него осталась бы одна первая
+  // строка, то есть ровно то, от чего он заведён.
+  readonly faults: Fault[]
+
+  constructor(status: number, message: string, faults: Fault[] = []) {
     super(message)
     this.status = status
+    this.faults = faults
   }
 }
 
@@ -145,8 +185,12 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     }
   }
   if (!response.ok) {
-    const message = (parsed as { error?: string } | null)?.error
-    throw new ApiError(response.status, message ?? 'Сервер отказал без объяснения')
+    const failure = parsed as { error?: string; faults?: Fault[] } | null
+    throw new ApiError(
+      response.status,
+      failure?.error ?? 'Сервер отказал без объяснения',
+      failure?.faults ?? [],
+    )
   }
   return parsed as T
 }
@@ -227,6 +271,30 @@ export const api = {
       userMd: prompt.userMd,
       revision: prompt.revision,
     }),
+
+  cases: (query: { source?: number; path?: string; status?: string; limit?: number } = {}) => {
+    const params = new URLSearchParams()
+    if (query.source) params.set('source', String(query.source))
+    if (query.path) params.set('path', query.path)
+    if (query.status) params.set('status', query.status)
+    if (query.limit) params.set('limit', String(query.limit))
+    const tail = params.toString()
+    return request<{ cases: Case[] }>('GET', `/admin/api/cases${tail ? `?${tail}` : ''}`)
+  },
+
+  case: (id: string) => request<Case>('GET', `/admin/api/cases/${id}`),
+
+  caseFromDraft: (draftId: number) =>
+    request<Case>('POST', '/admin/api/cases', { draftId }),
+
+  saveCase: (id: string, body: CaseBody, revision: number) =>
+    request<Case>('PUT', `/admin/api/cases/${id}`, { body, revision }),
+
+  publishCase: (id: string) => request<Case>('POST', `/admin/api/cases/${id}/publish`),
+
+  withdrawCase: (id: string) => request<Case>('POST', `/admin/api/cases/${id}/withdraw`),
+
+  contentVersion: () => request<{ version: number }>('GET', '/admin/api/content-version'),
 
   accept: (documentId: number) =>
     request<{ sourceId: number; accepted: number }>(

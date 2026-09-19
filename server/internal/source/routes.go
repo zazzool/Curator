@@ -172,7 +172,7 @@ func (r *routes) createSource(w http.ResponseWriter, req *http.Request, _ studio
 		// Текст отказа уезжает человеку как есть: он написан по-русски и
 		// говорит, чего не хватает, — а «проверьте поля» отправляет
 		// перебирать их вслепую.
-		studio.WriteError(w, http.StatusBadRequest, capitalize(err.Error()))
+		studio.WriteError(w, http.StatusBadRequest, studio.Sentence(err.Error()))
 		return
 	}
 	studio.WriteJSON(w, http.StatusCreated, map[string]any{"id": id})
@@ -255,7 +255,7 @@ func (r *routes) uploadDocument(w http.ResponseWriter, req *http.Request, user s
 	}
 	filename, body, err := readUpload(req)
 	if err != nil {
-		studio.WriteError(w, http.StatusBadRequest, capitalize(err.Error()))
+		studio.WriteError(w, http.StatusBadRequest, studio.Sentence(err.Error()))
 		return
 	}
 	prepared, err := Prepare(Upload{Filename: filename, Body: body})
@@ -266,7 +266,7 @@ func (r *routes) uploadDocument(w http.ResponseWriter, req *http.Request, user s
 			// иначе: это не ошибка ввода, а объявленная граница проекта.
 			status = http.StatusUnsupportedMediaType
 		}
-		studio.WriteError(w, status, capitalize(err.Error()))
+		studio.WriteError(w, status, studio.Sentence(err.Error()))
 		return
 	}
 
@@ -375,7 +375,7 @@ func (r *routes) putDraft(w http.ResponseWriter, req *http.Request, _ studio.Use
 		})
 	}
 	if err := r.store.SaveDraft(req.Context(), id, units, statements); err != nil {
-		studio.WriteError(w, http.StatusBadRequest, capitalize(err.Error()))
+		studio.WriteError(w, http.StatusBadRequest, studio.Sentence(err.Error()))
 		return
 	}
 	studio.WriteJSON(w, http.StatusOK, map[string]any{
@@ -407,7 +407,7 @@ func (r *routes) acceptDraft(w http.ResponseWriter, req *http.Request, user stud
 		// Отказ целиком: источник с половиной принятой ветки хуже
 		// непринятого — у части единиц путь есть, у части нет, и срез
 		// отдаёт то одно, то другое.
-		studio.WriteError(w, http.StatusBadRequest, capitalize(err.Error()))
+		studio.WriteError(w, http.StatusBadRequest, studio.Sentence(err.Error()))
 		return
 	}
 	studio.WriteJSON(w, http.StatusOK, map[string]any{
