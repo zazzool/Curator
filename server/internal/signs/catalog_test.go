@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 
 	"curator/server/internal/progress"
@@ -173,5 +174,42 @@ func TestСобирательныйЗнакНеЗаслуживаетсяВел�
 	s := Sign{Slug: "order", Kind: KindCollective, Requires: []string{"a"}}
 	if s.Earned(map[progress.MetricKey]int64{progress.CasesSolved: 1000000}) {
 		t.Error("собирательный знак заслужился величиной")
+	}
+}
+
+func TestКаталогЗнаковСходитсяСИсходникомПриложения(t *testing.T) {
+	// Сверка построчная, а не через эталон: эталон держит смысл, эта
+	// проверка — то, что приложение действительно нарисует. Каталог, у
+	// которого эталон правили вместе с одной из сторон, поймает только
+	// она.
+	//
+	// Сверяются метка, название и вид. Тираж, порог и опыт живут в
+	// эталоне и сверены с ним обеими сторонами; здесь важно другое —
+	// чтобы у знака, который выдаёт сервер, на устройстве нашлось имя.
+	path := filepath.Join("..", "..", "..", "app", "lib", "signs", "catalog.dart")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("исходник приложения %s не прочитан: %v. "+
+			"Это отказ, а не пропуск: каталог, зеркальный только на словах, "+
+			"расходится молча", path, err)
+	}
+
+	pattern := regexp.MustCompile(
+		`Sign\(\s*slug:\s*'([^']+)',\s*title:\s*'([^']+)',\s*kind:\s*SignKind\.(\w+)`)
+	found := pattern.FindAllStringSubmatch(string(raw), -1)
+	if len(found) == 0 {
+		t.Fatalf("в %s не нашлось ни одного знака по образцу: либо каталог "+
+			"переехал, либо его переписали иначе — и сверять стало нечего", path)
+	}
+
+	want := Catalog()
+	if len(found) != len(want) {
+		t.Fatalf("в каталоге приложения %d знаков, в серверном %d", len(found), len(want))
+	}
+	for i, one := range found {
+		if one[1] != want[i].Slug || one[2] != want[i].Title || one[3] != string(want[i].Kind) {
+			t.Errorf("знак %d в приложении %q/%q/%q, на сервере %q/%q/%q",
+				i, one[1], one[2], one[3], want[i].Slug, want[i].Title, want[i].Kind)
+		}
 	}
 }
