@@ -12,6 +12,7 @@ import (
 
 	"curator/server/internal/dbgate"
 	"curator/server/internal/packs"
+	"curator/server/internal/sales"
 )
 
 // витрина поднимает /v1 с ручками наборов и заведённым ключом подписи.
@@ -34,7 +35,7 @@ func витрина(t *testing.T) (*httptest.Server, *dbgate.Gate, string, *pack
 
 	door := NewDoor(keys, NewAccounts(gate))
 	door.Keyed("POST /v1/devices", (&routes{accounts: NewAccounts(gate)}).enroll)
-	PackRoutes(door, store)
+	PackRoutes(door, store, sales.NewAccess(gate), sales.NewPrices(gate))
 
 	srv := httptest.NewServer(door.Handler())
 	t.Cleanup(srv.Close)
@@ -152,4 +153,110 @@ func TestPgНесуществующийНаборНеРассказываетО�
 	if text, _ := body["error"].(string); text == "" {
 		t.Error("отказ приехал без внятного текста")
 	}
+}
+
+func TestPgПлатныйНаборНеОтдаётСодержаниеБезПрава(t *testing.T) {
+	// Здесь сходятся две половины, написанные порознь: продажи знают про
+	// право, витрина — про набор. Проверка живёт в витрине, а не в
+	// продажах, потому что ошибиться можно ровно на стыке — отдать
+	// содержание тому, кто его не купил, и узнать об этом по выручке.
+	contract := loadContract(t)
+	srv, gate, key, store, _ := витрина(t)
+	token := устройство(t, srv, key)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+	ctx := context.Background()
+
+	slug := fmt.Sprintf("nabor-%d", time.Now().UnixNano())
+	if err := store.Create(ctx, slug, "Платный набор", "Описание"); err != nil {
+		t.Fatal(err)
+	}
+	caseID, _ := задача(t, gate)
+	if _, err := store.SetItems(ctx, slug, []string{caseID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Publish(ctx, slug, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := sales.NewPrices(gate).Set(ctx, "pack:"+slug, 49900, true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Витрина показывает цену и говорит, что набор ещё не куплен. Без
+	// этих двух полей врач выясняет цену покупкой.
+	_, shelf, raw := call(t, srv, "GET", "/v1/packs", auth, nil)
+	one := наборВВитрине(t, shelf, slug, raw)
+	matchShape(t, "GET /v1/packs[]", one, contract.Responses["GET /v1/packs"].Each["packs"])
+	if kopecks, _ := one["kopecks"].(float64); int64(kopecks) != 49900 {
+		t.Errorf("на витрине цена %v, ожидались 49900 копеек: %s", one["kopecks"], raw)
+	}
+	if owned, _ := one["owned"].(bool); owned {
+		t.Errorf("набор показан купленным до покупки: %s", raw)
+	}
+
+	status, body, raw := call(t, srv, "GET", "/v1/packs/"+slug+"/cases", auth, nil)
+	if status != http.StatusPaymentRequired {
+		t.Fatalf("закрытый набор отдался с кодом %d: %s", status, raw)
+	}
+	if text, _ := body["error"].(string); text == "" {
+		t.Error("отказ по оплате приехал без внятного текста")
+	}
+
+	// Опись при этом открыта: по номерам и отпечаткам не позанимаешься, а
+	// витрина без неё не покажет, что внутри.
+	if status, _, raw := call(t, srv, "GET", "/v1/packs/"+slug, auth, nil); status != http.StatusOK {
+		t.Fatalf("опись закрылась вместе с содержанием, код %d: %s", status, raw)
+	}
+
+	if _, err := sales.NewPayments(gate).Accept(ctx, sales.Income{
+		AccountID: запись(t, gate, token),
+		Purpose:   "pack:" + slug,
+		Kopecks:   49900,
+		IdemKey:   fmt.Sprintf("проверка-%d", time.Now().UnixNano()),
+		By:        "проверка",
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	status, bodies, raw := call(t, srv, "GET", "/v1/packs/"+slug+"/cases?limit=10", auth, nil)
+	if status != http.StatusOK {
+		t.Fatalf("купленный набор не отдался, код %d: %s", status, raw)
+	}
+	if list, _ := bodies["cases"].([]any); len(list) != 1 {
+		t.Fatalf("скачалось %d задач вместо одной: %s", len(list), raw)
+	}
+
+	_, shelf, raw = call(t, srv, "GET", "/v1/packs", auth, nil)
+	if owned, _ := наборВВитрине(t, shelf, slug, raw)["owned"].(bool); !owned {
+		t.Errorf("после покупки витрина не показала набор купленным: %s", raw)
+	}
+}
+
+// наборВВитрине достаёт из ответа витрины нужный набор.
+//
+// Именно нужный, а не первый: база одна на весь прогон, наборы в ней
+// копятся от чужих проверок, и «первый в списке» перестал бы быть своим
+// на второй проверке.
+func наборВВитрине(t *testing.T, shelf map[string]any, slug, raw string) map[string]any {
+	t.Helper()
+	list, _ := shelf["packs"].([]any)
+	for _, item := range list {
+		one, _ := item.(map[string]any)
+		if got, _ := one["slug"].(string); got == slug {
+			return one
+		}
+	}
+	t.Fatalf("набора %s на витрине нет: %s", slug, raw)
+	return nil
+}
+
+// запись отдаёт номер учётной записи по выданному токену.
+func запись(t *testing.T, gate *dbgate.Gate, token string) int64 {
+	t.Helper()
+	var id int64
+	if err := gate.QueryRow(context.Background(),
+		`SELECT account_id FROM devices WHERE token_hash = $1`,
+		fingerprint(token)).Scan(&id); err != nil {
+		t.Fatalf("учётная запись устройства не найдена: %v", err)
+	}
+	return id
 }
