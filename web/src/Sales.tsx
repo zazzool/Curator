@@ -241,11 +241,15 @@ function ClientSearch({ onOpen }: { onOpen: (id: number) => void }) {
             {clients.map((one) => (
               <button key={one.id} className="list-row" onClick={() => onOpen(one.id)}>
                 <span>
-                  {one.displayName || one.email || `№ ${one.id}`}
+                  {именем(one)}
                   {one.blocked && <span className="kind">вход закрыт</span>}
                 </span>
                 <span className="muted">
-                  № {one.id} · {one.email || 'почты нет'} ·{' '}
+                  {/* Номер здесь не повторяется: у врача без имени и почты
+                      он уже стоит слева, и строка «№ 6 · № 6» читается как
+                      сбой, а не как сведения. */}
+                  {one.displayName || one.email ? `№ ${one.id} · ` : ''}
+                  {one.email && one.displayName ? `${one.email} · ` : ''}
                   {one.rights > 0 ? `прав: ${one.rights}` : 'прав нет'}
                 </span>
               </button>
@@ -494,6 +498,13 @@ function ClientCard({ me, id, onBack }: { me: Me; id: number; onBack: () => void
       </div>
     </div>
   )
+}
+
+// Как звать врача в списке. Имени и почты может не быть вовсе: запись
+// заводится молча, при первом запуске, и спрашивать имя у человека,
+// который ещё не понял, что ему предлагают, — верный способ его потерять.
+function именем(one: Client): string {
+  return one.displayName || one.email || `Врач № ${one.id}`
 }
 
 // Назначение платежа человеческими словами. Образец закрыт на сервере, и

@@ -128,6 +128,20 @@ describe('продажи', () => {
     expect(await screen.findByText('Открыть вход')).toBeTruthy()
   })
 
+  it('врач без имени и почты назван номером один раз, а не дважды', async () => {
+    // «№ 6 · № 6» читается как сбой, а не как сведения: запись заводится
+    // молча, при первом запуске, и ни имени, ни почты у неё нет.
+    const безымянный = { ...КЛИЕНТЫ.clients[0]!, displayName: '', email: '' }
+    serve([
+      ['/admin/api/clients', { clients: [безымянный] }],
+      ['/admin/api/prices', { prices: [] }],
+      ['/admin/api/packs', { packs: [] }],
+    ])
+    render(<Sales me={ОПЕРАТОР} />)
+    const строка = (await screen.findByText('Врач № 7')).closest('.list-row')
+    expect(строка?.textContent).toBe('Врач № 7прав: 1')
+  })
+
   it('пустая витрина сказана словами, а не пустым местом', async () => {
     serve([['/admin/api/clients', { clients: [] }],
            ['/admin/api/prices', { prices: [] }],

@@ -136,6 +136,16 @@ button:disabled {
   color: var(--ink-soft);
 }
 
+/* Главная кнопка, ставшая недоступной, теряет и заливку. Без этого на
+   тёмно-зелёном оставался серый текст, и прочесть, что именно сейчас
+   нельзя нажать, было невозможно — а это ровно та кнопка, которую человек
+   ищет глазами. */
+button.primary:disabled {
+  background: var(--paper-soft);
+  border-color: var(--line);
+  color: var(--ink-soft);
+}
+
 .form-actions {
   display: flex;
   gap: var(--gap);

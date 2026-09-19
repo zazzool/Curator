@@ -101,7 +101,9 @@ export function Reports({ me }: { me: Me }) {
               <div key={one.name} className="list-row">
                 <span>{one.title || one.name}</span>
                 <span className="muted">
-                  {one.count} · {счётом(one.accounts, 'врач', 'врача', 'врачей')}
+                  {/* Голое число слева нечитаемо: «4 · 4 врача» не
+                      говорит, что первое — это разы, а не что-то ещё. */}
+                  {one.count} всего · {счётом(one.accounts, 'врач', 'врача', 'врачей')}
                 </span>
               </div>
             ))}
