@@ -393,3 +393,82 @@ func TestPgОтказЗаданияВсегдаНазываетПричину(t 
 		t.Fatalf("отказ записан без причины: %+v", got)
 	}
 }
+
+func TestPgЧерновикиЗаданияНеЗатираютДругДруга(t *testing.T) {
+	// Перегенерация пишет второй черновик по тому же заданию. Затёртый
+	// прежний сравнить не с чем, а сравнивать их будет составитель: он
+	// для того и перегенерировал.
+	ctx := context.Background()
+	gate := testGate(t)
+	sourceID := источник(t, gate)
+	order := Order{SourceID: sourceID, UnitLabel: "3.1"}
+	plan, err := NewResolver(gate).Resolve(ctx, order)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs := NewJobs(gate)
+	job, err := jobs.Place(ctx, order, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first := Draft{Title: "Первый", Difficulty: 3}
+	second := Draft{Title: "Второй", Difficulty: 4}
+	if _, err := jobs.SaveDraft(ctx, job, first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobs.SaveDraft(ctx, job, second); err != nil {
+		t.Fatal(err)
+	}
+
+	drafts, err := jobs.Drafts(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(drafts) != 2 || drafts[0].Title != "Первый" || drafts[1].Title != "Второй" {
+		t.Fatalf("черновики легли не так: %+v", drafts)
+	}
+}
+
+func TestPgПланДоезжаетДоИсполнителяЦеликом(t *testing.T) {
+	// Задание переживает перезапуск, и всё, что нужно конвейеру, обязано
+	// быть в нём: второй поход в хранилище разошёлся бы с первым молча.
+	ctx := context.Background()
+	gate := testGate(t)
+	sourceID := источник(t, gate)
+	order := Order{SourceID: sourceID, UnitLabel: "3.1", Kind: KindAction}
+	plan, err := NewResolver(gate).Resolve(ctx, order)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs := NewJobs(gate)
+	if _, err := jobs.Place(ctx, order, plan); err != nil {
+		t.Fatal(err)
+	}
+
+	for {
+		job, ok, err := jobs.Take(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok {
+			t.Fatal("задание не нашлось в очереди")
+		}
+		if err := jobs.Done(ctx, job.ID); err != nil {
+			t.Fatal(err)
+		}
+		if job.SourceID != sourceID {
+			continue // чужое задание из соседней проверки
+		}
+		if job.Plan.Target == nil || job.Plan.Target.Designation != "абз. 1" {
+			t.Fatalf("эталонное положение не доехало: %+v", job.Plan.Target)
+		}
+		if len(job.Plan.Statements) != 2 || len(job.Plan.Siblings) != 1 {
+			t.Fatalf("план доехал неполным: %+v", job.Plan)
+		}
+		if job.Plan.StatementWord != "указание" {
+			t.Fatalf("словарь источника не доехал: %q", job.Plan.StatementWord)
+		}
+		return
+	}
+}
