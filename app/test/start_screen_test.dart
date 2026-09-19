@@ -1,6 +1,8 @@
 import 'package:curator/api/client.dart';
 import 'package:curator/cases/outbox.dart';
 import 'package:curator/main.dart';
+import 'package:curator/packs/manifest.dart';
+import 'package:curator/packs/store.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Первый экран показывает, чем кончилось заведение устройства.
@@ -35,7 +37,12 @@ void main() {
     addTearDown(api.close);
 
     await tester.pumpWidget(
-      CuratorApp(api: api, outbox: Outbox(api, MemoryOutboxStore())),
+      CuratorApp(
+        api: api,
+        outbox: Outbox(api, MemoryOutboxStore()),
+        packs: MemoryPackStore(),
+        keys: const TrustedKeys({}),
+      ),
     );
     await tester.pumpAndSettle();
 

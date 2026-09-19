@@ -17,13 +17,16 @@ import 'api/client.dart';
 import 'api/token_store.dart';
 import 'cases/outbox.dart';
 import 'home.dart';
+import 'packs/manifest.dart';
+import 'packs/store.dart';
 
 /// Адрес контура и ключ сборки задаются при сборке, а не литералом по
 /// месту: адрес, вписанный во второй файл, расходится молча, а ключ,
 /// зашитый в исходник, уезжает в открытый репозиторий.
 ///
 /// ```
-/// flutter build apk --dart-define=CURATOR_URL=… --dart-define=CURATOR_APP_KEY=…
+/// flutter build apk --dart-define=CURATOR_URL=… \
+///   --dart-define=CURATOR_APP_KEY=… --dart-define=CURATOR_PACK_KEYS=…
 /// ```
 const _baseUrl = String.fromEnvironment(
   'CURATOR_URL',
@@ -31,20 +34,44 @@ const _baseUrl = String.fromEnvironment(
 );
 const _appKey = String.fromEnvironment('CURATOR_APP_KEY');
 
+/// Открытые ключи, которыми подписаны выпуски наборов, — списком вида
+/// `имя:база64,имя:база64`.
+///
+/// Приезжают в сборке, а не с сервера. Приедь ключ той же дверью, что и
+/// набор, подпись перестала бы значить что-либо: подменивший набор по
+/// дороге подменил бы и ключ. Ключей несколько намеренно — смена ключа не
+/// должна делать прежние выпуски негодными все разом.
+const _packKeys = String.fromEnvironment('CURATOR_PACK_KEYS');
+
 void main() {
   final api = Api(
     baseUrl: Uri.parse(_baseUrl),
     appKey: _appKey,
     tokens: PrefsTokenStore(),
   );
-  runApp(CuratorApp(api: api, outbox: Outbox(api, PrefsOutboxStore())));
+  runApp(
+    CuratorApp(
+      api: api,
+      outbox: Outbox(api, PrefsOutboxStore()),
+      packs: FilePackStore(),
+      keys: TrustedKeys.parse(_packKeys),
+    ),
+  );
 }
 
 class CuratorApp extends StatelessWidget {
-  const CuratorApp({super.key, required this.api, required this.outbox});
+  const CuratorApp({
+    super.key,
+    required this.api,
+    required this.outbox,
+    required this.packs,
+    required this.keys,
+  });
 
   final Api api;
   final Outbox outbox;
+  final PackStore packs;
+  final TrustedKeys keys;
 
   @override
   Widget build(BuildContext context) {
@@ -57,7 +84,7 @@ class CuratorApp extends StatelessWidget {
         cardTheme: const CardThemeData(elevation: 0),
         appBarTheme: const AppBarTheme(elevation: 0, scrolledUnderElevation: 0),
       ),
-      home: StartScreen(api: api, outbox: outbox),
+      home: StartScreen(api: api, outbox: outbox, packs: packs, keys: keys),
     );
   }
 }
@@ -68,10 +95,18 @@ class CuratorApp extends StatelessWidget {
 /// который ещё не понял, что ему предлагают, — верный способ его потерять.
 /// Устройство заводится молча, а экран показывает, чем дело кончилось.
 class StartScreen extends StatefulWidget {
-  const StartScreen({super.key, required this.api, required this.outbox});
+  const StartScreen({
+    super.key,
+    required this.api,
+    required this.outbox,
+    required this.packs,
+    required this.keys,
+  });
 
   final Api api;
   final Outbox outbox;
+  final PackStore packs;
+  final TrustedKeys keys;
 
   @override
   State<StartScreen> createState() => _StartScreenState();
@@ -133,7 +168,12 @@ class _StartScreenState extends State<StartScreen> {
         // Заведение — это не экран, а порог: пройден, и врач сразу на
         // задачах. Отдельный экран «всё хорошо» здесь был бы препятствием
         // между человеком и тем, ради чего он поставил приложение.
-        return Home(api: widget.api, outbox: widget.outbox);
+        return Home(
+          api: widget.api,
+          outbox: widget.outbox,
+          packs: widget.packs,
+          keys: widget.keys,
+        );
       },
     );
   }
