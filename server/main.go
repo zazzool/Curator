@@ -30,6 +30,7 @@ import (
 	"curator/server/internal/llm"
 	"curator/server/internal/llmusage"
 	"curator/server/internal/progress"
+	"curator/server/internal/signs"
 	"curator/server/internal/source"
 	"curator/server/internal/studio"
 )
@@ -113,6 +114,15 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 	// на первом же обращении.
 	var keys *app.Keys
 	if gate != nil {
+		// Выпуски знаков заводятся при старте по каталогу: каталог
+		// остаётся единственным местом, где знак объявлен, а строки в базе
+		// — следом выдачи, а не вторым объявлением. Отказ здесь роняет
+		// старт намеренно: единственная его причина — тираж, уменьшенный
+		// ниже уже выданного, а выданный знак не отбирают.
+		if err := signs.Ensure(ctx, gate); err != nil {
+			log.Fatalf("выпуски знаков не заведены: %v", err)
+		}
+
 		keys = app.NewKeys(gate)
 		door := app.NewDoor(keys, app.NewAccounts(gate))
 		app.Routes(door, app.NewFeed(gate), app.NewAttempts(gate, progress.Default()))
