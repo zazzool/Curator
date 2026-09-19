@@ -152,6 +152,7 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 		keys = app.NewKeys(gate)
 		door := app.NewDoor(keys, app.NewAccounts(gate))
 		app.Routes(door, app.NewFeed(gate), app.NewAttempts(gate, progress.Default()))
+		app.ReferenceRoutes(door, app.NewReference(gate))
 		app.PackRoutes(door, packStore, access, prices)
 		app.TelemetryRoutes(door, telemetry.NewStore(gate))
 		mux.Handle("/v1/", door.Handler())

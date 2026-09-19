@@ -362,6 +362,17 @@ func (s *Store) AcceptDraft(ctx context.Context, sourceID, docID int64, decidedB
 			}
 		}
 
+		// Выпуск справочника растёт вместе с принятым разбором: по нему
+		// устройство понимает, что лежащая у него офлайн-копия отстала.
+		// В той же транзакции, что и сами единицы, — иначе нашлось бы
+		// окно, в котором копия уже неверна, а число ещё прежнее, и
+		// устройство считало бы её свежей.
+		if _, err := tx.Exec(ctx,
+			`UPDATE sources SET reference_version = reference_version + 1 WHERE id = $1`,
+			sourceID); err != nil {
+			return fmt.Errorf("выпуск справочника не увеличен: %w", err)
+		}
+
 		accepted = len(withPaths)
 		return nil
 	})
