@@ -1,0 +1,212 @@
+/* Слой оформления студии.
+ *
+ * Тени не вводятся — плоскости разделяются волосяной границей. Тень
+ * допустима только у того, что физически висит над страницей; здесь такого
+ * пока нет. Правило нарушают именно в студии, поэтому оно записано здесь, а
+ * не только в корневых правилах.
+ *
+ * Меры заданы переменными и в одном месте: две страницы, сверстанные каждая
+ * по-своему, дают четыре правых края у четырёх полей — так уже было у
+ * донора, и разбирали это отдельной работой.
+ */
+
+:root {
+  --ink: #1b1b1b;
+  --ink-soft: #5a5a5a;
+  --paper: #ffffff;
+  --paper-soft: #f6f6f5;
+  --line: #d8d6d2;
+  --accent: #1f5c4a;
+  --alarm: #8c2f26;
+
+  --gap: 12px;
+  --gap-wide: 24px;
+  --radius: 4px;
+  --measure: 62ch;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  background: var(--paper);
+  font: 15px/1.5 system-ui, 'Segoe UI', Roboto, sans-serif;
+}
+
+a {
+  color: var(--accent);
+}
+
+.app {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: var(--gap-wide);
+}
+
+.app-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--gap);
+  padding-bottom: var(--gap);
+  border-bottom: 1px solid var(--line);
+}
+
+.app-head h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.page-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--gap);
+  margin: var(--gap-wide) 0 var(--gap);
+}
+
+.page-head h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+/* Пояснение само ограничивается мерой строки: строка в сто знаков читается
+ * глазами хуже, чем в шестьдесят, и человек теряет начало следующей. */
+.hint {
+  max-width: var(--measure);
+  color: var(--ink-soft);
+  margin: 0;
+}
+
+.page-section {
+  margin-top: var(--gap-wide);
+}
+
+.form-grid {
+  display: grid;
+  gap: var(--gap);
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--gap);
+}
+
+.fld-label {
+  color: var(--ink-soft);
+}
+
+input,
+select,
+button,
+textarea {
+  font: inherit;
+  color: inherit;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper);
+}
+
+textarea {
+  min-height: 120px;
+  width: 100%;
+}
+
+button {
+  cursor: pointer;
+  background: var(--paper-soft);
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+button:disabled {
+  cursor: default;
+  color: var(--ink-soft);
+}
+
+.form-actions {
+  display: flex;
+  gap: var(--gap);
+}
+
+.list {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.list-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--gap);
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  width: 100%;
+  text-align: left;
+  background: var(--paper);
+  border-radius: 0;
+}
+
+.list-row:last-child {
+  border-bottom: none;
+}
+
+.list-row .muted {
+  color: var(--ink-soft);
+}
+
+.units {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--gap);
+  margin: 0;
+  list-style: none;
+}
+
+.units li {
+  padding: 2px 0;
+}
+
+.label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.alarm {
+  color: var(--alarm);
+  max-width: var(--measure);
+}
+
+.done {
+  color: var(--accent);
+  max-width: var(--measure);
+}
+
+.empty {
+  color: var(--ink-soft);
+  max-width: var(--measure);
+}
+
+.login {
+  max-width: 360px;
+  margin: 15vh auto 0;
+}
+
+.fragment {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--gap);
+  margin-bottom: var(--gap);
+  white-space: pre-wrap;
+}
