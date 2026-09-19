@@ -1,0 +1,205 @@
+import { useEffect, useState, type FormEvent } from 'react'
+
+import { ApiError, api } from './api'
+import type { Me, Source } from './api'
+
+// Словари закрыты на сервере, и здесь они повторены списками выбора: поле,
+// куда можно вписать что угодно, отдало бы серверу значение, которое тот
+// отклонит, — и человек узнал бы об этом после заполнения всей формы.
+const KINDS: [string, string][] = [
+  ['classification', 'классификация'],
+  ['decree', 'приказ'],
+  ['guidelines', 'клинические рекомендации'],
+  ['standard', 'стандарт'],
+  ['handbook', 'руководство'],
+  ['other', 'другое'],
+]
+
+const PURPOSES: [string, string][] = [
+  ['topic', 'по темам'],
+  ['system', 'по системам органов'],
+  ['discipline', 'по дисциплинам'],
+  ['task', 'по видам задач'],
+  ['level', 'по уровню подготовки'],
+  ['legal', 'по правовым нормам'],
+  ['other', 'по-другому'],
+]
+
+const HIERARCHIES: [string, string][] = [
+  ['part-of', 'вложенное — часть целого'],
+  ['is-a', 'вложенное — разновидность'],
+  ['grouped', 'вложенное просто сгруппировано'],
+]
+
+const COMPLETENESS: [string, string][] = [
+  ['complete', 'полный справочник'],
+  ['fragment', 'разобранный кусок'],
+]
+
+const EMPTY = {
+  slug: '',
+  kind: 'decree',
+  title: '',
+  unitWord: '',
+  statementWord: '',
+  purpose: 'legal',
+  hierarchy: 'part-of',
+  completeness: 'fragment',
+  edition: '',
+}
+
+export function SourceList({ me, onOpen }: { me: Me; onOpen: (id: number) => void }) {
+  const [sources, setSources] = useState<Source[] | null>(null)
+  const [failure, setFailure] = useState('')
+  const [adding, setAdding] = useState(false)
+  const [draft, setDraft] = useState(EMPTY)
+
+  const canAccept = me.permissions.includes('source:accept')
+
+  async function reload() {
+    try {
+      setSources((await api.sources()).sources)
+    } catch (error) {
+      setFailure(error instanceof ApiError ? error.message : 'Список источников не прочитан')
+    }
+  }
+
+  useEffect(() => {
+    void reload()
+  }, [])
+
+  async function create(event: FormEvent) {
+    event.preventDefault()
+    setFailure('')
+    try {
+      const { id } = await api.createSource(draft)
+      setAdding(false)
+      setDraft(EMPTY)
+      await reload()
+      onOpen(id)
+    } catch (error) {
+      setFailure(error instanceof ApiError ? error.message : 'Источник не заведён')
+    }
+  }
+
+  return (
+    <div>
+      <div className="page-head">
+        <h2>Источники</h2>
+        {canAccept && (
+          <button onClick={() => setAdding(!adding)}>{adding ? 'Не заводить' : 'Завести источник'}</button>
+        )}
+      </div>
+      <p className="hint">
+        Источник — то, по чему пишутся задачи и чем они поверяются:
+        классификация, приказ, рекомендации, стандарт, руководство.
+      </p>
+
+      {adding && (
+        <form className="page-section form-grid" onSubmit={create}>
+          <label className="form-row">
+            <span className="fld-label">Краткое имя</span>
+            <input value={draft.slug} onChange={(e) => setDraft({ ...draft, slug: e.target.value })} />
+          </label>
+          <label className="form-row">
+            <span className="fld-label">Название</span>
+            <input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} />
+          </label>
+          <label className="form-row">
+            <span className="fld-label">Вид</span>
+            <select value={draft.kind} onChange={(e) => setDraft({ ...draft, kind: e.target.value })}>
+              {KINDS.map(([value, name]) => (
+                <option key={value} value={value}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="form-row">
+            <span className="fld-label">Как звать единицу</span>
+            <input
+              value={draft.unitWord}
+              onChange={(e) => setDraft({ ...draft, unitWord: e.target.value })}
+              placeholder="пункт, диагноз, раздел"
+            />
+          </label>
+          <label className="form-row">
+            <span className="fld-label">Как звать положение</span>
+            <input
+              value={draft.statementWord}
+              onChange={(e) => setDraft({ ...draft, statementWord: e.target.value })}
+              placeholder="положение, признак, требование"
+            />
+          </label>
+          <label className="form-row">
+            <span className="fld-label">По чему делит материал</span>
+            <select value={draft.purpose} onChange={(e) => setDraft({ ...draft, purpose: e.target.value })}>
+              {PURPOSES.map(([value, name]) => (
+                <option key={value} value={value}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="form-row">
+            <span className="fld-label">Что значит вложенность</span>
+            <select
+              value={draft.hierarchy}
+              onChange={(e) => setDraft({ ...draft, hierarchy: e.target.value })}
+            >
+              {HIERARCHIES.map(([value, name]) => (
+                <option key={value} value={value}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="form-row">
+            <span className="fld-label">Полнота</span>
+            <select
+              value={draft.completeness}
+              onChange={(e) => setDraft({ ...draft, completeness: e.target.value })}
+            >
+              {COMPLETENESS.map(([value, name]) => (
+                <option key={value} value={value}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="hint">
+            Полнота честна: разобранный из файла кусок — это кусок. На полноту
+            опирается расчёт охвата, и объявленный полным кусок даёт ложные
+            доли.
+          </p>
+          <div className="form-actions">
+            <button className="primary" type="submit">
+              Завести
+            </button>
+          </div>
+        </form>
+      )}
+
+      {failure && <p className="alarm">{failure}</p>}
+
+      <div className="page-section">
+        {sources === null ? (
+          <p className="empty">Читаем список…</p>
+        ) : sources.length === 0 ? (
+          <p className="empty">Источников пока нет. Заведите первый — и принесите в него документ.</p>
+        ) : (
+          <div className="list">
+            {sources.map((source) => (
+              <button key={source.id} className="list-row" onClick={() => onOpen(source.id)}>
+                <span>{source.title}</span>
+                <span className="muted">
+                  {source.slug} · {source.completeness === 'complete' ? 'полный' : 'кусок'}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}

@@ -1,0 +1,101 @@
+# Выкатка Куратора.
+#
+# Контейнер живёт в сети nginx_default и наружу не смотрит: TLS и
+# заголовки — на общем nginx-proxy этого хоста, он же обращается к сервису
+# по имени контейнера. Имя контейнера поэтому и есть адрес службы, и
+# менять его нельзя, не поправив конфигурацию прокси на хосте.
+services:
+  curator:
+    build: .
+    image: curator:latest
+    container_name: curator
+    restart: unless-stopped
+    # Секреты живут на контуре, рядом с контейнером, и в репозиторий не
+    # входят. Образец — server/.env.example.
+    env_file: .env
+    expose:
+      - "8080"
+    networks:
+      - nginx_default
+    volumes:
+      # Снимки базы. Каталог хоста, а не том docker и не слой образа: весь
+      # смысл снимка в том, чтобы пережить контейнер, который его написал.
+      - ./backups:/app/backups
+    # Служба лёгкая: разбор источников идёт редко, раздача задач — это
+    # чтение. Ограничения — чтобы не мешать соседям по хосту.
+    cpus: "1.0"
+    mem_limit: 512m
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # VPN и SOCKS5-прокси для запросов к поставщику моделей — и только для
+  # них. В отдельном профиле: без конфигурации туннеля сайдкару нечего
+  # делать, а поднимать его вместе с сервером значило бы, что свежий контур
+  # встаёт с контейнером, который перезапускается по кругу.
+  #
+  #   docker compose --profile vpn up -d llm-vpn
+  #
+  # Имя контейнера — это адрес прокси (CURATOR_LLM_PROXY), и менять его
+  # нельзя, не поправив переменную. Под своим именем, а не донорским:
+  # два контура, назвавшие сайдкар одинаково, увели бы трафик друг к другу.
+  llm-vpn:
+    build: ./deploy/llm-vpn
+    image: curator-llm-vpn:latest
+    container_name: curator-llm-vpn
+    profiles:
+      - vpn
+    restart: unless-stopped
+    volumes:
+      # Только для чтения: в файле приватный ключ, и служба, способная его
+      # переписать, однажды перепишет. Кладёт его человек — см.
+      # deploy/llm-vpn/README.md.
+      - ./vpn:/vpn:ro
+    cap_add:
+      # Туннель и аварийный выключатель — это интерфейс и iptables.
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      # awg-quick выставляет это сам, но в контейнере /proc/sys только для
+      # чтения. Задаём декларативно, иначе туннель не поднимется.
+      - net.ipv4.conf.all.src_valid_mark=1
+    expose:
+      - "1080"
+    networks:
+      - nginx_default
+    mem_limit: 128m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Предполётный опрос базы: сколько таблиц, сколько задач, кто заведён в
+  # студии. Отдельная служба, а не psql на хосте: клиента там может не
+  # быть, а база видна только изнутри этой сети. Строка подключения
+  # приезжает тем же env_file, что и сервису, — значит, спрашивается та
+  # самая база, в которую пойдёт накат, а не похожая на неё. В доводах
+  # командной строки она при этом не появляется: ps на хосте виден всем.
+  #
+  #   docker compose --profile preflight run --rm -T preflight
+  preflight:
+    image: postgres:16-alpine
+    profiles:
+      - preflight
+    env_file: .env
+    volumes:
+      - ./deploy:/deploy:ro
+    networks:
+      - nginx_default
+    # $$ — чтобы подстановку сделал sh в контейнере, а не compose на хосте.
+    entrypoint: ["sh", "-c", "exec psql \"$$DATABASE_URL\" -X -q -f /deploy/preflight.sql"]
+    mem_limit: 128m
+
+networks:
+  nginx_default:
+    external: true

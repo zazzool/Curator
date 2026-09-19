@@ -1,0 +1,263 @@
+package studio
+
+import (
+	"context"
+	"fmt"
+	"math/rand"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"testing"
+	"time"
+
+	"curator/server/internal/dbgate"
+	"curator/server/internal/totp"
+)
+
+// testGate открывает дверь к проверочной базе.
+//
+// Без строки подключения — отказ, а не пропуск: проверка, которая молча
+// пропускается и возвращает успех, выдаёт зелёное за непроверенное.
+func testGate(t *testing.T) *dbgate.Gate {
+	t.Helper()
+	dsn := os.Getenv("CURATOR_TEST_DSN")
+	if dsn == "" {
+		t.Fatal("CURATOR_TEST_DSN не задан: проверки на живой базе не идут. " +
+			"Это отказ, а не пропуск — см. server/.env.example")
+	}
+	gate, err := dbgate.Open(context.Background(), dsn, 0)
+	if err != nil {
+		t.Fatalf("проверочная база недоступна: %v", err)
+	}
+	t.Cleanup(gate.Close)
+	return gate
+}
+
+func newLogin() string {
+	return fmt.Sprintf("проверка-%d-%d", time.Now().UnixNano(), rand.Intn(1000))
+}
+
+func TestPgВходПоОдноразовомуКоду(t *testing.T) {
+	ctx := context.Background()
+	gate := testGate(t)
+	users, sessions := NewUsers(gate), NewSessions(gate)
+	desk := NewDesk(users, sessions)
+
+	login := newLogin()
+	if _, _, err := users.Create(ctx, login, "Составитель", []Permission{PermSourceRead}); err != nil {
+		t.Fatal(err)
+	}
+	_, secret, err := users.ByLogin(ctx, login)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := totp.Code(secret, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := desk.Login(ctx, login, code)
+	if err != nil {
+		t.Fatalf("вход по годному коду отказал: %v", err)
+	}
+	if token == "" {
+		t.Fatal("вход прошёл, а токен пуст")
+	}
+
+	user, err := sessions.User(ctx, users, token, time.Now())
+	if err != nil {
+		t.Fatalf("сессия не найдена сразу после выдачи: %v", err)
+	}
+	if user.Login != login {
+		t.Errorf("сессия принадлежит %q, а выдана %q", user.Login, login)
+	}
+}
+
+func TestPgЧужойКодНеПускает(t *testing.T) {
+	ctx := context.Background()
+	gate := testGate(t)
+	users, sessions := NewUsers(gate), NewSessions(gate)
+	desk := NewDesk(users, sessions)
+
+	login := newLogin()
+	if _, _, err := users.Create(ctx, login, "Составитель", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := desk.Login(ctx, login, "000000"); err == nil {
+		t.Fatal("вход прошёл по коду, которого не выдавали")
+	}
+}
+
+func TestPgОтключённыйНеВходитИНеХодитПоСтаройСессии(t *testing.T) {
+	// Увольнение обязано вступать в силу сразу, а не через сутки — столько
+	// живёт уже выданная сессия.
+	ctx := context.Background()
+	gate := testGate(t)
+	users, sessions := NewUsers(gate), NewSessions(gate)
+
+	login := newLogin()
+	user, secret, err := users.Create(ctx, login, "Бывший", []Permission{PermSourceRead})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := sessions.Issue(ctx, user.ID, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gate.Exec(ctx, `UPDATE users SET disabled_at = NOW() WHERE id = $1`, user.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := sessions.User(ctx, users, token, time.Now()); err == nil {
+		t.Error("отключённый пользователь ходит по выданной ранее сессии")
+	}
+	code, _ := totp.Code(secret, time.Now())
+	if _, err := users.VerifyCode(ctx, login, code, time.Now()); err == nil {
+		t.Error("отключённый пользователь вошёл заново")
+	}
+}
+
+func TestPgИстёкшаяСессияОтказывает(t *testing.T) {
+	ctx := context.Background()
+	gate := testGate(t)
+	users, sessions := NewUsers(gate), NewSessions(gate)
+
+	login := newLogin()
+	user, _, err := users.Create(ctx, login, "Составитель", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Часы двигаются, а не ожидание: ждать сутки проверка не может.
+	token, err := sessions.Issue(ctx, user.ID, time.Now().Add(-2*SessionTTL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sessions.User(ctx, users, token, time.Now()); err == nil {
+		t.Error("истёкшая сессия пустила")
+	}
+}
+
+func TestPgМаршрутЗакрытПравом(t *testing.T) {
+	ctx := context.Background()
+	gate := testGate(t)
+	users, sessions := NewUsers(gate), NewSessions(gate)
+	desk := NewDesk(users, sessions)
+
+	desk.Handle(PermSourceAccept, "GET /admin/api/проверка", func(w http.ResponseWriter, r *http.Request, u User) {
+		WriteJSON(w, http.StatusOK, map[string]string{"кто": u.Login})
+	})
+
+	// У пользователя есть право читать источники, но не принимать разбор.
+	login := newLogin()
+	user, _, err := users.Create(ctx, login, "Читатель", []Permission{PermSourceRead})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := sessions.Issue(ctx, user.ID, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/проверка", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	desk.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("код %d, ожидался 403: маршрут открылся без права", rec.Code)
+	}
+
+	// Без сессии вовсе — «войдите заново», а не «нет права»: человеку надо
+	// понять, что делать.
+	rec = httptest.NewRecorder()
+	desk.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/admin/api/проверка", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("код %d, ожидался 401", rec.Code)
+	}
+
+	// А с правом — открывается.
+	login2 := newLogin()
+	user2, _, err := users.Create(ctx, login2, "Приёмщик", []Permission{PermSourceAccept})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token2, err := sessions.Issue(ctx, user2.ID, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/admin/api/проверка", nil)
+	req.Header.Set("Authorization", "Bearer "+token2)
+	rec = httptest.NewRecorder()
+	desk.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("код %d, ожидался 200: право есть, а маршрут закрыт", rec.Code)
+	}
+}
+
+func TestPgСекретНеЛежитВТокене(t *testing.T) {
+	// Утёкшая база не должна давать входа: в admin_sessions лежит
+	// отпечаток, а не токен.
+	ctx := context.Background()
+	gate := testGate(t)
+	users, sessions := NewUsers(gate), NewSessions(gate)
+
+	login := newLogin()
+	user, _, err := users.Create(ctx, login, "Составитель", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := sessions.Issue(ctx, user.ID, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored int
+	err = gate.QueryRow(ctx,
+		`SELECT count(*) FROM admin_sessions WHERE token_hash = $1`, token).Scan(&stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored != 0 {
+		t.Error("токен лежит в базе как есть")
+	}
+}
+
+func TestPgСессииУбираютсяПоСроку(t *testing.T) {
+	ctx := context.Background()
+	gate := testGate(t)
+	users, sessions := NewUsers(gate), NewSessions(gate)
+
+	login := newLogin()
+	user, _, err := users.Create(ctx, login, "Составитель", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sessions.Issue(ctx, user.ID, time.Now().Add(-2*SessionTTL)); err != nil {
+		t.Fatal(err)
+	}
+	n, err := sessions.Sweep(ctx, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n < 1 {
+		t.Error("истёкшая сессия не убрана")
+	}
+}
+
+func TestНеизвестноеПравоОтказывает(t *testing.T) {
+	if _, err := ParsePermissions([]string{"source:read", "придуманное"}); err == nil {
+		t.Fatal("несуществующее право принято")
+	}
+	if _, err := ParsePermissions([]string{"source:read"}); err != nil {
+		t.Fatalf("известное право отвергнуто: %v", err)
+	}
+}
+
+func TestМаршрутНеизвестнымПравомНеОбъявляется(t *testing.T) {
+	// Маршрут, закрытый несуществующим правом, закрыт для всех — и
+	// заметили бы это не сразу и не там. Поэтому отказ при сборке.
+	defer func() {
+		if recover() == nil {
+			t.Fatal("маршрут с несуществующим правом объявлен молча")
+		}
+	}()
+	desk := NewDesk(nil, nil)
+	desk.Handle(Permission("придуманное"), "GET /admin/api/что-то", nil)
+}
