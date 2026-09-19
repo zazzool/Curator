@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"curator/server/internal/casestore"
 	"curator/server/internal/dbgate"
 	"curator/server/internal/envfile"
 	"curator/server/internal/gen"
@@ -107,6 +108,7 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 		desk := studio.NewDesk(studio.NewUsers(gate), studio.NewSessions(gate))
 		studio.Routes(desk)
 		source.Routes(desk, source.NewStore(gate))
+		casestore.Routes(desk, casestore.NewStore(gate))
 		generation(ctx, gate, desk)
 		mux.Handle("/admin/api/", desk.Handler())
 	}

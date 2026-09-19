@@ -44,6 +44,7 @@ describe('экран источника', () => {
     serve({
       '/admin/api/sources/1/units': { units: UNITS },
       '/admin/api/sources/1/jobs': { jobs: [] },
+      '/admin/api/cases': { cases: [] },
       '/admin/api/sources/1/documents': { documents: [] },
       '/admin/api/sources/1': SOURCE,
     })
