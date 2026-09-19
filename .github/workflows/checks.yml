@@ -1,0 +1,86 @@
+# Сторож: обязательные проверки на каждый push и каждый PR.
+#
+# # Один файл на двух сторожей
+#
+# Этот файл читают И Forgejo (exam.psync.ru), И GitHub Actions. Решение
+# владельца 19.09.2026: сторожей двое, потому что репозиторий публичный —
+# Actions видны всякому, кто смотрит на PR, а Forgejo стоит там же, где
+# боевой контур, и знает про него то, чего GitHub знать не должен.
+#
+# Каталог .github/workflows выбран не по привычке: Forgejo читает именно
+# его, и переезд сломал бы одного из двух. Файл написан так, чтобы идти в
+# обоих, поэтому в нём нет ничего, чего нет у обоих: ни кэшей, ни
+# матриц, ни действий сверх трёх общеизвестных.
+#
+# # Секретов здесь нет и быть не может
+#
+# Репозиторий публичный. База поднимается своя, одноразовая, с паролем,
+# который тут же и написан: он живёт полторы минуты внутри одного прогона
+# и не значит ничего. Никаких донорских доступов — ни к моделям, ни к
+# боевой базе, ни к почте — сторожу не нужно: он гоняет проверки, а не
+# выкатывает.
+#
+# # Версия Go берётся из go.mod, а не пишется здесь
+#
+# Два места для одной версии расходятся молча. go.mod — единственное
+# место, где версия Go названа, и сторож читает её оттуда. Node назвать
+# больше негде, поэтому он назван здесь — и здесь же единственный раз.
+name: Проверки
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    name: Обязательные проверки
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: curator
+          POSTGRES_PASSWORD: curator
+          POSTGRES_DB: curator_checks
+        ports:
+          - 5432:5432
+        # Без ожидания готовности первый же запрос приходит в ещё не
+        # поднявшуюся базу, и отказ выглядит как отказ схемы.
+        options: >-
+          --health-cmd "pg_isready -U curator"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # 127.0.0.1, а не localhost: localhost на части образов
+      # разворачивается в ::1, база слушает IPv4, и отказ читается как
+      # «база не поднялась», хотя она поднялась.
+      CURATOR_TEST_DSN: postgres://curator:curator@127.0.0.1:5432/curator_checks?sslmode=disable
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # psql нужен набору на ветках, где ещё нет сервера: там схема
+      # накатывается им напрямую. На части образов его нет.
+      - name: Клиент postgres
+        run: |
+          if ! command -v psql >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql-client
+          fi
+          psql --version
+
+      - name: Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+
+      - name: Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Обязательные проверки
+        run: ./tools/checks.sh
