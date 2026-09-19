@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -326,5 +327,102 @@ func TestPgЗаголовокКускаУезжаетВместеСТелом(t 
 	}
 	if want := "# Показания\n\nтело пункта"; body != want {
 		t.Errorf("кусок %q, ожидался %q", body, want)
+	}
+}
+
+func TestPgТотЖеФайлВДругомИсточникеЭтоДругойДокумент(t *testing.T) {
+	// Совпадение по отпечатку считается внутри источника. Считалось оно
+	// по всей базе, и это стоило подмены: приказ, положенный во второй
+	// источник, возвращал документ первого — вместе с его источником.
+	// Дальше приёмка разбора принимала его в источник, которого
+	// составитель не открывал, и ответ при этом был успешным.
+	ctx := context.Background()
+	s := NewStore(testGate(t))
+	first := newSource(t, s)
+	second := newSource(t, s)
+
+	body := []byte(fmt.Sprintf("общий приказ %d", time.Now().UnixNano()))
+	sum := sha256.Sum256(body)
+	doc := Document{
+		Filename: "приказ.md", MIME: "text/markdown",
+		SHA256: hex.EncodeToString(sum[:]), Body: body,
+	}
+
+	doc.SourceID = first
+	inFirst, err := s.SaveDocument(ctx, doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc.SourceID = second
+	inSecond, err := s.SaveDocument(ctx, doc)
+	if err != nil {
+		t.Fatalf("тот же файл во втором источнике не принят: %v", err)
+	}
+	if inFirst == inSecond {
+		t.Fatalf("файл во втором источнике вернул документ первого: %d", inSecond)
+	}
+
+	// И повтор внутри одного источника по-прежнему один документ.
+	doc.SourceID = first
+	again, err := s.SaveDocument(ctx, doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != inFirst {
+		t.Errorf("тот же файл в том же источнике лёг дважды: %d и %d", inFirst, again)
+	}
+}
+
+func TestPgПоложенияПодВыпущеннойЗадачейНеЗаменяются(t *testing.T) {
+	// Разметка выпущенной задачи показывает на положения источника. Убери
+	// их приёмка нового разбора — и врач увидел бы задачу без обоснования.
+	// База это и так не даст (внешний ключ на case_chunks), но её отказ
+	// приезжает составителю кодом нарушения; проверяем, что отказ говорит
+	// словами и называет единицу.
+	ctx := context.Background()
+	gate := testGate(t)
+	s := NewStore(gate)
+	sourceID := newSource(t, s)
+
+	units := []Unit{{Label: "п1", Title: "Пункт первый"}}
+	statements := []Statement{{UnitLabel: "п1", Kind: "criterion", Designation: "абз. 1", Body: "Первое положение"}}
+	docID := draftDoc(t, s, sourceID, units, statements)
+	if _, err := s.AcceptDraft(ctx, sourceID, docID, "проверка"); err != nil {
+		t.Fatalf("первая приёмка отказала: %v", err)
+	}
+
+	// Выпущенная задача с разметкой на это положение.
+	var stID int64
+	err := gate.QueryRow(ctx,
+		`SELECT id FROM source_unit_statements WHERE source_id = $1 AND unit_label = 'п1'`,
+		sourceID).Scan(&stID)
+	if err != nil {
+		t.Fatalf("положение не найдено: %v", err)
+	}
+	caseID := fmt.Sprintf("c-проверка-%d", time.Now().UnixNano())
+	if _, err := gate.Exec(ctx,
+		`INSERT INTO cases (id, source_id, unit_label, unit_path, status, body)
+		 VALUES ($1, $2, 'п1', 'п1', 'published', '{}'::jsonb)`, caseID, sourceID); err != nil {
+		t.Fatalf("задача не заведена: %v", err)
+	}
+	if _, err := gate.Exec(ctx,
+		`INSERT INTO case_chunks (case_id, ord, text, statement_id) VALUES ($1, 0, 'фрагмент', $2)`,
+		caseID, stID); err != nil {
+		t.Fatalf("разметка не заведена: %v", err)
+	}
+
+	second := draftDoc(t, s, sourceID, units,
+		[]Statement{{UnitLabel: "п1", Kind: "criterion", Designation: "абз. 1", Body: "Переписанное положение"}})
+	_, err = s.AcceptDraft(ctx, sourceID, second, "проверка")
+	if err == nil {
+		t.Fatal("приёмка заменила положения, на которые ссылается выпущенная задача")
+	}
+	for _, want := range []string{"п1", "выпущенных задач"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("отказ не называет %q: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "SQLSTATE") {
+		t.Errorf("отказ приехал кодом нарушения, а не словами: %v", err)
 	}
 }
