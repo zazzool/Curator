@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type ChangeEvent } from 'react'
 
+import { Generation } from './Generation'
 import { ApiError, api } from './api'
 import type { Document, Me, Source, Unit } from './api'
 
@@ -179,6 +180,8 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
           </ul>
         )}
       </section>
+
+      <Generation me={me} source={source} units={units} />
     </div>
   )
 }

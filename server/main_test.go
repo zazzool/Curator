@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,7 +13,7 @@ func TestЖивостьОтвечаетБезБазы(t *testing.T) {
 	// ответ про процесс, а не про хранилище. Ручка, молчащая без базы,
 	// заставила бы docker убивать исправный процесс.
 	rec := httptest.NewRecorder()
-	routes(nil).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	routes(context.Background(), nil).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("код %d, ожидался 200", rec.Code)
 	}
