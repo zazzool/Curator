@@ -78,6 +78,18 @@ void main() {
       expect(statementIcon('чего-то своё'), Icons.article_outlined);
       expect(statementIcon('обязательный'), Icons.check_circle_outline);
       expect(statementIcon('исключение'), Icons.block_outlined);
+      // Три рода, которыми зовёт свои критерии МКБ-10, — самый частый из
+      // них покрывает 561 блок из 765, и общий знак у него значил бы, что
+      // знака нет у большинства критериев справочника.
+      expect(statementIcon('клинические описания'), Icons.menu_book_outlined);
+      expect(
+        statementIcon('диагностические критерии'),
+        Icons.check_circle_outline,
+      );
+      expect(
+        statementIcon('дифференциальный диагноз'),
+        Icons.compare_arrows_outlined,
+      );
     });
   });
 
