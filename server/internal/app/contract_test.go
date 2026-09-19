@@ -23,6 +23,7 @@ import (
 type contract struct {
 	Window    string                      `json:"window"`
 	Responses map[string]contractResponse `json:"responses"`
+	Metrics   contractShape               `json:"metrics"`
 	CaseBody  contractShape               `json:"caseBody"`
 	Errors    contractShape               `json:"errors"`
 }
@@ -73,6 +74,9 @@ func TestЭталонОтветовЧитаетсяИНеПуст(t *testing.T) 
 	}
 	if len(c.CaseBody.Fields) == 0 {
 		t.Error("в эталоне не описано содержание задачи")
+	}
+	if len(c.Metrics.Fields) == 0 {
+		t.Error("в эталоне не описаны величины каталога")
 	}
 	if c.Errors.Fields["error"] != "string" {
 		t.Error("в эталоне не описан отказ с полем error")
