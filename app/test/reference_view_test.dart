@@ -133,6 +133,68 @@ void main() {
     expect(texts.where((t) => t.contains('G1')).length, 1);
   });
 
+  testWidgets('обозначение-метка показывается с названием и ведёт к нему', (
+    tester,
+  ) async {
+    // «F41.2» само по себе не говорит врачу ничего: чтобы узнать, с чем
+    // путают, он должен помнить код наизусть или уйти искать его в дереве,
+    // потеряв место, на котором читал.
+    var opened = '';
+    await show(
+      tester,
+      CriteriaList(
+        statementWord: 'критерий',
+        links: const {'F41.2': 'Смешанное тревожное расстройство'},
+        onLink: (label) => opened = label,
+        statements: [
+          statement(
+            id: 1,
+            kind: 'дифференциальный диагноз',
+            designation: 'F41.2',
+            body: 'Тревога здесь первична.',
+          ),
+        ],
+      ),
+    );
+
+    expect(find.text('F41.2'), findsOneWidget);
+    expect(
+      find.byWidgetPredicate(
+        (w) =>
+            w is RichText &&
+            w.text.toPlainText().replaceAll(softHyphen, '') ==
+                'Смешанное тревожное расстройство',
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.text('F41.2'));
+    expect(opened, 'F41.2');
+  });
+
+  testWidgets('обозначение без своей рубрики остаётся обозначением', (
+    tester,
+  ) async {
+    // У приказа обозначение «абз. 2» меткой не является, и ссылкой оно
+    // быть не должно: ссылка, ведущая в никуда, хуже её отсутствия.
+    await show(
+      tester,
+      CriteriaList(
+        statementWord: 'пункт',
+        statements: [
+          statement(
+            id: 1,
+            kind: 'обязательные',
+            designation: 'абз. 2',
+            body: 'Помощь оказывается при…',
+          ),
+        ],
+      ),
+    );
+    expect(find.text('абз. 2'), findsOneWidget);
+    expect(find.byIcon(Icons.chevron_right), findsNothing);
+  });
+
   testWidgets('безымянный род зовётся словом источника', (tester) async {
     await show(
       tester,

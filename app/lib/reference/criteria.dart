@@ -18,6 +18,19 @@
 /// и ничего от этого не ломается. Ветка «если это МКБ» здесь была бы
 /// дефектом: справочников много, и все они одинаково чужие.
 ///
+/// # Обозначение, которое оказалось меткой, становится ссылкой
+///
+/// У дифференциального диагноза обозначение — это метка другой рубрики
+/// («F41.2»), и одна она врачу не говорит ничего: чтобы узнать, с чем же
+/// путают, он должен помнить код наизусть или уйти искать его в дереве и
+/// потерять место, на котором читал. Поэтому обозначение, совпавшее с
+/// меткой того же источника, показывается вместе с названием и открывает
+/// ту рубрику по нажатию.
+///
+/// Совпадение ищется по справочнику на устройстве, а не по виду метки:
+/// «если это похоже на код МКБ» — тот самый дефект. Не нашлось — остаётся
+/// обычное обозначение, и ничего не ломается.
+///
 /// # Обозначение не показывается дважды
 ///
 /// В выгрузках обозначение сплошь и рядом повторено в начале текста
@@ -174,9 +187,19 @@ class CriteriaList extends StatelessWidget {
     super.key,
     required this.statements,
     required this.statementWord,
+    this.links = const {},
+    this.onLink,
   });
 
   final List<RefStatement> statements;
+
+  /// Метка рубрики — её название, для обозначений, оказавшихся метками.
+  final Map<String, String> links;
+
+  /// Что делать по нажатию на такую ссылку. Не задано — ссылка остаётся
+  /// обычным обозначением: экран, не умеющий открыть рубрику, не должен
+  /// притворяться, что умеет.
+  final void Function(String label)? onLink;
 
   /// Как источник зовёт положение: «критерий», «пункт», «положение».
   /// Показывается как есть — слово «положение» у МКБ-10 сказало бы врачу,
@@ -225,7 +248,12 @@ class CriteriaList extends StatelessWidget {
               ),
             ),
           for (final one in groups[g].value)
-            StatementTile(one: one, statementWord: statementWord),
+            StatementTile(
+              one: one,
+              statementWord: statementWord,
+              linkTitle: links[one.designation] ?? '',
+              onLink: onLink,
+            ),
         ],
       ],
     );
@@ -238,15 +266,42 @@ class StatementTile extends StatelessWidget {
     super.key,
     required this.one,
     required this.statementWord,
+    this.linkTitle = '',
+    this.onLink,
   });
 
   final RefStatement one;
   final String statementWord;
 
+  /// Название рубрики, если обозначение оказалось её меткой.
+  final String linkTitle;
+  final void Function(String label)? onLink;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final body = withoutDesignation(one.body, one.designation);
+
+    // Ссылка занимает всю ширину, а не колонку в сорок четыре точки:
+    // название рубрики туда не влезает, а ради него ссылка и делается.
+    if (linkTitle.isNotEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _LinkChip(
+              label: one.designation,
+              title: linkTitle,
+              onTap: onLink == null ? null : () => onLink!(one.designation),
+            ),
+            const SizedBox(height: 6),
+            Prose(body, style: theme.textTheme.bodyLarge),
+            if (one.placeRef.isNotEmpty) _Place(text: one.placeRef),
+          ],
+        ),
+      );
+    }
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
@@ -275,29 +330,98 @@ class StatementTile extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Prose(body, style: theme.textTheme.bodyLarge),
-                if (one.placeRef.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.bookmark_border,
-                          size: 13,
-                          color: theme.colorScheme.outline,
-                        ),
-                        const SizedBox(width: 4),
-                        Flexible(
-                          child: Text(
-                            one.placeRef,
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: theme.colorScheme.outline,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                if (one.placeRef.isNotEmpty) _Place(text: one.placeRef),
               ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Ссылка на другую рубрику: метка и её название.
+class _LinkChip extends StatelessWidget {
+  const _LinkChip({required this.label, required this.title, this.onTap});
+
+  final String label;
+  final String title;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final chip = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        // Волосяная граница, а не тень: ссылка лежит в тексте, а не висит
+        // над ним.
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.compare_arrows_outlined,
+            size: 15,
+            color: theme.colorScheme.primary,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: theme.textTheme.labelLarge?.copyWith(
+              color: theme.colorScheme.primary,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Flexible(child: Prose(title, style: theme.textTheme.bodyMedium)),
+          if (onTap != null) ...[
+            const SizedBox(width: 6),
+            Icon(
+              Icons.chevron_right,
+              size: 16,
+              color: theme.colorScheme.outlineVariant,
+            ),
+          ],
+        ],
+      ),
+    );
+    if (onTap == null) return chip;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: chip,
+    );
+  }
+}
+
+/// Откуда положение взято.
+class _Place extends StatelessWidget {
+  const _Place({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.bookmark_border,
+            size: 13,
+            color: theme.colorScheme.outline,
+          ),
+          const SizedBox(width: 4),
+          Flexible(
+            child: Text(
+              text,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
             ),
           ),
         ],

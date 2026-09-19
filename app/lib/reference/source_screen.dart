@@ -281,6 +281,7 @@ class UnitScreen extends StatefulWidget {
 class _UnitScreenState extends State<UnitScreen> {
   List<RefStatement> _statements = const [];
   List<RefUnit> _children = const [];
+  Map<String, String> _links = const {};
   bool _loading = true;
 
   @override
@@ -293,12 +294,35 @@ class _UnitScreenState extends State<UnitScreen> {
     final slug = widget.source.slug;
     final statements = await widget.store.statements(slug, widget.unit.label);
     final children = await widget.store.children(slug, widget.unit.label);
+    // Обозначение, оказавшееся меткой того же источника, — это ссылка на
+    // другую рубрику. Спрашивается справочник, а не вид метки: «похоже на
+    // код МКБ» — тот самый дефект. Не нашлось — остаётся обозначение.
+    final links = <String, String>{};
+    for (final mark in {
+      for (final one in statements)
+        if (one.designation.isNotEmpty) one.designation,
+    }) {
+      final found = await widget.store.unit(slug, mark);
+      if (found != null) links[mark] = found.title;
+    }
     if (!mounted) return;
     setState(() {
       _statements = statements;
       _children = children;
+      _links = links;
       _loading = false;
     });
+  }
+
+  /// Открывает рубрику, на которую сослалось положение.
+  ///
+  /// Полная рубрика читается из базы, а не собирается из метки и названия:
+  /// экрану нужны и путь, и род, и число положений, а собранная наполовину
+  /// рубрика показала бы «внутри: 0» у рубрики с вложенными.
+  Future<void> _openLink(String label) async {
+    final found = await widget.store.unit(widget.source.slug, label);
+    if (!mounted || found == null) return;
+    openUnit(context, widget.store, widget.source, found);
   }
 
   @override
@@ -339,6 +363,8 @@ class _UnitScreenState extends State<UnitScreen> {
                     CriteriaList(
                       statements: _statements,
                       statementWord: widget.source.statementWord,
+                      links: _links,
+                      onLink: _openLink,
                     ),
                   ],
                   if (_children.isNotEmpty) ...[
