@@ -1,4 +1,5 @@
 import 'package:curator/api/client.dart';
+import 'package:curator/cases/outbox.dart';
 import 'package:curator/main.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -33,7 +34,9 @@ void main() {
     );
     addTearDown(api.close);
 
-    await tester.pumpWidget(CuratorApp(api: api));
+    await tester.pumpWidget(
+      CuratorApp(api: api, outbox: Outbox(api, MemoryOutboxStore())),
+    );
     await tester.pumpAndSettle();
 
     expect(find.text('Ещё раз'), findsOneWidget);

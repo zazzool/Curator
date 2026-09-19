@@ -15,6 +15,8 @@ import 'package:flutter/material.dart';
 
 import 'api/client.dart';
 import 'api/token_store.dart';
+import 'cases/outbox.dart';
+import 'cases/practice_screen.dart';
 
 /// Адрес контура и ключ сборки задаются при сборке, а не литералом по
 /// месту: адрес, вписанный во второй файл, расходится молча, а ключ,
@@ -30,21 +32,19 @@ const _baseUrl = String.fromEnvironment(
 const _appKey = String.fromEnvironment('CURATOR_APP_KEY');
 
 void main() {
-  runApp(
-    CuratorApp(
-      api: Api(
-        baseUrl: Uri.parse(_baseUrl),
-        appKey: _appKey,
-        tokens: PrefsTokenStore(),
-      ),
-    ),
+  final api = Api(
+    baseUrl: Uri.parse(_baseUrl),
+    appKey: _appKey,
+    tokens: PrefsTokenStore(),
   );
+  runApp(CuratorApp(api: api, outbox: Outbox(api, PrefsOutboxStore())));
 }
 
 class CuratorApp extends StatelessWidget {
-  const CuratorApp({super.key, required this.api});
+  const CuratorApp({super.key, required this.api, required this.outbox});
 
   final Api api;
+  final Outbox outbox;
 
   @override
   Widget build(BuildContext context) {
@@ -57,7 +57,7 @@ class CuratorApp extends StatelessWidget {
         cardTheme: const CardThemeData(elevation: 0),
         appBarTheme: const AppBarTheme(elevation: 0, scrolledUnderElevation: 0),
       ),
-      home: StartScreen(api: api),
+      home: StartScreen(api: api, outbox: outbox),
     );
   }
 }
@@ -68,9 +68,10 @@ class CuratorApp extends StatelessWidget {
 /// который ещё не понял, что ему предлагают, — верный способ его потерять.
 /// Устройство заводится молча, а экран показывает, чем дело кончилось.
 class StartScreen extends StatefulWidget {
-  const StartScreen({super.key, required this.api});
+  const StartScreen({super.key, required this.api, required this.outbox});
 
   final Api api;
+  final Outbox outbox;
 
   @override
   State<StartScreen> createState() => _StartScreenState();
@@ -106,33 +107,34 @@ class _StartScreenState extends State<StartScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Куратор')),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: FutureBuilder<ApiFailure?>(
-            future: _ready,
-            builder: (context, snapshot) {
-              if (snapshot.connectionState != ConnectionState.done) {
-                return const CircularProgressIndicator();
-              }
-              final failure = snapshot.data;
-              if (failure != null) {
-                // Отказ показывается его словами: сервер пишет их
-                // по-русски и говорит, что делать. «Ошибка 401» отправила
-                // бы врача переустанавливать исправное приложение.
-                return _Failure(text: failure.message, onRetry: _again);
-              }
-              return const Text(
-                'Приложение собирается. Задачи появятся здесь, '
-                'когда доедут экраны разбора.',
-                textAlign: TextAlign.center,
-              );
-            },
-          ),
-        ),
-      ),
+    return FutureBuilder<ApiFailure?>(
+      future: _ready,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final failure = snapshot.data;
+        if (failure != null) {
+          // Отказ показывается его словами: сервер пишет их по-русски и
+          // говорит, что делать. «Ошибка 401» отправила бы врача
+          // переустанавливать исправное приложение.
+          return Scaffold(
+            appBar: AppBar(title: const Text('Куратор')),
+            body: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: _Failure(text: failure.message, onRetry: _again),
+              ),
+            ),
+          );
+        }
+        // Заведение — это не экран, а порог: пройден, и врач сразу на
+        // задачах. Отдельный экран «всё хорошо» здесь был бы препятствием
+        // между человеком и тем, ради чего он поставил приложение.
+        return PracticeScreen(api: widget.api, outbox: widget.outbox);
+      },
     );
   }
 }
