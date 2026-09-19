@@ -27,6 +27,11 @@ func Routes(desk *studio.Desk, store *Store) {
 	desk.Handle(studio.PermSourceRead, "GET /admin/api/sources", r.listSources)
 	desk.Handle(studio.PermSourceAccept, "POST /admin/api/sources", r.createSource)
 	desk.Handle(studio.PermSourceRead, "GET /admin/api/sources/{id}", r.showSource)
+
+	// Объявление источника действующим стоит под тем же правом, что и
+	// приёмка разбора: и то и другое решает, что теперь считается истиной
+	// источника, а отдавать это всякому, кто может посмотреть, незачем.
+	desk.Handle(studio.PermSourceAccept, "PUT /admin/api/sources/{id}/status", r.setStatus)
 	desk.Handle(studio.PermSourceRead, "GET /admin/api/sources/{id}/units", r.listUnits)
 	desk.Handle(studio.PermSourceRead, "GET /admin/api/sources/{id}/statements", r.listStatements)
 	desk.Handle(studio.PermSourceRead, "GET /admin/api/sources/{id}/documents", r.listDocuments)
@@ -456,4 +461,38 @@ func pathID(w http.ResponseWriter, req *http.Request) (int64, bool) {
 		return 0, false
 	}
 	return id, true
+}
+
+type statusRequest struct {
+	Status string `json:"status"`
+}
+
+// setStatus объявляет источник действующим, черновиком или отменённым.
+//
+// Отдельная ручка, а не поле в паспорте: паспорт правят походя, а это
+// решение о том, увидят ли источник врачи. Отдельное действие видно и в
+// студии, и в журнале обращений.
+func (r *routes) setStatus(w http.ResponseWriter, req *http.Request, _ studio.User) {
+	id, ok := pathID(w, req)
+	if !ok {
+		return
+	}
+	var body statusRequest
+	if err := studio.DecodeBody(req, &body); err != nil {
+		studio.WriteError(w, http.StatusBadRequest, studio.Sentence(err.Error()))
+		return
+	}
+	if err := r.store.SetStatus(req.Context(), id, body.Status); err != nil {
+		// Отказ уезжает своими словами: он говорит, что делать («примите
+		// разбор хотя бы одного документа»), а «400 Bad Request» не
+		// говорит ничего.
+		studio.WriteError(w, http.StatusBadRequest, studio.Sentence(err.Error()))
+		return
+	}
+	src, err := r.store.SourceByID(req.Context(), id)
+	if err != nil {
+		studio.WriteError(w, http.StatusInternalServerError, "Состояние записано, но паспорт не перечитан")
+		return
+	}
+	studio.WriteJSON(w, http.StatusOK, toSourceJSON(src))
 }

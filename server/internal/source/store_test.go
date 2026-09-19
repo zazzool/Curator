@@ -458,3 +458,78 @@ func TestPgПриёмкаУвеличиваетВыпускСправочник�
 		t.Errorf("выпуск справочника не вырос: было %d, стало %d", before, after)
 	}
 }
+
+func TestPgПустойИсточникДействующимНеОбъявляется(t *testing.T) {
+	// Объявленный действующим источник без единой единицы врач увидит как
+	// пустую книгу и решит, что приложение сломано. Сломано при этом не
+	// приложение, а решение, и сказать об этом надо тому, кто его
+	// принимает.
+	ctx := context.Background()
+	s := NewStore(testGate(t))
+	sourceID := newSource(t, s)
+
+	err := s.SetStatus(ctx, sourceID, StatusActive)
+	if err == nil {
+		t.Fatal("пустой источник объявлен действующим")
+	}
+	if !strings.Contains(err.Error(), "примите разбор") {
+		t.Errorf("отказ не говорит, что делать: %v", err)
+	}
+
+	src, err := s.SourceByID(ctx, sourceID)
+	if err != nil {
+		t.Fatalf("паспорт не прочитан: %v", err)
+	}
+	if src.Status != StatusDraft {
+		t.Errorf("состояние поменялось вопреки отказу: %q", src.Status)
+	}
+}
+
+func TestPgИсточникОбъявляетсяДействующимИОбратно(t *testing.T) {
+	// До этого вызова источника для устройства не существует: справочник
+	// отдаёт только действующие. Не будь этого действия вовсе — а его и не
+	// было, — офлайн-справочник был бы пуст у всех и всегда.
+	ctx := context.Background()
+	s := NewStore(testGate(t))
+	sourceID := newSource(t, s)
+	docID := draftDoc(t, s, sourceID,
+		[]Unit{{Label: "п1", Title: "Пункт первый"}},
+		[]Statement{{UnitLabel: "п1", Kind: "criterion", Body: "Положение"}})
+	if _, err := s.AcceptDraft(ctx, sourceID, docID, "проверка"); err != nil {
+		t.Fatalf("приёмка отказала: %v", err)
+	}
+
+	if err := s.SetStatus(ctx, sourceID, StatusActive); err != nil {
+		t.Fatalf("источник не объявлен действующим: %v", err)
+	}
+	src, _ := s.SourceByID(ctx, sourceID)
+	if src.Status != StatusActive {
+		t.Fatalf("состояние не записано: %q", src.Status)
+	}
+
+	// Обратно — можно: источник, объявленный по ошибке, снимается тем же
+	// действием, а не правкой в базе руками.
+	if err := s.SetStatus(ctx, sourceID, StatusRetired); err != nil {
+		t.Fatalf("источник не отменён: %v", err)
+	}
+	src, _ = s.SourceByID(ctx, sourceID)
+	if src.Status != StatusRetired {
+		t.Errorf("состояние не записано: %q", src.Status)
+	}
+}
+
+func TestPgСостоянияВнеСловаряНеПринимаются(t *testing.T) {
+	// Словарь закрыт тем же, чем закрыт в схеме: состояние, появившееся
+	// строкой в коде, прошло бы проверку схемы и осталось бы невидимым для
+	// всех списков.
+	ctx := context.Background()
+	s := NewStore(testGate(t))
+	sourceID := newSource(t, s)
+
+	if err := s.SetStatus(ctx, sourceID, "опубликован"); err == nil {
+		t.Fatal("придуманное состояние принято")
+	}
+	if err := s.SetStatus(ctx, 10_000_000, StatusDraft); err == nil {
+		t.Fatal("состояние записано несуществующему источнику")
+	}
+}

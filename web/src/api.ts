@@ -210,6 +210,11 @@ export const api = {
 
   source: (id: number) => request<Source>('GET', `/admin/api/sources/${id}`),
 
+  // Объявление источника действующим: до него источника для устройства не
+  // существует — ни в списке справочников, ни в раздаче.
+  setSourceStatus: (id: number, status: string) =>
+    request<Source>('PUT', `/admin/api/sources/${id}/status`, { status }),
+
   // Пустой путь означает весь источник: срез по пути — то, ради чего путь
   // вообще считается, и отдельной ручки под «всё» заводить незачем.
   units: (id: number, path = '') =>

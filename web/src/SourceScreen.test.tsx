@@ -94,4 +94,35 @@ describe('экран источника', () => {
     expect(screen.queryByText('Принять разбор')).toBeNull()
     expect(screen.getByText(/кому выдано право принимать/)).toBeTruthy()
   })
+
+  it('черновик говорит, что для приложения его не существует', async () => {
+    // Состояния источника не было вовсе: ставилось умолчание «черновик», а
+    // менять его было нечем — и справочник в приложении оставался пуст у
+    // всех и всегда.
+    render(<SourceScreen me={РЕДАКТОР} id={1} onBack={() => {}} />)
+    await waitFor(() =>
+      expect(screen.getByText(/для приложения этого источника не существует/i)).toBeTruthy(),
+    )
+    expect(screen.getByText('Объявить действующим')).toBeTruthy()
+  })
+
+  it('действующий источник предлагает снять, а не объявить заново', async () => {
+    serve({
+      '/admin/api/sources/1/units': { units: UNITS },
+      '/admin/api/sources/1/jobs': { jobs: [] },
+      '/admin/api/cases': { cases: [] },
+      '/admin/api/sources/1/documents': { documents: [] },
+      '/admin/api/sources/1': { ...SOURCE, status: 'active' },
+    })
+    render(<SourceScreen me={РЕДАКТОР} id={1} onBack={() => {}} />)
+    await waitFor(() => expect(screen.getByText('Снять с раздачи')).toBeTruthy())
+  })
+
+  it('человеку без права приёмки состояние менять нечем', async () => {
+    // Решить, что источник теперь учит врача, — то же решение, что принять
+    // разбор, и право у них одно.
+    render(<SourceScreen me={ЧИТАТЕЛЬ} id={1} onBack={() => {}} />)
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Состояние' })).toBeTruthy())
+    expect(screen.queryByText('Объявить действующим')).toBeNull()
+  })
 })
