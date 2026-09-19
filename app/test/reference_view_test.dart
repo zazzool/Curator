@@ -10,6 +10,7 @@ import 'package:curator/reference/criteria.dart';
 import 'package:curator/reference/model.dart';
 import 'package:curator/reference/source_screen.dart';
 import 'package:curator/text/hyphenation.dart';
+import 'package:curator/text/prose.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -273,6 +274,61 @@ void main() {
     expect(find.byIcon(Icons.folder_outlined), findsOneWidget);
     expect(find.byIcon(Icons.description_outlined), findsOneWidget);
     expect(find.text('Критерии: 4'), findsOneWidget);
+  });
+
+  testWidgets('короткая таблица показывается сеткой, длинная — построчно', (
+    tester,
+  ) async {
+    // Сетка проверяется виджетом, а не только выбором вида: выбор может
+    // быть верным, а нарисованное — пустым, и разницу видно только здесь.
+    await show(
+      tester,
+      const ProseTable(
+        heads: true,
+        rows: [
+          ['Код', 'Синдром'],
+          ['F10.2', 'Синдром зависимости'],
+        ],
+      ),
+    );
+    expect(find.byType(Table), findsOneWidget);
+    expect(find.text('Синдром зависимости'), findsOneWidget);
+
+    // Длинные ячейки в сетку не идут: шапка там становится подписью над
+    // значением, и каждая строка читается сверху вниз.
+    const long =
+        'Паркинсонизм предшествует деменции или совпадает с ней по времени, '
+        'и двигательный синдром при этом ведущий';
+    await show(
+      tester,
+      const ProseTable(
+        heads: true,
+        rows: [
+          ['Признак', 'F02.3'],
+          ['Двигательный синдром', long],
+        ],
+      ),
+    );
+    expect(find.byType(Table), findsNothing);
+    // Шапка показана подписью, а не потеряна вместе с сеткой.
+    expect(find.text('F02.3'), findsOneWidget);
+    expect(find.text('Признак'), findsOneWidget);
+  });
+
+  testWidgets('выноска и линейка не теряются при показе', (tester) async {
+    await show(
+      tester,
+      const Prose(
+        'Первое.\n\n> **Примечание:** особый случай.\n\n---\n\nВторое.',
+      ),
+    );
+    expect(find.byType(Divider), findsOneWidget);
+    final texts = tester
+        .widgetList<RichText>(find.byType(RichText))
+        .map((w) => w.text.toPlainText().replaceAll(softHyphen, ''))
+        .toList();
+    expect(texts.any((t) => t.contains('Примечание: особый случай.')), isTrue);
+    expect(texts.any((t) => t.contains('*')), isFalse);
   });
 
   test('путь показывается без последнего звена', () {
