@@ -136,13 +136,16 @@ type Plan struct {
 
 	Unit UnitRef `json:"unit"`
 
-	// StatementsMd — положения единицы, собранные в Markdown. Это и есть
-	// указания, на которые опирается модель, — из данных источника, а не
-	// из встроенного знания.
+	// Statements — положения единицы, как они прочитаны при заказе.
+	// StatementsMd — те же положения, собранные в текст задания.
 	//
-	// Собираются ОДИН раз, при заказе, и тем же полем уезжают и в задание
-	// модели, и в слепую сверку: два чтения разошлись бы молча.
-	StatementsMd string `json:"statementsMd"`
+	// Оба поля собираются ОДИН раз, при заказе, из одного чтения, и тем же
+	// текстом уезжают и в задание модели, и в слепую сверку: два чтения
+	// разошлись бы молча. Разбирать текст обратно в обозначения нельзя по
+	// той же причине — это была бы вторая реализация сборки, и расходилась
+	// бы она с первой тихо.
+	Statements   []StatementRef `json:"statements"`
+	StatementsMd string         `json:"statementsMd"`
 
 	// Target — положение, заказанное эталоном у задачи-действия. У задачи
 	// на узнавание пусто.
@@ -237,6 +240,7 @@ func (r *Resolver) Resolve(ctx context.Context, order Order) (Plan, error) {
 	if len(statements) == 0 {
 		return Plan{}, fmt.Errorf("у единицы %q нет ни одного положения: писать не по чему", label)
 	}
+	plan.Statements = statements
 	plan.StatementsMd = statementsMarkdown(statements)
 
 	if kind == KindAction {
@@ -347,22 +351,20 @@ func (r *Resolver) siblings(ctx context.Context, sourceID int64, label, parentLa
 	return out, nil
 }
 
-// statementsMarkdown собирает положения в текст задания.
-//
-// Обозначение и ссылка на место идут вместе с телом: по ним составитель
-// находит положение в первоисточнике, когда спорит с задачей. Выдуманных
-// здесь не появляется — у документа, где их нет, они пусты.
 func statementsMarkdown(statements []StatementRef) string {
+	names := Plan{Statements: statements}.Designations()
 	var b strings.Builder
 	for i, st := range statements {
 		if i > 0 {
 			b.WriteString("\n")
 		}
+		// Обозначение и ссылка на место идут вместе с телом: по ним
+		// составитель находит положение в первоисточнике, когда спорит с
+		// задачей. Выдуманных здесь не появляется — у документа, где их
+		// нет, стоит номер по списку.
 		b.WriteString("- ")
-		if st.Designation != "" {
-			b.WriteString(st.Designation)
-			b.WriteString(". ")
-		}
+		b.WriteString(names[i])
+		b.WriteString(". ")
 		b.WriteString(st.Body)
 		if st.PlaceRef != "" {
 			b.WriteString(" (")
@@ -372,3 +374,27 @@ func statementsMarkdown(statements []StatementRef) string {
 	}
 	return b.String()
 }
+
+// Designations — обозначения положений, какими на них ссылается разметка.
+//
+// Обозначение может быть пустым — у документа, где положения не подписаны.
+// Тогда ссылка идёт номером по списку, и номер этот считается здесь, один
+// раз: модель, выдумавшая нумерацию сама, разметила бы задачу по своему
+// счёту, а не по документу.
+func (p Plan) Designations() []string {
+	out := make([]string, 0, len(p.Statements))
+	for i, st := range p.Statements {
+		if d := strings.TrimSpace(st.Designation); d != "" {
+			out = append(out, d)
+			continue
+		}
+		out = append(out, fmt.Sprintf("%d", i+1))
+	}
+	return out
+}
+
+// statementsMarkdown собирает положения в текст задания.
+//
+// Каждое положение названо тем же обозначением, каким на него будет
+// ссылаться разметка (см. Designations): модель должна видеть в задании
+// ровно те имена, которыми ей разрешено ссылаться.

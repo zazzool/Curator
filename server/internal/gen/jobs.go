@@ -232,3 +232,62 @@ func (j *Jobs) Recent(ctx context.Context, sourceID int64, limit int) ([]Job, er
 	}
 	return out, nil
 }
+
+// SaveDraft кладёт черновик задачи, написанный по заданию.
+//
+// Черновик — это ответ модели, принятый разбором: он хранится целиком и
+// отдельно от задачи. Задачей он станет, когда его примет составитель, и
+// до тех пор ни один запрос, читающий задачи, его не увидит — по той же
+// причине, по какой черновик разбора источника живёт в своих таблицах:
+// флаг забывают в условии запроса, отдельную таблицу забыть нельзя.
+func (j *Jobs) SaveDraft(ctx context.Context, job Job, draft Draft) (int64, error) {
+	body, err := json.Marshal(draft)
+	if err != nil {
+		return 0, fmt.Errorf("черновик задачи не записан: %w", err)
+	}
+	var id int64
+	err = j.gate.QueryRow(ctx,
+		`INSERT INTO case_drafts (job_id, source_id, unit_label, body)
+		 VALUES ($1, $2, $3, $4)
+		 RETURNING id`,
+		job.ID, job.SourceID, job.UnitLabel, body).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("черновик задачи не сохранён: %w", err)
+	}
+	return id, nil
+}
+
+// Drafts — черновики, написанные по заданию.
+//
+// Списком, а не одним: перегенерация пишет второй черновик по тому же
+// заданию, и прежний не затирается. Составитель сравнивает их и выбирает,
+// а затёртый черновик сравнить не с чем.
+func (j *Jobs) Drafts(ctx context.Context, jobID int64) ([]Draft, error) {
+	rows, err := j.gate.Query(ctx,
+		`SELECT body FROM case_drafts WHERE job_id = $1 ORDER BY id`, jobID)
+	if err != nil {
+		return nil, fmt.Errorf("черновики задания %d не прочитаны: %w", jobID, err)
+	}
+	defer rows.Close()
+
+	out := []Draft{}
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			return nil, fmt.Errorf("строка черновика не разобрана: %w", err)
+		}
+		var draft Draft
+		if err := json.Unmarshal(raw, &draft); err != nil {
+			// Непонятое не применяется: черновик, записанный прежней
+			// выкаткой и не разобравшийся нынешней, — это не черновик с
+			// пробелом. Отдать его наполовину значит показать составителю
+			// задачу, которой никто не писал.
+			return nil, fmt.Errorf("черновик задания %d не разобран: %w", jobID, err)
+		}
+		out = append(out, draft)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("черновики дочитаны не до конца: %w", err)
+	}
+	return out, nil
+}
