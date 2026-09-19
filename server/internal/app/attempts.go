@@ -11,6 +11,7 @@ import (
 
 	"curator/server/internal/dbgate"
 	"curator/server/internal/progress"
+	"curator/server/internal/signs"
 )
 
 // Попытки: что врач ответил и что из этого следует.
@@ -65,6 +66,11 @@ type Outcome struct {
 	// ответом: иначе приложение спрашивало бы их вторым обращением сразу
 	// после первого, из того же метро, где второго может и не случиться.
 	Metrics Metrics
+
+	// Signs — знаки, выданные ЭТОЙ пачкой, и только они. Приложение
+	// показывает их врачу как событие: знак, о котором он узнал бы при
+	// следующем заходе в раздел наград, не награда, а находка.
+	Signs []signs.Issued
 }
 
 // ModeReview — разбор по расписанию повторения.
@@ -137,6 +143,27 @@ func (a *Attempts) Record(ctx context.Context, accountID int64, batch []Attempt,
 			return err
 		}
 		out.Metrics = metrics
+
+		// Знаки выдаются здесь же, в той же транзакции: разорви эти два
+		// действия — и обрыв между ними оставит либо знак без величины,
+		// которая его объясняет, либо величину без знака, который по ней
+		// положен.
+		issued, bonus, err := signs.Award(ctx, tx, accountID, metrics)
+		if err != nil {
+			return err
+		}
+		if bonus > 0 {
+			// Опыт за знак начисляется по ВЫДАННОМУ: знак с тиражом можно
+			// заслужить и не получить, и расчёт «по заслугам» показал бы
+			// врачу опыт за знак, которого у него нет.
+			xp += bonus
+			level = a.rules.Level(xp)
+			if err := saveProgress(ctx, tx, accountID, xp, level); err != nil {
+				return err
+			}
+			out.XP, out.Level = xp, level
+		}
+		out.Signs = issued
 
 		out.Due, err = countDue(ctx, tx, accountID, now)
 		return err
@@ -314,6 +341,27 @@ func (a *Attempts) Due(ctx context.Context, accountID int64, now time.Time, limi
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("задачи к повторению не дочитаны: %w", err)
+	}
+	return out, nil
+}
+
+// Signs отдаёт каталог знаков глазами врача.
+//
+// Каталог целиком, вместе с невыданными: знак, о котором врач не знает, не
+// мотивирует никого. Величины берутся снимком — тем же, что показывает
+// прогресс.
+func (a *Attempts) Signs(ctx context.Context, accountID int64) ([]signs.Held, error) {
+	var out []signs.Held
+	err := a.gate.InTx(ctx, func(tx pgx.Tx) error {
+		metrics, err := loadMetrics(ctx, tx, accountID)
+		if err != nil {
+			return err
+		}
+		out, err = signs.List(ctx, tx, accountID, metrics)
+		return err
+	})
+	if err != nil {
+		return nil, err
 	}
 	return out, nil
 }

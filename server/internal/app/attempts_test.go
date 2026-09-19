@@ -41,6 +41,7 @@ func дверьСЧасами(t *testing.T) (*httptest.Server, *dbgate.Gate, str
 	door.Device("POST /v1/attempts", r.record)
 	door.Device("GET /v1/progress", r.progress)
 	door.Device("GET /v1/review", r.review)
+	door.Device("GET /v1/signs", r.signs)
 
 	srv := httptest.NewServer(door.Handler())
 	t.Cleanup(srv.Close)
@@ -361,6 +362,15 @@ func TestPgОтветыПовторенияСходятсяСЭталоном(t 
 	// Часы переводятся вперёд, иначе список к повторению пуст и сверять в
 	// нём нечего: эталон описывает не только оболочку, но и задачу внутри.
 	*clock = clock.Add(48 * time.Hour)
+
+	_, catalog, raw := call(t, srv, "GET", "/v1/signs", auth, nil)
+	matchShape(t, "GET /v1/signs", catalog, contract.Responses["GET /v1/signs"].Fields)
+	badges, _ := catalog["signs"].([]any)
+	if len(badges) == 0 {
+		t.Fatalf("каталог знаков пуст, сверять нечего: %s", raw)
+	}
+	badge, _ := badges[0].(map[string]any)
+	matchShape(t, "GET /v1/signs[]", badge, contract.Responses["GET /v1/signs"].Each["signs"])
 
 	_, review, raw := call(t, srv, "GET", "/v1/review?limit=50", auth, nil)
 	matchShape(t, "GET /v1/review", review, contract.Responses["GET /v1/review"].Fields)

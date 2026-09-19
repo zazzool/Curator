@@ -36,6 +36,7 @@ func Routes(door *Door, feed *Feed, attempts *Attempts) {
 	door.Device("POST /v1/attempts", r.record)
 	door.Device("GET /v1/progress", r.progress)
 	door.Device("GET /v1/review", r.review)
+	door.Device("GET /v1/signs", r.signs)
 }
 
 type routes struct {
@@ -186,6 +187,14 @@ func (r *routes) record(w http.ResponseWriter, req *http.Request, caller Caller)
 		WriteError(w, http.StatusInternalServerError, "Разборы не сохранились. Попробуйте ещё раз")
 		return
 	}
+	// Знаки, выданные этой пачкой, — всегда список, пустой как []:
+	// пачка, никого не наградившая, это обычный случай, а не особый.
+	awarded := make([]map[string]any, 0, len(out.Signs))
+	for _, one := range out.Signs {
+		awarded = append(awarded, map[string]any{
+			"slug": one.Slug, "title": one.Title, "serial": one.Serial, "xp": one.XP,
+		})
+	}
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"accepted": out.Accepted,
 		"repeated": out.Repeated,
@@ -193,6 +202,7 @@ func (r *routes) record(w http.ResponseWriter, req *http.Request, caller Caller)
 		"level":    out.Level,
 		"due":      out.Due,
 		"metrics":  metricsJSON(out.Metrics),
+		"signs":    awarded,
 	})
 }
 
@@ -241,4 +251,38 @@ func metricsJSON(m Metrics) map[string]int64 {
 		out[string(one.Key)] = m[one.Key]
 	}
 	return out
+}
+
+// signs отдаёт каталог знаков.
+//
+// Каталог целиком, вместе с невыданными: знак, о котором врач не знает, не
+// мотивирует никого. Доля обладателей считается здесь, а не на устройстве:
+// из собственной истории врача её не вывести вовсе.
+func (r *routes) signs(w http.ResponseWriter, req *http.Request, caller Caller) {
+	list, err := r.attempts.Signs(req.Context(), caller.AccountID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "Не вышло получить ваши знаки")
+		return
+	}
+	out := make([]map[string]any, 0, len(list))
+	for _, one := range list {
+		row := map[string]any{
+			"slug":         one.Slug,
+			"title":        one.Title,
+			"kind":         string(one.Kind),
+			"issued":       one.Issued,
+			"progress":     one.Progress,
+			"issuedCount":  one.IssuedCount,
+			"editionSize":  one.EditionSize,
+			"holdersShare": one.HoldersShare,
+			"serial":       one.Serial,
+			"issuedAt":     "",
+			"revoked":      one.Revoked,
+		}
+		if one.Issued {
+			row["issuedAt"] = one.IssuedAt.Format(time.RFC3339)
+		}
+		out = append(out, row)
+	}
+	WriteJSON(w, http.StatusOK, map[string]any{"signs": out})
 }

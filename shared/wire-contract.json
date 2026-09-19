@@ -121,7 +121,22 @@
         "xp": "number",
         "level": "number",
         "due": "number",
-        "metrics": "object"
+        "metrics": "object",
+        "signs": "array"
+      },
+      "_signs": [
+        "signs — знаки, выданные ЭТОЙ пачкой, и только они. Всегда список,",
+        "пустой как []: пачка, никого не наградившая, — обычный случай.",
+        "Приложение показывает их как событие: знак, о котором врач узнал",
+        "бы при следующем заходе в раздел наград, не награда, а находка."
+      ],
+      "each": {
+        "signs": {
+          "slug": "string",
+          "title": "string",
+          "serial": "number",
+          "xp": "number"
+        }
       }
     },
 
@@ -133,6 +148,44 @@
         "level": "number",
         "due": "number",
         "metrics": "object"
+      }
+    },
+
+    "GET /v1/signs": {
+      "status": 200,
+      "_": [
+        "Каталог знаков глазами врача — ЦЕЛИКОМ, вместе с невыданными:",
+        "знак, о котором врач не знает, не мотивирует никого.",
+        "",
+        "issued разделяет два состояния. У выданного есть serial, issuedAt",
+        "и progress = 1; у невыданного serial ноль, issuedAt пустая строка",
+        "(не null: приложение показывает её как есть), а progress — доля",
+        "пути от 0 до 1.",
+        "",
+        "holdersShare, issuedCount и editionSize считает СЕРВЕР, и только",
+        "он: это сведения о том, каким врач пришёл среди всех, и из его",
+        "собственной истории они не выводятся. editionSize ноль значит",
+        "«тираж не ограничен».",
+        "",
+        "revoked — только у переходящего знака. Строка о выдаче не",
+        "удаляется никогда, поэтому отозванный знак остаётся в списке с",
+        "отметкой, а не исчезает."
+      ],
+      "fields": { "signs": "array" },
+      "each": {
+        "signs": {
+          "slug": "string",
+          "title": "string",
+          "kind": "string",
+          "issued": "boolean",
+          "progress": "number",
+          "serial": "number",
+          "issuedAt": "string",
+          "revoked": "boolean",
+          "issuedCount": "number",
+          "editionSize": "number",
+          "holdersShare": "number"
+        }
       }
     },
 
