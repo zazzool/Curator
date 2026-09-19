@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -14,9 +16,8 @@ import (
 // case_skipped — и событие тихо отбрасывается, а отчёт показывает ноль
 // пропусков. Ноль выглядит как данные.
 //
-// Построчной сверки с исходниками приложения здесь пока нет: самого
-// приложения ещё нет. Она обязана появиться вместе с ним, и это записано в
-// эталоне, а не оставлено на память.
+// Построчная сверка с исходником приложения стоит отдельно —
+// TestСловарьСобытийСходитсяСИсходникомПриложения.
 
 type catalogFile struct {
 	Events []struct {
@@ -110,6 +111,58 @@ func TestОтветНеЕдетТелеметрией(t *testing.T) {
 			if prop == "correct" || prop == "answer" {
 				t.Errorf("событие %s несёт свойство %q — это дело попытки, а не телеметрии",
 					one.Name, prop)
+			}
+		}
+	}
+}
+
+func TestСловарьСобытийСходитсяСИсходникомПриложения(t *testing.T) {
+	// Сверка построчная, а не через эталон: эталон держит смысл, эта
+	// проверка — то, что приложение действительно умеет слать. Словарь,
+	// у которого эталон правили вместе с одной из сторон, поймает только
+	// она.
+	path := filepath.Join("..", "..", "..", "app", "lib", "telemetry", "events.dart")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("исходник приложения %s не прочитан: %v. "+
+			"Это отказ, а не пропуск: словарь, зеркальный только на словах, "+
+			"расходится молча", path, err)
+	}
+
+	pattern := regexp.MustCompile(`TelemetryEvent\(\s*'([^']+)',\s*'([^']+)',\s*\[([^\]]*)\]`)
+	found := pattern.FindAllStringSubmatch(string(raw), -1)
+	if len(found) == 0 {
+		t.Fatalf("в %s не нашлось ни одного события по образцу: либо словарь "+
+			"переехал, либо его переписали иначе — и сверять стало нечего", path)
+	}
+
+	want := Catalog()
+	if len(found) != len(want) {
+		t.Fatalf("в словаре приложения %d событий, в серверном %d", len(found), len(want))
+	}
+	for i, one := range found {
+		if one[1] != want[i].Name || one[2] != want[i].Title {
+			t.Errorf("событие %d в приложении %q/%q, на сервере %q/%q",
+				i, one[1], one[2], want[i].Name, want[i].Title)
+			continue
+		}
+		// Свойства сверяются тоже: свойство, которого сервер не знает,
+		// отбрасывается вместе со значением — то есть исчезает молча.
+		props := []string{}
+		for _, raw := range strings.Split(one[3], ",") {
+			if trimmed := strings.Trim(strings.TrimSpace(raw), "'"); trimmed != "" {
+				props = append(props, trimmed)
+			}
+		}
+		if len(props) != len(want[i].Props) {
+			t.Errorf("у события %s в приложении свойств %d, на сервере %d: %v против %v",
+				one[1], len(props), len(want[i].Props), props, want[i].Props)
+			continue
+		}
+		for j, prop := range props {
+			if prop != want[i].Props[j] {
+				t.Errorf("у события %s свойство %d: в приложении %q, на сервере %q",
+					one[1], j, prop, want[i].Props[j])
 			}
 		}
 	}

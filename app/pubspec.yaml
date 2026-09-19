@@ -1,0 +1,22 @@
+name: curator
+description: "Куратор: учебные ситуационные задачи для врачей."
+publish_to: 'none'
+
+# Номер сборки растёт с каждой выкладкой: по нему установленное приложение
+# понимает, что вышло новое. Имя версии видит человек, номер — механика.
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.11.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
