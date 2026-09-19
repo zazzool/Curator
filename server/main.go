@@ -29,6 +29,7 @@ import (
 	"curator/server/internal/gen"
 	"curator/server/internal/llm"
 	"curator/server/internal/llmusage"
+	"curator/server/internal/progress"
 	"curator/server/internal/source"
 	"curator/server/internal/studio"
 )
@@ -114,7 +115,7 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 	if gate != nil {
 		keys = app.NewKeys(gate)
 		door := app.NewDoor(keys, app.NewAccounts(gate))
-		app.Routes(door, app.NewFeed(gate))
+		app.Routes(door, app.NewFeed(gate), app.NewAttempts(gate, progress.Default()))
 		mux.Handle("/v1/", door.Handler())
 	}
 
