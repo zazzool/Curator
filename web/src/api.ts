@@ -222,6 +222,16 @@ export type EventCount = {
   accounts: number
 }
 
+// Ключ программы: им сборка приложения представляется серверу. Секрета
+// здесь нет и быть не может — он показывается один раз при заведении и в
+// базе не хранится вовсе.
+export type AppKey = {
+  keyId: string
+  title: string
+  disabled: boolean
+  createdAt: string
+}
+
 export type Me = {
   login: string
   displayName: string
@@ -489,6 +499,20 @@ export const api = {
     request<{ days: number; events: EventCount[] }>(
       'GET',
       `/admin/api/reports/events?days=${days}`,
+    ),
+
+  appKeys: () => request<{ keys: AppKey[] }>('GET', '/admin/api/app-keys'),
+
+  // Ответ несёт сам ключ, а не его опознаватель: «key» — это секрет, и
+  // отдаётся он единственный раз в жизни ключа. Второй раз его не покажет
+  // никто — в базе лежит только отпечаток.
+  issueAppKey: (key: { keyId: string; title: string }) =>
+    request<{ key: string; note: string }>('POST', '/admin/api/app-keys', key),
+
+  disableAppKey: (keyId: string) =>
+    request<{ status: string }>(
+      'POST',
+      `/admin/api/app-keys/${encodeURIComponent(keyId)}/disable`,
     ),
 
   contentVersion: () => request<{ version: number }>('GET', '/admin/api/content-version'),

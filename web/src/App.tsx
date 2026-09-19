@@ -4,6 +4,7 @@ import { Login } from './Login'
 import { Packs } from './Packs'
 import { Reports } from './Reports'
 import { Sales } from './Sales'
+import { Workshop } from './Workshop'
 import { SourceList } from './SourceList'
 import { SourceScreen } from './SourceScreen'
 import { api, setToken } from './api'
@@ -21,6 +22,7 @@ const SECTIONS = [
   { id: 'packs', title: 'Наборы' },
   { id: 'sales', title: 'Продажи' },
   { id: 'reports', title: 'Отчёты' },
+  { id: 'workshop', title: 'Мастерская' },
 ] as const
 
 type Section = (typeof SECTIONS)[number]['id']
@@ -74,6 +76,8 @@ export function App() {
         <Sales me={me} />
       ) : section === 'reports' ? (
         <Reports me={me} />
+      ) : section === 'workshop' ? (
+        <Workshop me={me} />
       ) : openSource === null ? (
         <SourceList me={me} onOpen={setOpenSource} />
       ) : (
