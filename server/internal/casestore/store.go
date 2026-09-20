@@ -311,7 +311,33 @@ type Filter struct {
 	SourceID int64
 	Path     string
 	Status   Status
-	Limit    int
+
+	// Query — поиск по названию задачи, метке единицы и опознавателю.
+	//
+	// Три поля разом, а не поле на выбор: составитель ищет задачу по
+	// тому, что у него перед глазами, — по названию из списка, по метке
+	// из документа или по опознавателю из чужого письма, — и спрашивать
+	// у него, что именно он набрал, значит заставлять выбирать между
+	// тремя способами не найти.
+	//
+	// Регистр не важен: метка приказа пишется то прописными, то
+	// строчными, и «f32» обязано находить «F32».
+	Query string
+
+	Limit int
+}
+
+// Counts — сколько задач в каждом состоянии при этом отборе.
+//
+// Считается БЕЗ отбора по состоянию, и это главное: числа стоят на самих
+// вкладках состояний, и посчитанные с учётом открытой вкладки они
+// показывали бы ноль везде, кроме неё.
+type Counts struct {
+	All       int `json:"all"`
+	Draft     int `json:"draft"`
+	Review    int `json:"review"`
+	Published int `json:"published"`
+	Archived  int `json:"archived"`
 }
 
 // CasesShown приводит спрошенный предел к тому, сколько задач ручка
@@ -340,9 +366,13 @@ func (s *Store) Cases(ctx context.Context, f Filter) ([]Case, error) {
 		 WHERE ($1 = 0 OR source_id = $1)
 		   AND ($2 = '' OR status = $2)
 		   AND ($3 = '' OR unit_path = $3 OR unit_path LIKE $4 ESCAPE '\')
+		   AND ($5 = '' OR id ILIKE $6 ESCAPE '\'
+		        OR unit_label ILIKE $6 ESCAPE '\'
+		        OR body->>'title' ILIKE $6 ESCAPE '\')
 		 ORDER BY updated_at DESC
-		 LIMIT $5`,
-		f.SourceID, string(f.Status), f.Path, escapeLike(f.Path)+`/%`, limit)
+		 LIMIT $7`,
+		f.SourceID, string(f.Status), f.Path, escapeLike(f.Path)+`/%`,
+		f.Query, `%`+escapeLike(f.Query)+`%`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("задачи не прочитаны: %w", err)
 	}
@@ -362,6 +392,40 @@ func (s *Store) Cases(ctx context.Context, f Filter) ([]Case, error) {
 		return nil, fmt.Errorf("задачи не дочитаны: %w", err)
 	}
 	return out, nil
+}
+
+// CaseCounts — сколько задач в каждом состоянии при этом отборе.
+//
+// Отбор по состоянию из отбора выбрасывается намеренно: числа стоят на
+// вкладках состояний, и посчитанные с учётом открытой вкладки они
+// показывали бы ноль везде, кроме неё, — то есть врали бы ровно о том,
+// ради чего их и показывают («на выверке набралось двенадцать» видно до
+// того, как туда заглянуть).
+//
+// Одним запросом, а не пятью: пять запросов по одному и тому же отбору
+// расходятся между собой на задаче, выпущенной между первым и пятым, и
+// сумма перестаёт сходиться с «Всё» — молча.
+func (s *Store) CaseCounts(ctx context.Context, f Filter) (Counts, error) {
+	var c Counts
+	err := s.gate.QueryRow(ctx, `
+		SELECT count(*),
+		       count(*) FILTER (WHERE status = 'draft'),
+		       count(*) FILTER (WHERE status = 'review'),
+		       count(*) FILTER (WHERE status = 'published'),
+		       count(*) FILTER (WHERE status = 'archived')
+		  FROM cases
+		 WHERE ($1 = 0 OR source_id = $1)
+		   AND ($2 = '' OR unit_path = $2 OR unit_path LIKE $3 ESCAPE '\')
+		   AND ($4 = '' OR id ILIKE $5 ESCAPE '\'
+		        OR unit_label ILIKE $5 ESCAPE '\'
+		        OR body->>'title' ILIKE $5 ESCAPE '\')`,
+		f.SourceID, f.Path, escapeLike(f.Path)+`/%`,
+		f.Query, `%`+escapeLike(f.Query)+`%`,
+	).Scan(&c.All, &c.Draft, &c.Review, &c.Published, &c.Archived)
+	if err != nil {
+		return Counts{}, fmt.Errorf("задачи не сосчитаны: %w", err)
+	}
+	return c, nil
 }
 
 // Version — версия опубликованного содержания.

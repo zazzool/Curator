@@ -4,48 +4,77 @@ import { ApiError, api } from './api'
 import { dropDraft, readDraft, writeDraft } from './draftStore'
 import { Loaded, useResource } from './useResource'
 import { confirmed } from './confirm'
-import type { Case, CaseBody, Fault, Me, Source } from './api'
+import { go } from './router'
+import type { Case, CaseBody, Fault, Me } from './api'
 import { датойИвременем } from './words'
 import { Banner } from './components/Banner'
+import { DifficultyDots } from './components/DifficultyDots'
 
-// Задачи источника: что написано, что выверено, что раздаётся.
-//
-// Раздел стоит на экране источника по той же причине, что и генерация:
-// задача принадлежит единице источника, и список задач в отрыве от
-// источника пришлось бы читать по меткам, набранным руками.
-export function Cases({ me, source, path }: { me: Me; source: Source; path: string }) {
-  const [status, setStatus] = useState('')
-  const [open, setOpen] = useState<Case | null>(null)
+/**
+ * Задача целиком — её паспорт, текст и правка.
+ *
+ * Страница, а не панель внутри списка. Панелью она и была: задача
+ * открывалась под списком, на экране источника, третьим разделом снизу, и
+ * правка шла там же. Читалось это ровно до первой длинной задачи —
+ * условие из десяти фрагментов уезжало вниз вместе со списком, а
+ * вернуться к нему можно было только прокруткой.
+ *
+ * У страницы есть свой адрес, и это главное: «посмотри, что не так вот с
+ * этой задачей» стало ссылкой. Устройство донорское — паспорт сверху,
+ * условие с разметкой, ответ, разбор.
+ *
+ * Правка живёт здесь же, а не ещё одним экраном: составитель правит то,
+ * что сейчас читает, и переход заставил бы его держать в голове, что
+ * именно он там видел.
+ */
+export function CasePage({ me, id }: { me: Me; id: string }) {
+  const read = useCallback(async () => await api.case(id), [id])
+  const opened = useResource(read, 'Задача не прочитана')
+
+  return (
+    <div>
+      <div className="page-head">
+        <h2>Задача</h2>
+        <button onClick={() => go({ name: 'cases', query: {} })}>К задачам</button>
+      </div>
+      <Loaded from={opened} while="Читаем задачу…">
+        {(one) => <CaseCard me={me} one={one} onChanged={opened.set} />}
+      </Loaded>
+    </div>
+  )
+}
+
+function CaseCard({
+  me,
+  one,
+  onChanged,
+}: {
+  me: Me
+  one: Case
+  onChanged: (next: Case) => void
+}) {
+  const canWrite = me.permissions.includes('case:write')
+  const раздаётся = one.status === 'published'
+  const [editing, setEditing] = useState(false)
   const [failure, setFailure] = useState('')
+  /** Замечания сервера: он называет все разом, а не первое — правка идёт в один заход. */
   const [faults, setFaults] = useState<Fault[]>([])
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
 
-  const canWrite = me.permissions.includes('case:write')
-
-  const read = useCallback(async () => {
-    const loaded = await api.cases({ source: source.id, path, status })
-    // Список без списка — пустой список, а не падение раздела: раздел,
-    // не сумевший прочитать своё, обязан молчать в своих границах, а не
-    // ронять белым весь экран источника.
-    return loaded?.cases ?? []
-  }, [source.id, path, status])
-  const cases = useResource(read, 'Задачи не прочитаны')
-  const reload = cases.reload
-
-  // clear разводит два разных отказа: обычный и список замечаний. Смешай
-  // их — и после неудачной публикации замечания висели бы поверх
-  // следующего, уже другого отказа.
+  // Разводит два разных отказа: обычный и список замечаний. Смешай их — и
+  // после неудачного выпуска замечания висели бы поверх следующего, уже
+  // другого отказа.
   function clear() {
     setFailure('')
     setFaults([])
     setNote('')
   }
 
-  async function act(what: 'publish' | 'withdraw', id: string) {
+  async function act(what: 'publish' | 'withdraw') {
     // Спрашивается только снятие: раздать задачу обратно можно той же
-    // кнопкой, а снятую врач теряет из ленты и из повторения сразу —
-    // и заметит это не здесь.
+    // кнопкой, а снятую врач теряет из ленты и из повторения сразу — и
+    // заметит это не здесь.
     if (
       what === 'withdraw' &&
       !confirmed(
@@ -59,14 +88,14 @@ export function Cases({ me, source, path }: { me: Me; source: Source; path: stri
     setBusy(true)
     clear()
     try {
-      const done = what === 'publish' ? await api.publishCase(id) : await api.withdrawCase(id)
+      const done =
+        what === 'publish' ? await api.publishCase(one.id) : await api.withdrawCase(one.id)
+      onChanged(done)
       setNote(
         what === 'publish'
           ? 'Задача раздаётся. Устройства увидят её при следующей сверке версии.'
           : 'Задача снята с раздачи. Из базы она не удалена — попытки по ней остаются.',
       )
-      if (open?.id === id) setOpen(done)
-      await reload()
     } catch (error) {
       if (error instanceof ApiError) {
         setFailure(error.message)
@@ -79,29 +108,34 @@ export function Cases({ me, source, path }: { me: Me; source: Source; path: stri
     }
   }
 
-  async function show(id: string) {
-    clear()
-    try {
-      setOpen(await api.case(id))
-    } catch (error) {
-      setFailure(error instanceof ApiError ? error.message : 'Задача не прочитана')
-    }
+  if (editing) {
+    return (
+      <CaseEditor
+        one={one}
+        onClose={() => setEditing(false)}
+        onSaved={(saved) => {
+          setEditing(false)
+          onChanged(saved)
+        }}
+      />
+    )
   }
 
   return (
-    <section className="page-section">
+    <>
       <div className="page-head">
-        <h2>Задачи</h2>
-        <label className="form-row">
-          <span className="fld-label">Состояние</span>
-          <select className="fld-medium" value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="">все</option>
-            <option value="draft">черновики</option>
-            <option value="review">на выверке</option>
-            <option value="published">раздаются</option>
-            <option value="archived">сняты с раздачи</option>
-          </select>
-        </label>
+        <h3>{one.body?.title || 'без названия'}</h3>
+        {canWrite && !раздаётся && <button onClick={() => setEditing(true)}>Править</button>}
+        {canWrite && !раздаётся && (
+          <button className="primary" onClick={() => void act('publish')} disabled={busy}>
+            Раздавать
+          </button>
+        )}
+        {canWrite && раздаётся && (
+          <button className="danger" onClick={() => void act('withdraw')} disabled={busy}>
+            Снять с раздачи
+          </button>
+        )}
       </div>
 
       {failure && <Banner kind="error">{failure}</Banner>}
@@ -122,113 +156,6 @@ export function Cases({ me, source, path }: { me: Me; source: Source; path: stri
           право править: выпуск — это решение о том, что теперь видят врачи.
         </p>
       )}
-
-      {/* «Задач нет» — это ответ, и до ответа его писать нельзя: прежде
-          список заводился пустым, и первую секунду каждого открытия
-          составитель читал, что задач по источнику ещё нет. */}
-      <Loaded from={cases} while="Читаем задачи…">
-      {(list) => list.length === 0 ? (
-        <p className="empty">
-          {path
-            ? 'Под этим путём задач нет. Проверьте метку — она пишется так же, как в документе.'
-            : 'По этому источнику задач ещё нет. Закажите первую в разделе «Генерация».'}
-        </p>
-      ) : (
-        <div className="list">
-          {list.map((one) => (
-            <div key={one.id} className="list-row">
-              <span>
-                <span className="mono">{one.unitLabel}</span> {one.body.title || 'без названия'}
-              </span>
-              <span className="muted">{one.statusWord}</span>
-              <button onClick={() => show(one.id)}>Открыть</button>
-              {canWrite && one.status !== 'published' && (
-                <button onClick={() => act('publish', one.id)} disabled={busy}>
-                  Раздавать
-                </button>
-              )}
-              {canWrite && one.status === 'published' && (
-                <button
-                  className="danger"
-                  onClick={() => act('withdraw', one.id)}
-                  disabled={busy}
-                >
-                  Снять с раздачи
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-      </Loaded>
-
-      {open && (
-        <CaseCard
-          me={me}
-          one={open}
-          onClose={() => setOpen(null)}
-          onSaved={(saved) => {
-            setOpen(saved)
-            void reload()
-          }}
-        />
-      )}
-    </section>
-  )
-}
-
-/**
- * Задача целиком — и её правка.
- *
- * Правка живёт здесь, а не отдельным экраном: составитель правит то, что
- * сейчас читает, и переход на другой экран заставил бы его держать в
- * голове, что именно он там увидел. До этой правки право «править задачи»
- * обещало словами то, чего студия не умела вовсе: написанное моделью
- * можно было только прочитать.
- *
- * Раздаваемая задача не правится, и отказывает в этом сервер: правка
- * молча меняет то, что уже видят на устройствах, и расходится с
- * попытками, записанными по прежнему тексту. Снять с раздачи — отдельное
- * решение составителя. Здесь об этом сказано словами, чтобы он не искал
- * поломку там, где её нет.
- */
-function CaseCard({
-  me,
-  one,
-  onClose,
-  onSaved,
-}: {
-  me: Me
-  one: Case
-  onClose: () => void
-  onSaved: (saved: Case) => void
-}) {
-  const canWrite = me.permissions.includes('case:write')
-  const раздаётся = one.status === 'published'
-  const [editing, setEditing] = useState(false)
-
-  if (editing) {
-    return (
-      <CaseEditor
-        one={one}
-        onClose={() => setEditing(false)}
-        onSaved={(saved) => {
-          setEditing(false)
-          onSaved(saved)
-        }}
-      />
-    )
-  }
-
-  return (
-    <div className="page-section">
-      <div className="page-head">
-        <h2>{one.body.title || 'без названия'}</h2>
-        {canWrite && !раздаётся && (
-          <button onClick={() => setEditing(true)}>Править</button>
-        )}
-        <button onClick={onClose}>Закрыть</button>
-      </div>
       {canWrite && раздаётся && (
         <p className="hint">
           Раздаваемая задача не правится: её уже видят на устройствах, и
@@ -236,40 +163,131 @@ function CaseCard({
           Снимите её с раздачи, если нужно исправить.
         </p>
       )}
-      <p className="hint">
-        {one.statusWord} · {one.unitPath} · редакция {one.revision}
-      </p>
-      {/* Поля тела объявлены обязательными, но пишет их модель, и
-          недописанное она отдаёт молча. Перебор отсутствующего бросает
-          во время отрисовки, а отказ отрисовки снимает дерево целиком —
-          граница отказа удержит его в этой панели, но и панель терять
-          незачем, когда цена бережности два знака. */}
-      <p>
-        {(one.body?.segments ?? []).map((segment, i) => (
-          <span key={i}>
-            {segment.text}
-            {/* Разметка показывается прямо в условии: составитель
-                проверяет именно её, а сноска под текстом заставила бы его
-                считать фрагменты глазами. */}
-            {segment.statements && segment.statements.length > 0 && (
-              <sup className="mono"> {segment.statements.join(', ')}</sup>
-            )}{' '}
-          </span>
-        ))}
-      </p>
-      <ul className="units">
-        {(one.body?.options ?? []).map((option, i) => (
-          <li key={i}>
-            {option.label && <span className="mono">{option.label}</span>} {option.text}
-            {(option.label || option.text) === one.body?.answer && (
-              <span className="muted"> — верный ответ</span>
-            )}
-          </li>
-        ))}
-      </ul>
-      <p className="hint">{one.body.explanationMd}</p>
-    </div>
+
+      <Passport one={one} />
+
+      <section className="page-section">
+        <h3>Условие</h3>
+        {/* Поля тела объявлены обязательными, но пишет их модель, и
+            недописанное она отдаёт молча. Перебор отсутствующего бросает
+            во время отрисовки, а отказ отрисовки снимает дерево целиком. */}
+        <p>
+          {(one.body?.segments ?? []).map((segment, i) => (
+            <span key={i}>
+              {segment.text}
+              {/* Разметка показывается прямо в условии: составитель
+                  проверяет именно её, а сноска под текстом заставила бы
+                  его считать фрагменты глазами. */}
+              {segment.statements && segment.statements.length > 0 && (
+                <sup className="mono"> {segment.statements.join(', ')}</sup>
+              )}{' '}
+            </span>
+          ))}
+        </p>
+      </section>
+
+      <section className="page-section">
+        <h3>Ответ</h3>
+        <ul className="units">
+          {(one.body?.options ?? []).map((option, i) => (
+            <li key={i}>
+              {option.label && <span className="mono">{option.label}</span>} {option.text}
+              {(option.label || option.text) === one.body?.answer && (
+                <span className="muted"> — верный ответ</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section className="page-section">
+        <h3>Разбор</h3>
+        <p className="hint">{one.body?.explanationMd}</p>
+      </section>
+    </>
   )
+}
+
+/**
+ * Паспорт задачи: то, чем она опознаётся и отбирается.
+ *
+ * Сведения о задаче, а не её содержание. Стоят выше условия по донорскому
+ * порядку: составитель, открывший задачу по ссылке из чужого письма,
+ * первым делом спрашивает «какая это и в каком она состоянии», а уже
+ * потом читает текст.
+ *
+ * Опознаватель показывается целиком и моноширинным: его переписывают в
+ * письма и в разговоры, и сокращённый он для этого не годится.
+ */
+function Passport({ one }: { one: Case }) {
+  return (
+    <section className="page-section">
+      <h3>Паспорт</h3>
+      <div className="table-wrap">
+        <table className="table">
+          <tbody>
+            <tr>
+              <th>Опознаватель</th>
+              <td>
+                <span className="mono">{one.id}</span>
+              </td>
+            </tr>
+            <tr>
+              <th>Состояние</th>
+              <td>
+                <span className={`tag ${one.status}`}>{one.statusWord}</span>
+              </td>
+            </tr>
+            <tr>
+              <th>Единица источника</th>
+              <td>
+                {/* Путь целиком, а не одна метка: по нему видно, где
+                    единица стоит в источнике, и он же — то, чем задача
+                    отбирается срезом. */}
+                <span className="mono">{one.unitLabel}</span>{' '}
+                <span className="muted">{one.unitPath}</span>
+              </td>
+            </tr>
+            <tr>
+              <th>Сложность</th>
+              <td>
+                <DifficultyDots level={one.body?.difficulty ?? 0} />
+              </td>
+            </tr>
+            <tr>
+              <th>Что проверяет</th>
+              <td>{видомЗадачи(one.body?.kind ?? '')}</td>
+            </tr>
+            <tr>
+              <th>Редакция</th>
+              <td>{one.revision}</td>
+            </tr>
+            <tr>
+              <th>Заведена</th>
+              <td>{датойИвременем(one.createdAt)}</td>
+            </tr>
+            <tr>
+              <th>Изменена</th>
+              <td>{датойИвременем(one.updatedAt)}</td>
+            </tr>
+            {one.publishedAt && (
+              <tr>
+                <th>Выпущена</th>
+                <td>{датойИвременем(one.publishedAt)}</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
+
+/** Вид задачи словами составителя: «recognise» ему ничего не говорит. */
+function видомЗадачи(kind: string): string {
+  if (kind === 'recognise') return 'узнавание'
+  if (kind === 'action') return 'действие'
+  return kind || '—'
 }
 
 /**
@@ -338,7 +356,7 @@ function CaseEditor({
   return (
     <div className="page-section">
       <div className="page-head">
-        <h2>Правка задачи</h2>
+        <h3>Правка задачи</h3>
         <button onClick={onClose}>Отменить</button>
       </div>
       <p className="hint">
@@ -346,9 +364,7 @@ function CaseEditor({
       </p>
       {failure && <Banner kind="error">{failure}</Banner>}
       {restored !== '' && (
-        <Banner kind="info">
-          Восстановлено несохранённое от {датойИвременем(restored)}.
-        </Banner>
+        <Banner kind="info">Восстановлено несохранённое от {датойИвременем(restored)}.</Banner>
       )}
 
       <label className="form-row">

@@ -43,16 +43,31 @@ func (r *routes) list(w http.ResponseWriter, req *http.Request, _ studio.User) {
 	asked, _ := strconv.Atoi(q.Get("limit"))
 	limit := CasesShown(asked)
 
-	// На одну больше предела: так «их ровно столько» и «их больше»
-	// различаются без второго запроса со счётом.
-	cases, err := r.store.Cases(req.Context(), Filter{
+	filter := Filter{
 		SourceID: sourceID,
 		Path:     q.Get("path"),
 		Status:   Status(q.Get("status")),
-		Limit:    limit + 1,
-	})
+		Query:    q.Get("q"),
+	}
+
+	// На одну больше предела: так «их ровно столько» и «их больше»
+	// различаются без второго запроса со счётом.
+	asking := filter
+	asking.Limit = limit + 1
+	cases, err := r.store.Cases(req.Context(), asking)
 	if err != nil {
 		studio.WriteError(w, http.StatusInternalServerError, "Задачи не прочитаны")
+		return
+	}
+
+	// Числа по состояниям считаются с тем же отбором, но без состояния:
+	// они стоят на самих вкладках состояний, и счёт с учётом открытой
+	// вкладки дал бы ноль везде, кроме неё.
+	counting := filter
+	counting.Status = ""
+	counts, err := r.store.CaseCounts(req.Context(), counting)
+	if err != nil {
+		studio.WriteError(w, http.StatusInternalServerError, "Задачи не сосчитаны")
 		return
 	}
 	more := len(cases) > limit
@@ -64,9 +79,10 @@ func (r *routes) list(w http.ResponseWriter, req *http.Request, _ studio.User) {
 		out = append(out, caseJSON(one))
 	}
 	studio.WriteJSON(w, http.StatusOK, map[string]any{
-		"cases": out,
-		"limit": limit,
-		"more":  more,
+		"cases":  out,
+		"limit":  limit,
+		"more":   more,
+		"counts": counts,
 	})
 }
 
