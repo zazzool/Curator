@@ -56,6 +56,25 @@ Future<void> main() async {
   // раньше первого экрана, а без этой строки она отказала бы на старте.
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Сборка без ключей дальше не идёт.
+  //
+  // Оба ключа задаются при сборке и имеют умолчанием пустую строку, и
+  // собранное без `--dart-define` приложение выглядело исправным, а не
+  // могло ничего: пустой ключ программы — это устройство, которое не
+  // заводится, а пустой список ключей наборов — это ответ «Этот набор
+  // подписан ключом, которого нет в приложении. Обновите приложение» на
+  // всякий набор. Врачу велят обновить то, что свежее некуда.
+  //
+  // Отказ именно здесь, а не при первом обращении: до врача такая сборка
+  // доехать не может — недостающее объявляется при сборке, — а вот до
+  // того, кто её собрал, доезжает мгновенно и с причиной. Молчаливое же
+  // умолчание в пустую строку ровно это и прятало.
+  final missing = missingDefines(_appKey, _packKeys);
+  if (missing.isNotEmpty) {
+    runApp(MisbuiltApp(missing: missing));
+    return;
+  }
+
   final api = Api(
     baseUrl: Uri.parse(_baseUrl),
     appKey: _appKey,
@@ -293,6 +312,53 @@ class _Failure extends StatelessWidget {
       title: 'Не вышло начать',
       description: text,
       action: OutlinedButton(onPressed: onRetry, child: const Text('Ещё раз')),
+    );
+  }
+}
+
+/// Чего не хватает сборке.
+///
+/// Отдельной работой, а не условием внутри main: разобранное при сборке
+/// значение проверке не подменить, и решение «поднимаемся или нет» иначе
+/// не проверялось бы вовсе.
+List<String> missingDefines(String appKey, String packKeys) => <String>[
+  if (appKey.isEmpty) 'CURATOR_APP_KEY',
+  if (TrustedKeys.parse(packKeys).isEmpty) 'CURATOR_PACK_KEYS',
+];
+
+/// Что показывает сборка, собранная без ключей.
+///
+/// Экран, а не исключение: упавшее при подъёме приложение не говорит
+/// ничего — ни белым экраном на устройстве, ни строкой в журнале, до
+/// которой ещё надо догадаться дойти. Читает это не врач, а тот, кто
+/// собирал, и ему нужно название недостающего, а не «что-то пошло не
+/// так».
+class MisbuiltApp extends StatelessWidget {
+  const MisbuiltApp({super.key, required this.missing});
+
+  final List<String> missing;
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Куратор',
+      theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
+      home: Scaffold(
+        body: SafeArea(
+          child: Padding(
+            padding: Gap.screenH,
+            child: EmptyState(
+              icon: const Icon(Icons.build_outlined),
+              title: 'Сборка собрана не до конца',
+              description:
+                  'При сборке не задано: ${missing.join(', ')}. '
+                  'Без этого приложение не заведёт устройство и не '
+                  'поставит ни одного набора.',
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

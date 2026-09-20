@@ -27,7 +27,11 @@ class Signed {
   final Map<String, Object?> bodies;
 }
 
-Future<Signed> signed({int count = 3}) async {
+Future<Signed> signed({
+  int count = 3,
+  String slug = 'primery',
+  int version = 3,
+}) async {
   final pair = await Ed25519().newKeyPair();
   final public = await pair.extractPublicKey();
 
@@ -43,8 +47,8 @@ Future<Signed> signed({int count = 3}) async {
   }
 
   final unsigned = Release.tryParse({
-    'slug': 'primery',
-    'version': 3,
+    'slug': slug,
+    'version': version,
     'title': 'Пример & образец',
     'releasedAt': '2026-09-19T10:00:00Z',
     'signature': 'покане',
@@ -277,5 +281,71 @@ void main() {
 
     expect(out.saved, 3);
     expect(await store.have('primery'), ['c-00', 'c-01', 'c-02']);
+  });
+  test('опись не того набора не принимается', () async {
+    // Подпись метку покрывает, значит подделать её нельзя. Но верно
+    // подписанный выпуск набора А приезжал в ответ на просьбу о наборе Б
+    // и принимался: хватило бы ошибки сервера, переименования или
+    // псевдонима. Задачи легли бы под запрошенной меткой, опись под
+    // пришедшей, и набор навсегда остался бы «не установленным» — врач
+    // качал бы его снова и снова, а работа без сети не включилась бы.
+    final one = await signed(slug: 'primery');
+    server.replies.add(Reply(200, releaseReply(one.release)));
+    server.replies.add(Reply(200, page(one.bodies, one.bodies.keys.toList())));
+
+    await expectLater(
+      Download(api, store, one.keys).run('drugoy'),
+      throwsA(isA<ContentFailure>()),
+    );
+    // Ни под запрошенной меткой, ни под пришедшей ничего не легло.
+    expect(await store.release('drugoy'), isNull);
+    expect(await store.release('primery'), isNull);
+    expect(await store.have('drugoy'), isEmpty);
+    expect(await store.have('primery'), isEmpty);
+  });
+
+  test('выпуск постарше не ложится поверх установленного', () async {
+    // Старый выпуск — это старые ответы. Сравнение версий в витрине есть,
+    // но только ДЛЯ ПОКАЗА: оно решает, рисовать ли «Обновить», и ничего
+    // не запрещает. Верно подписанный older выпуск лёг бы поверх нового
+    // молча.
+    final fresh = await signed(version: 5);
+    server.replies.add(Reply(200, releaseReply(fresh.release)));
+    server.replies.add(
+      Reply(200, page(fresh.bodies, fresh.bodies.keys.toList())),
+    );
+    await Download(api, store, fresh.keys).run('primery');
+    expect((await store.release('primery'))!.version, 5);
+
+    final older = await signed(version: 4);
+    server.replies.add(Reply(200, releaseReply(older.release)));
+    server.replies.add(
+      Reply(200, page(older.bodies, older.bodies.keys.toList())),
+    );
+    final out = await Download(api, store, older.keys).run('primery');
+
+    // Отказа нет намеренно: ставить нечего, и объявить это отказом
+    // значило бы назвать бедой то, что у врача уже всё есть.
+    expect(out.saved, 0);
+    expect((await store.release('primery'))!.version, 5);
+    // За описью не пошли вовсе: страница задач осталась неотданной.
+    expect(server.replies, isNotEmpty);
+  });
+
+  test('тот же выпуск поверх себя не отказывает', () async {
+    // Иначе запрет отката запретил бы и обычную перепроверку: витрина
+    // дёргает закачку, чтобы добрать недостающее, и равная версия — это
+    // ровно тот случай.
+    final one = await signed(version: 5);
+    server.replies.add(Reply(200, releaseReply(one.release)));
+    server.replies.add(Reply(200, page(one.bodies, one.bodies.keys.toList())));
+    await Download(api, store, one.keys).run('primery');
+
+    server.replies.add(Reply(200, releaseReply(one.release)));
+    server.replies.add(Reply(200, page(one.bodies, one.bodies.keys.toList())));
+    final out = await Download(api, store, one.keys).run('primery');
+
+    expect(out.total, 3);
+    expect((await store.release('primery'))!.version, 5);
   });
 }
