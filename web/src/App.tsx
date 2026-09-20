@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, useState } from 'react'
 
 import { Login } from './Login'
+import { NotFound } from './NotFound'
 import { SourceList } from './SourceList'
 import { SourceScreen } from './SourceScreen'
 import { ErrorBoundary } from './components/ErrorBoundary'
@@ -9,7 +10,7 @@ import { IdentityBar } from './components/IdentityBar'
 import { StatusBar } from './components/StatusBar'
 import { Toolbar } from './components/Toolbar'
 import { readSidebarCollapsed, writeSidebarCollapsed } from './sidebarState'
-import type { SectionId } from './sections'
+import { go, routePath, sectionOf, sectionRoute, useRoute } from './router'
 import { api, setAuthLost, setToken } from './api'
 import type { Me } from './api'
 
@@ -48,14 +49,28 @@ const Workshop = lazy(() => import('./Workshop').then((m) => ({ default: m.Works
  * Перечень разделов сюда не переписан: он лежит в `sections.ts`, откуда
  * его читают и колонка, и верхняя полоса. Две редакции имён разошлись бы
  * молча.
+ *
+ * **Где мы — в адресе, а не в состоянии этого экрана.** Раздел и открытый
+ * источник лежали здесь в `useState`, и от этого не работало ровно то,
+ * ради чего адрес существует: ссылки на источник не было вовсе, «назад»
+ * браузера выкидывало из студии целиком, а F5 возвращал на список
+ * источников, чем бы составитель ни был занят до того. Разбор адреса — в
+ * `router.ts`, и он один на всю студию.
  */
 export function App() {
   const [me, setMe] = useState<Me | null>(null)
-  const [section, setSection] = useState<SectionId>('sources')
-  // Открытый источник: опознаватель нужен экрану, название — верхней
-  // полосе. Спрашивать название у экрана нельзя: он читает источник сам и
-  // отвечает позже, чем полоса рисуется.
-  const [openSource, setOpenSource] = useState<{ id: number; title: string } | null>(null)
+  const route = useRoute()
+  const section = sectionOf(route)
+  /**
+   * Название открытого источника — для верхней полосы.
+   *
+   * В адресе стоит только номер, а полоса рисуется раньше, чем экран
+   * источника успеет прочитать название. Пришедший по прямой ссылке видит
+   * полосу без него первую секунду, и это честно: названия ещё никто не
+   * знает. Пришедший из списка видит его сразу — список название уже
+   * прочитал и отдаёт вместе с переходом.
+   */
+  const [crumb, setCrumb] = useState('')
   /**
    * Свёрнута ли колонка. Начальное значение читается из браузера один раз,
    * при первом построении: составитель, свернувший колонку, не должен
@@ -74,7 +89,7 @@ export function App() {
   useEffect(() => {
     setAuthLost(() => {
       setMe(null)
-      setOpenSource(null)
+      setCrumb('')
       setLost('Сессия кончилась. Войдите заново.')
     })
     return () => setAuthLost(null)
@@ -99,8 +114,8 @@ export function App() {
     void api.logout().catch(() => undefined)
     setToken('')
     setMe(null)
-    setOpenSource(null)
-    setSection('sources')
+    setCrumb('')
+    go({ name: 'sources' })
   }
 
   return (
@@ -108,8 +123,8 @@ export function App() {
       <Sidebar
         section={section}
         onGo={(to) => {
-          setSection(to)
-          setOpenSource(null)
+          setCrumb('')
+          go(sectionRoute(to))
         }}
         collapsed={navCollapsed}
         onCollapsed={(next) => {
@@ -121,7 +136,7 @@ export function App() {
       <div className="app">
         <Toolbar
           section={section}
-          crumb={section === 'sources' ? openSource?.title : undefined}
+          crumb={route.name === 'source' ? crumb || undefined : undefined}
           onSignOut={leave}
         />
 
@@ -136,26 +151,42 @@ export function App() {
               колонкой разделов и именем вошедшего. Ключ сбрасывает
               упавшее при переходе — иначе отказ на одном экране висел бы
               и на исправных. */}
-          <ErrorBoundary key={`${section}:${openSource?.id ?? ''}`}>
+          <ErrorBoundary key={routePath(route)}>
             {/* Ожидание названо теми же словами, что и всякое чтение в
                 студии: человеку всё равно, ждёт он файл раздела или
                 ответ сервера. Граница отказа стоит СНАРУЖИ — не
                 приехавший по обрыву кусок раздела это отказ отрисовки,
                 и без границы он снял бы всё дерево белым экраном. */}
             <Suspense fallback={<p className="empty">Читаем…</p>}>
-            {section === 'packs' ? (
-              <Packs me={me} />
-            ) : section === 'sales' ? (
-              <Sales me={me} />
-            ) : section === 'reports' ? (
-              <Reports me={me} />
-            ) : section === 'workshop' ? (
-              <Workshop me={me} />
-            ) : openSource === null ? (
-              <SourceList me={me} onOpen={(id, title) => setOpenSource({ id, title })} />
-            ) : (
-              <SourceScreen me={me} id={openSource.id} onBack={() => setOpenSource(null)} />
-            )}
+              {route.name === 'packs' ? (
+                <Packs me={me} />
+              ) : route.name === 'sales' ? (
+                <Sales me={me} />
+              ) : route.name === 'reports' ? (
+                <Reports me={me} />
+              ) : route.name === 'workshop' ? (
+                <Workshop me={me} />
+              ) : route.name === 'source' ? (
+                <SourceScreen
+                  me={me}
+                  id={route.id}
+                  onTitle={setCrumb}
+                  onBack={() => {
+                    setCrumb('')
+                    go({ name: 'sources' })
+                  }}
+                />
+              ) : route.name === 'unknown' ? (
+                <NotFound path={route.path} />
+              ) : (
+                <SourceList
+                  me={me}
+                  onOpen={(id, title) => {
+                    setCrumb(title)
+                    go({ name: 'source', id })
+                  }}
+                />
+              )}
             </Suspense>
           </ErrorBoundary>
         </main>

@@ -30,7 +30,14 @@ export function Toolbar({
   crumb,
   onSignOut,
 }: {
-  section: SectionId
+  /**
+   * Раздел открытого адреса. Пусто — адрес не принадлежит ни одному
+   * разделу: так бывает у ненайденной страницы, и называть её именем
+   * раздела нельзя. Читающий с экрана спрашивает «где я» именно у этого
+   * заголовка, и «Источники» на ненайденном адресе — прямой ответ не про
+   * то место.
+   */
+  section: SectionId | null
   /** Что открыто внутри раздела: название источника, имя набора. */
   crumb?: string
   onSignOut: () => void
@@ -38,7 +45,7 @@ export function Toolbar({
   return (
     <header className="app-bar">
       <h1 className="app-bar-here">
-        <span>{sectionTitle(section)}</span>
+        <span>{section ? sectionTitle(section) : 'Студия'}</span>
         {crumb && <span className="app-bar-crumb">· {crumb}</span>}
       </h1>
 

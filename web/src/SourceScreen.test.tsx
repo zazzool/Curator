@@ -71,12 +71,12 @@ describe('экран источника', () => {
   it('зовёт единицы словом источника, а не «единицами»', async () => {
     // Интерфейс без словаря источника показал бы «единица» врачу, который
     // ждёт слова «пункт». Ради этого слово и хранится у источника.
-    render(<SourceScreen me={РЕДАКТОР} id={1} onBack={() => {}} />)
+    render(<SourceScreen me={РЕДАКТОР} id={1} onTitle={() => {}} onBack={() => {}} />)
     await waitFor(() => expect(screen.getByText(/Принятые пункты/)).toBeTruthy())
   })
 
   it('показывает принятое деревом по глубине пути', async () => {
-    render(<SourceScreen me={РЕДАКТОР} id={1} onBack={() => {}} />)
+    render(<SourceScreen me={РЕДАКТОР} id={1} onTitle={() => {}} onBack={() => {}} />)
     await waitFor(() => expect(screen.getByText('3.2')).toBeTruthy())
     const nested = screen.getByText('3.2').closest('li')
     expect(nested?.style.paddingLeft).toBe('16px')
@@ -91,7 +91,7 @@ describe('экран источника', () => {
       '/admin/api/sources/1/documents': { documents: [] },
       '/admin/api/sources/1': SOURCE,
     })
-    render(<SourceScreen me={РЕДАКТОР} id={1} onBack={() => {}} />)
+    render(<SourceScreen me={РЕДАКТОР} id={1} onTitle={() => {}} onBack={() => {}} />)
     await waitFor(() => expect(screen.getByText(/Принятые пункты/)).toBeTruthy())
   })
 
@@ -99,7 +99,7 @@ describe('экран источника', () => {
     // Перевод PDF в текст делает служба снаружи — это выбранная граница, а
     // не очередь работ. Обещание «позже» отправляет человека ждать вместо
     // того, чтобы перевести файл.
-    render(<SourceScreen me={РЕДАКТОР} id={1} onBack={() => {}} />)
+    render(<SourceScreen me={РЕДАКТОР} id={1} onTitle={() => {}} onBack={() => {}} />)
     const hint = await screen.findByText(/PDF/)
     expect(hint.textContent).not.toMatch(/позже|пока|скоро/)
   })
@@ -141,7 +141,7 @@ describe('экран источника', () => {
         return Promise.resolve(new Response(JSON.stringify(SOURCE), { status: 200 }))
       }),
     )
-    render(<SourceScreen me={РЕДАКТОР} id={1} onBack={() => {}} />)
+    render(<SourceScreen me={РЕДАКТОР} id={1} onTitle={() => {}} onBack={() => {}} />)
 
     // Принять сразу нечем: сперва показ.
     expect(await screen.findByText('Посмотреть разбор')).toBeTruthy()
@@ -161,7 +161,7 @@ describe('экран источника', () => {
   it('человеку без права приёмки не показывает действие и говорит, почему', async () => {
     // Раздел при этом открыт: право проверяет сервер, а спрятанный раздел —
     // подсказка, где искать, а не запрет.
-    render(<SourceScreen me={ЧИТАТЕЛЬ} id={1} onBack={() => {}} />)
+    render(<SourceScreen me={ЧИТАТЕЛЬ} id={1} onTitle={() => {}} onBack={() => {}} />)
     await waitFor(() => expect(screen.getByText(/Принятые пункты/)).toBeTruthy())
     expect(screen.queryByText('Принять разбор')).toBeNull()
     expect(screen.getByText(/кому выдано право принимать/)).toBeTruthy()
@@ -171,7 +171,7 @@ describe('экран источника', () => {
     // Состояния источника не было вовсе: ставилось умолчание «черновик», а
     // менять его было нечем — и справочник в приложении оставался пуст у
     // всех и всегда.
-    render(<SourceScreen me={РЕДАКТОР} id={1} onBack={() => {}} />)
+    render(<SourceScreen me={РЕДАКТОР} id={1} onTitle={() => {}} onBack={() => {}} />)
     await waitFor(() =>
       expect(screen.getByText(/для приложения этого источника не существует/i)).toBeTruthy(),
     )
@@ -186,7 +186,7 @@ describe('экран источника', () => {
       '/admin/api/sources/1/documents': { documents: [] },
       '/admin/api/sources/1': { ...SOURCE, status: 'active' },
     })
-    render(<SourceScreen me={РЕДАКТОР} id={1} onBack={() => {}} />)
+    render(<SourceScreen me={РЕДАКТОР} id={1} onTitle={() => {}} onBack={() => {}} />)
     await waitFor(() => expect(screen.getByText('Снять с раздачи')).toBeTruthy())
   })
 
@@ -194,7 +194,7 @@ describe('экран источника', () => {
     // По разделу не спрашивают, и составитель, не видя этого, ищет
     // пропавшие задачи в генерации, а не в разборе. У записи род —
     // умолчание, и метка у каждой строки была бы шумом.
-    render(<SourceScreen me={РЕДАКТОР} id={1} onBack={() => {}} />)
+    render(<SourceScreen me={РЕДАКТОР} id={1} onTitle={() => {}} onBack={() => {}} />)
     await screen.findByText('Порядок')
     expect(screen.getAllByText('раздел')).toHaveLength(1)
   })
@@ -202,7 +202,7 @@ describe('экран источника', () => {
   it('человеку без права приёмки состояние менять нечем', async () => {
     // Решить, что источник теперь учит врача, — то же решение, что принять
     // разбор, и право у них одно.
-    render(<SourceScreen me={ЧИТАТЕЛЬ} id={1} onBack={() => {}} />)
+    render(<SourceScreen me={ЧИТАТЕЛЬ} id={1} onTitle={() => {}} onBack={() => {}} />)
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Состояние' })).toBeTruthy())
     expect(screen.queryByText('Объявить действующим')).toBeNull()
   })
@@ -225,7 +225,7 @@ describe('пределы и отбор', () => {
       '/admin/api/sources/1/documents': { documents: [] },
       '/admin/api/sources/1': SOURCE,
     })
-    render(<SourceScreen me={РЕДАКТОР} id={1} onBack={() => {}} />)
+    render(<SourceScreen me={РЕДАКТОР} id={1} onTitle={() => {}} onBack={() => {}} />)
     const note = await screen.findByText(/Показаны первые 500/)
     expect(note.textContent).toMatch(/сузьте срез/i)
   })
@@ -240,7 +240,7 @@ describe('пределы и отбор', () => {
       '/admin/api/sources/1/documents': { documents: [] },
       '/admin/api/sources/1': SOURCE,
     })
-    render(<SourceScreen me={РЕДАКТОР} id={1} onBack={() => {}} />)
+    render(<SourceScreen me={РЕДАКТОР} id={1} onTitle={() => {}} onBack={() => {}} />)
     await waitFor(() => expect(screen.getByText('3.2')).toBeTruthy())
     expect(screen.queryByText(/Показаны первые/)).toBeNull()
   })
@@ -258,7 +258,7 @@ describe('пределы и отбор', () => {
         '/admin/api/sources/1/documents': { documents: [] },
         '/admin/api/sources/1': SOURCE,
       })
-      render(<SourceScreen me={РЕДАКТОР} id={1} onBack={() => {}} />)
+      render(<SourceScreen me={РЕДАКТОР} id={1} onTitle={() => {}} onBack={() => {}} />)
       // Через act: перечитывание заводится эффектом React, и без него
       // эффект не сольётся, а проверка покажет «запрос не ушёл» там, где
       // он ушёл бы у человека.
