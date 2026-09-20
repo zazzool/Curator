@@ -60,6 +60,11 @@ class PendingAttempt {
   final String answer;
   final String mode;
   final int spentMs;
+  final String idemKey;
+
+  /// Когда это было на устройстве, а не когда доехало: время доставки к
+  /// обучению отношения не имеет.
+  final DateTime happenedAt;
 
   /// Потолок времени над задачей.
   ///
@@ -83,11 +88,6 @@ class PendingAttempt {
     if (measured < 0) return 0;
     return measured > maxSpentMs ? maxSpentMs : measured;
   }
-  final String idemKey;
-
-  /// Когда это было на устройстве, а не когда доехало: время доставки к
-  /// обучению отношения не имеет.
-  final DateTime happenedAt;
 
   Map<String, dynamic> toJson() => {
     'caseId': caseId,
