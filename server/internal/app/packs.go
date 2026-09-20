@@ -49,15 +49,25 @@ func (r *packRoutes) shelf(w http.ResponseWriter, req *http.Request, caller Call
 		return
 	}
 
+	// Право спрашивается про все наборы витрины разом, а не про каждый по
+	// очереди. С группами ответ стоит ещё и портрета врача, а портрет
+	// читает его попытки: двадцать наборов витрины превратились бы в
+	// двадцать чтений одного и того же.
+	slugs := make([]string, 0, len(list))
+	for _, one := range list {
+		slugs = append(slugs, one.Slug)
+	}
 	now := time.Now()
+	allowed, err := r.access.AllowedEach(req.Context(), caller.AccountID, slugs, now)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "Не вышло проверить доступ")
+		return
+	}
+
 	out := make([]map[string]any, 0, len(list))
 	for _, one := range list {
 		kopecks := live["pack:"+one.Slug]
-		owned, err := r.access.Allowed(req.Context(), caller.AccountID, one.Slug, now)
-		if err != nil {
-			WriteError(w, http.StatusInternalServerError, "Не вышло проверить доступ")
-			return
-		}
+		owned := allowed[one.Slug]
 		out = append(out, map[string]any{
 			"slug": one.Slug, "title": one.Title, "summaryMd": one.SummaryMd,
 			"version": one.Version, "cases": one.Cases,
