@@ -14,7 +14,7 @@ import type { AppKey, Me, Prompt, StudioUser } from './api'
 
 export function Workshop({ me }: { me: Me }) {
   return (
-    <div>
+    <div className="stack">
       <Users me={me} />
       <Prompts me={me} />
       <AppKeys me={me} />
@@ -105,13 +105,13 @@ function Users({ me }: { me: Me }) {
         <p className="hint">Пользователей заводит тот, кому выдано право «мастерская».</p>
       )}
 
-      {failure && <p className="alarm">{failure}</p>}
+      {failure && <p className="banner error">{failure}</p>}
 
       {made && (
-        <p className="done">
+        <p className="banner success">
           Вход «{made.login}» заведён. {made.note}
           <br />
-          <span className="label">{made.secret}</span>
+          <span className="mono">{made.secret}</span>
         </p>
       )}
 
@@ -125,8 +125,8 @@ function Users({ me }: { me: Me }) {
                 <div className="row-body">
                   <div className="row-line">
                     <span>
-                      <span className="label">{user.login}</span> {user.displayName}
-                      {user.disabled && <span className="kind">вход закрыт</span>}
+                      <span className="mono">{user.login}</span> {user.displayName}
+                      {user.disabled && <span className="tag">вход закрыт</span>}
                     </span>
                     <span className="row-tools">
                       <span className="muted">заведён {датой(user.createdAt)}</span>
@@ -168,10 +168,11 @@ function Users({ me }: { me: Me }) {
 
       {canWorkshop && (
         <form className="page-section form-grid" onSubmit={create}>
-          <h3 className="sub">Завести вход</h3>
+          <h3 className="group-title">Завести вход</h3>
           <label className="form-row">
             <span className="fld-label">Имя входа</span>
             <input
+              className="fld-medium"
               value={draft.login}
               onChange={(e) => setDraft({ ...draft, login: e.target.value })}
               placeholder="ivanova"
@@ -180,6 +181,7 @@ function Users({ me }: { me: Me }) {
           <label className="form-row">
             <span className="fld-label">Как зовут</span>
             <input
+              className="fld-long"
               value={draft.displayName}
               onChange={(e) => setDraft({ ...draft, displayName: e.target.value })}
               placeholder="Иванова А. П."
@@ -279,7 +281,7 @@ function Prompts({ me }: { me: Me }) {
   }
 
   return (
-    <div>
+    <div className="page-section">
       <div className="page-head">
         <h2>Задания моделям</h2>
       </div>
@@ -289,8 +291,8 @@ function Prompts({ me }: { me: Me }) {
       </p>
       {!canEdit && <p className="hint">Задания правит тот, кому выдано право «задания».</p>}
 
-      {failure && <p className="alarm">{failure}</p>}
-      {note && <p className="done">{note}</p>}
+      {failure && <p className="banner error">{failure}</p>}
+      {note && <p className="banner success">{note}</p>}
 
       <div className="page-section">
         {prompts === null ? (
@@ -307,7 +309,7 @@ function Prompts({ me }: { me: Me }) {
               >
                 <span>
                   {prompt.name}
-                  <span className="kind">{prompt.nodeWord || prompt.node}</span>
+                  <span className="tag">{prompt.nodeWord || prompt.node}</span>
                 </span>
                 <span className="muted">редакция {prompt.revision}</span>
               </button>
@@ -321,6 +323,7 @@ function Prompts({ me }: { me: Me }) {
           <label className="form-row">
             <span className="fld-label">Как зовётся</span>
             <input
+              className="fld-long"
               value={draft.name}
               onChange={(e) => setDraft({ ...draft, name: e.target.value })}
             />
@@ -404,7 +407,7 @@ function AppKeys({ me }: { me: Me }) {
   }
 
   return (
-    <div>
+    <div className="page-section">
       <div className="page-head">
         <h2>Ключи программ</h2>
       </div>
@@ -417,13 +420,13 @@ function AppKeys({ me }: { me: Me }) {
         <p className="hint">Ключи заводит тот, кому выдано право «мастерская».</p>
       )}
 
-      {failure && <p className="alarm">{failure}</p>}
+      {failure && <p className="banner error">{failure}</p>}
 
       {issued && (
-        <p className="done">
+        <p className="banner success">
           Ключ {issued.keyId} заведён. {issued.note}
           <br />
-          <span className="label">{issued.key}</span>
+          <span className="mono">{issued.key}</span>
         </p>
       )}
 
@@ -437,8 +440,8 @@ function AppKeys({ me }: { me: Me }) {
             {keys.map((key) => (
               <div key={key.keyId} className="list-row">
                 <span>
-                  <span className="label">{key.keyId}</span> {key.title}
-                  {key.disabled && <span className="kind">закрыт</span>}
+                  <span className="mono">{key.keyId}</span> {key.title}
+                  {key.disabled && <span className="tag">закрыт</span>}
                 </span>
                 <span className="row-tools">
                   <span className="muted">заведён {датой(key.createdAt)}</span>
@@ -457,6 +460,7 @@ function AppKeys({ me }: { me: Me }) {
           <label className="form-row">
             <span className="fld-label">Опознаватель</span>
             <input
+              className="fld-medium"
               value={draft.keyId}
               onChange={(e) => setDraft({ ...draft, keyId: e.target.value })}
               placeholder="android-2026-09"
@@ -465,6 +469,7 @@ function AppKeys({ me }: { me: Me }) {
           <label className="form-row">
             <span className="fld-label">Для чего</span>
             <input
+              className="fld-long"
               value={draft.title}
               onChange={(e) => setDraft({ ...draft, title: e.target.value })}
               placeholder="сборка для Android, сентябрь"

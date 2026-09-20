@@ -48,7 +48,16 @@ const EMPTY = {
   edition: '',
 }
 
-export function SourceList({ me, onOpen }: { me: Me; onOpen: (id: number) => void }) {
+export function SourceList({
+  me,
+  onOpen,
+}: {
+  me: Me
+  // Название уходит наверх вместе с опознавателем: его ждёт верхняя
+  // полоса, а экран источника читает его сам и отвечает позже, чем полоса
+  // рисуется.
+  onOpen: (id: number, title: string) => void
+}) {
   const [sources, setSources] = useState<Source[] | null>(null)
   const [failure, setFailure] = useState('')
   const [adding, setAdding] = useState(false)
@@ -76,7 +85,7 @@ export function SourceList({ me, onOpen }: { me: Me; onOpen: (id: number) => voi
       setAdding(false)
       setDraft(EMPTY)
       await reload()
-      onOpen(id)
+      onOpen(id, draft.title)
     } catch (error) {
       setFailure(error instanceof ApiError ? error.message : 'Источник не заведён')
     }
@@ -99,11 +108,19 @@ export function SourceList({ me, onOpen }: { me: Me; onOpen: (id: number) => voi
         <form className="page-section form-grid" onSubmit={create}>
           <label className="form-row">
             <span className="fld-label">Краткое имя</span>
-            <input value={draft.slug} onChange={(e) => setDraft({ ...draft, slug: e.target.value })} />
+            <input
+              className="fld-medium"
+              value={draft.slug}
+              onChange={(e) => setDraft({ ...draft, slug: e.target.value })}
+            />
           </label>
           <label className="form-row">
             <span className="fld-label">Название</span>
-            <input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} />
+            <input
+              className="fld-long"
+              value={draft.title}
+              onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+            />
           </label>
           <label className="form-row">
             <span className="fld-label">Вид</span>
@@ -118,6 +135,7 @@ export function SourceList({ me, onOpen }: { me: Me; onOpen: (id: number) => voi
           <label className="form-row">
             <span className="fld-label">Как звать единицу</span>
             <input
+              className="fld-medium"
               value={draft.unitWord}
               onChange={(e) => setDraft({ ...draft, unitWord: e.target.value })}
               placeholder="пункт, диагноз, раздел"
@@ -126,6 +144,7 @@ export function SourceList({ me, onOpen }: { me: Me; onOpen: (id: number) => voi
           <label className="form-row">
             <span className="fld-label">Как звать положение</span>
             <input
+              className="fld-medium"
               value={draft.statementWord}
               onChange={(e) => setDraft({ ...draft, statementWord: e.target.value })}
               placeholder="положение, признак, требование"
@@ -180,7 +199,7 @@ export function SourceList({ me, onOpen }: { me: Me; onOpen: (id: number) => voi
         </form>
       )}
 
-      {failure && <p className="alarm">{failure}</p>}
+      {failure && <p className="banner error">{failure}</p>}
 
       <div className="page-section">
         {sources === null ? (
@@ -190,7 +209,11 @@ export function SourceList({ me, onOpen }: { me: Me; onOpen: (id: number) => voi
         ) : (
           <div className="list">
             {sources.map((source) => (
-              <button key={source.id} className="list-row" onClick={() => onOpen(source.id)}>
+              <button
+                key={source.id}
+                className="list-row"
+                onClick={() => onOpen(source.id, source.title)}
+              >
                 <span>{source.title}</span>
                 <span className="muted">
                   {source.slug} · {source.completeness === 'complete' ? 'полный' : 'кусок'}

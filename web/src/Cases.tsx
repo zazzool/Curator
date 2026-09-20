@@ -93,17 +93,17 @@ export function Cases({ me, source, path }: { me: Me; source: Source; path: stri
         </label>
       </div>
 
-      {failure && <p className="alarm">{failure}</p>}
+      {failure && <p className="banner error">{failure}</p>}
       {faults.length > 0 && (
         <ul className="units">
           {faults.map((fault, i) => (
             <li key={i}>
-              <span className="label">{fault.where}</span> {fault.what}
+              <span className="mono">{fault.where}</span> {fault.what}
             </li>
           ))}
         </ul>
       )}
-      {note && <p className="done">{note}</p>}
+      {note && <p className="banner success">{note}</p>}
 
       {!canWrite && (
         <p className="hint">
@@ -123,7 +123,7 @@ export function Cases({ me, source, path }: { me: Me; source: Source; path: stri
           {cases.map((one) => (
             <div key={one.id} className="list-row">
               <span>
-                <span className="label">{one.unitLabel}</span> {one.body.title || 'без названия'}
+                <span className="mono">{one.unitLabel}</span> {one.body.title || 'без названия'}
               </span>
               <span className="muted">{one.statusWord}</span>
               <button onClick={() => show(one.id)}>Открыть</button>
@@ -165,7 +165,7 @@ function CaseCard({ one, onClose }: { one: Case; onClose: () => void }) {
                 проверяет именно её, а сноска под текстом заставила бы его
                 считать фрагменты глазами. */}
             {segment.statements && segment.statements.length > 0 && (
-              <sup className="label"> {segment.statements.join(', ')}</sup>
+              <sup className="mono"> {segment.statements.join(', ')}</sup>
             )}{' '}
           </span>
         ))}
@@ -173,7 +173,7 @@ function CaseCard({ one, onClose }: { one: Case; onClose: () => void }) {
       <ul className="units">
         {one.body.options.map((option, i) => (
           <li key={i}>
-            {option.label && <span className="label">{option.label}</span>} {option.text}
+            {option.label && <span className="mono">{option.label}</span>} {option.text}
             {(option.label || option.text) === one.body.answer && (
               <span className="muted"> — верный ответ</span>
             )}

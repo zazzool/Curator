@@ -43,7 +43,7 @@ export function Sales({ me }: { me: Me }) {
     return <ClientCard me={me} id={open} onBack={() => setOpen(null)} />
   }
   return (
-    <div>
+    <div className="stack">
       <Prices me={me} />
       <ClientSearch onOpen={setOpen} />
     </div>
@@ -112,8 +112,8 @@ function Prices({ me }: { me: Me }) {
         <p className="hint">Цены меняет тот, кому выдано право «продажи».</p>
       )}
 
-      {failure && <p className="alarm">{failure}</p>}
-      {note && <p className="done">{note}</p>}
+      {failure && <p className="banner error">{failure}</p>}
+      {note && <p className="banner success">{note}</p>}
 
       <div className="page-section">
         {prices === null ? (
@@ -128,7 +128,7 @@ function Prices({ me }: { me: Me }) {
               <div key={price.purpose} className="list-row">
                 <span>
                   {назначением(price.purpose)}
-                  {!price.enabled && <span className="kind">не продаётся</span>}
+                  {!price.enabled && <span className="tag retired">не продаётся</span>}
                 </span>
                 <span className="muted">{рублями(price.kopecks)}</span>
               </div>
@@ -157,6 +157,7 @@ function Prices({ me }: { me: Me }) {
           <label className="form-row">
             <span className="fld-label">Сколько, рублей</span>
             <input
+              className="fld-short"
               value={draft.rubles}
               onChange={(e) => setDraft({ ...draft, rubles: e.target.value })}
               placeholder="1990"
@@ -205,12 +206,15 @@ function ClientSearch({ onOpen }: { onOpen: (id: number) => void }) {
   }, [search])
 
   return (
-    <div>
+    <div className="page-section">
       <div className="page-head">
         <h2>Клиенты</h2>
       </div>
+      {/* Поле и кнопка в одну строку: кнопка под полем читается как
+          отдельное действие ни над чем. Мера поля — по ожидаемому ответу,
+          а не во всю страницу: в него пишут имя или номер. */}
       <form
-        className="form-actions"
+        className="field-with-action fld-long"
         onSubmit={(event) => {
           event.preventDefault()
           void search(query)
@@ -225,7 +229,7 @@ function ClientSearch({ onOpen }: { onOpen: (id: number) => void }) {
         <button type="submit">Найти</button>
       </form>
 
-      {failure && <p className="alarm">{failure}</p>}
+      {failure && <p className="banner error">{failure}</p>}
 
       <div className="page-section">
         {clients === null ? (
@@ -242,7 +246,7 @@ function ClientSearch({ onOpen }: { onOpen: (id: number) => void }) {
               <button key={one.id} className="list-row" onClick={() => onOpen(one.id)}>
                 <span>
                   {именем(one)}
-                  {one.blocked && <span className="kind">вход закрыт</span>}
+                  {one.blocked && <span className="tag">вход закрыт</span>}
                 </span>
                 <span className="muted">
                   {/* Номер здесь не повторяется: у врача без имени и почты
@@ -361,7 +365,7 @@ function ClientCard({ me, id, onBack }: { me: Me; id: number; onBack: () => void
           <h2>Клиент</h2>
           <button onClick={onBack}>К клиентам</button>
         </div>
-        {failure ? <p className="alarm">{failure}</p> : <p className="empty">Читаем карточку…</p>}
+        {failure ? <p className="banner error">{failure}</p> : <p className="empty">Читаем карточку…</p>}
       </div>
     )
   }
@@ -379,8 +383,8 @@ function ClientCard({ me, id, onBack }: { me: Me; id: number; onBack: () => void
         {client.lastSeen ? ` · был ${датой(client.lastSeen)}` : ' · ни разу не заходил'}
       </p>
 
-      {failure && <p className="alarm">{failure}</p>}
-      {note && <p className="done">{note}</p>}
+      {failure && <p className="banner error">{failure}</p>}
+      {note && <p className="banner success">{note}</p>}
 
       <div className="page-section">
         <h3>Права</h3>
@@ -392,7 +396,7 @@ function ClientCard({ me, id, onBack }: { me: Me; id: number; onBack: () => void
               <div key={`${right.kind}-${right.pack}-${i}`} className="list-row">
                 <span>
                   {right.kind === 'pack' ? `набор «${right.pack}»` : 'подписка на весь корпус'}
-                  <span className="kind">{ORIGIN[right.origin] ?? right.origin}</span>
+                  <span className="tag">{ORIGIN[right.origin] ?? right.origin}</span>
                 </span>
                 <span className="muted">
                   {right.expiresAt ? `до ${датой(right.expiresAt)}` : 'бессрочно'}
@@ -413,8 +417,8 @@ function ClientCard({ me, id, onBack }: { me: Me; id: number; onBack: () => void
               <div key={payment.id} className="list-row">
                 <span>
                   {назначением(payment.purpose)}
-                  <span className="kind">{PAYMENT_STATUS[payment.status] ?? payment.status}</span>
-                  <span className="kind">{SOURCE[payment.source] ?? payment.source}</span>
+                  <span className="tag">{PAYMENT_STATUS[payment.status] ?? payment.status}</span>
+                  <span className="tag">{SOURCE[payment.source] ?? payment.source}</span>
                 </span>
                 <span className="row-tools">
                   <span className="muted">
@@ -460,6 +464,7 @@ function ClientCard({ me, id, onBack }: { me: Me; id: number; onBack: () => void
             <label className="form-row">
               <span className="fld-label">Сколько, рублей</span>
               <input
+                className="fld-short"
                 value={income.rubles}
                 onChange={(e) => setIncome({ ...income, rubles: e.target.value })}
                 placeholder="1990"
@@ -468,6 +473,7 @@ function ClientCard({ me, id, onBack }: { me: Me; id: number; onBack: () => void
             <label className="form-row">
               <span className="fld-label">Чем подтверждён</span>
               <input
+                className="fld-long"
                 value={income.note}
                 onChange={(e) => setIncome({ ...income, note: e.target.value })}
                 placeholder="перевод от 19.09, чек №…"
