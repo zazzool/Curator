@@ -14,6 +14,7 @@ import '../core/design/palette.dart';
 import '../core/design/tokens.dart';
 import '../core/design/typography.dart';
 import '../core/ui/leading_glyph.dart';
+import '../core/ui/quiet_progress.dart';
 import '../core/ui/surface.dart';
 import '../api/client.dart';
 import 'account.dart';
@@ -128,7 +129,18 @@ class _AccountScreenState extends State<AccountScreen> {
   }
 
   Widget _body(BuildContext context) {
-    if (_loading) return const Center(child: CircularProgressIndicator());
+    // Отметка, а не кружок на весь экран (правило в app/CLAUDE.md).
+    // Кружок объявляет работу невозможной, пока ответит сервер, — а
+    // запись врача читается и с устройства.
+    if (_loading) {
+      return const Padding(
+        padding: Gap.screenH,
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: UpdatingLine(updating: true, label: 'Запись читается'),
+        ),
+      );
+    }
 
     final failure = _failure;
     if (failure != null) {

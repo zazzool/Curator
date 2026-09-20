@@ -15,6 +15,7 @@ import '../core/design/palette.dart';
 import '../core/design/tokens.dart';
 import '../core/design/typography.dart';
 import '../core/ui/bars.dart';
+import '../core/ui/quiet_progress.dart';
 import '../core/ui/surface.dart';
 import '../api/client.dart';
 import 'download.dart';
@@ -150,7 +151,18 @@ class _ShelfScreenState extends State<ShelfScreen> {
   }
 
   Widget _body(BuildContext context) {
-    if (_loading) return const Center(child: CircularProgressIndicator());
+    // Отметка, а не кружок на весь экран (правило в app/CLAUDE.md).
+    // Витрина обновляется по сети, но установленные наборы лежат на
+    // устройстве, и загораживать их кружком незачем.
+    if (_loading) {
+      return const Padding(
+        padding: Gap.screenH,
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: UpdatingLine(updating: true, label: 'Витрина читается'),
+        ),
+      );
+    }
 
     final failure = _failure;
     return RefreshIndicator(

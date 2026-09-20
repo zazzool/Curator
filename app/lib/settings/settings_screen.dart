@@ -20,6 +20,7 @@ import 'package:flutter/material.dart';
 import '../account/account.dart';
 import '../account/account_screen.dart';
 import '../core/app_scope.dart';
+import '../core/build_info.dart';
 import '../core/design/tokens.dart';
 import '../core/ui/surface.dart';
 import '../packs/download.dart';

@@ -166,14 +166,38 @@ class _ShimmerState extends State<Shimmer> with SingleTickerProviderStateMixin {
   void initState() {
     super.initState();
     _controller = AnimationController(vsync: this, duration: Motion.shimmer);
-    if (widget.enabled) unawaited(_controller.repeat());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _sync();
   }
 
   @override
   void didUpdateWidget(Shimmer old) {
     super.didUpdateWidget(old);
-    if (widget.enabled == old.enabled) return;
-    if (widget.enabled) {
+    _sync();
+  }
+
+  /// Заводит или останавливает тикер по тому же условию, по которому блик
+  /// рисуется.
+  ///
+  /// Условий два, и прежде они жили порознь: тикер заводился по
+  /// `enabled`, а блик рисовался по `enabled` И системному «уменьшить
+  /// движение». У врача, выключившего движение, тикер крутился вечно и
+  /// не рисовал НИЧЕГО — то есть будил отрисовку шестьдесят раз в
+  /// секунду ради пустоты. Это батарея, и заметить это по экрану нельзя
+  /// в принципе: экран выглядит спокойным.
+  ///
+  /// Отсюда и `didChangeDependencies`: «уменьшить движение» живёт в
+  /// MediaQuery, в `initState` его не спросить, а меняется оно на ходу —
+  /// врач включает его в настройках, не выходя из приложения.
+  void _sync() {
+    final quiet = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final wanted = widget.enabled && !quiet;
+    if (wanted == _controller.isAnimating) return;
+    if (wanted) {
       unawaited(_controller.repeat());
     } else {
       _controller.stop();

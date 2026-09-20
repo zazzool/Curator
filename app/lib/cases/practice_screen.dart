@@ -145,7 +145,9 @@ class _PracticeScreenState extends State<PracticeScreen> {
         correct: one.isCorrect(option),
         answer: one.chosenValue(option),
         mode: widget.source == PracticeSource.review ? 'review' : '',
-        spentMs: DateTime.now().difference(_shownAt).inMilliseconds,
+        spentMs: PendingAttempt.clampSpent(
+          DateTime.now().difference(_shownAt).inMilliseconds,
+        ),
         idemKey: key,
         happenedAt: DateTime.now(),
       ),
@@ -437,6 +439,15 @@ class _OptionTile extends StatelessWidget {
       _OptionState.wrong => 'неверно',
     };
 
+    // Сторона кружка с меткой растёт вместе с системным шрифтом.
+    //
+    // clamp возвращает num, а не double, и без toDouble здесь была бы не
+    // раскладка, а отказ разбора: width ждёт double.
+    final markScale = MediaQuery.textScalerOf(
+      context,
+    ).scale(1.0).clamp(1.0, 2.0).toDouble();
+    final markSide = 26 * markScale;
+
     return Padding(
       padding: const EdgeInsets.only(bottom: Gap.md),
       child: Semantics(
@@ -476,9 +487,18 @@ class _OptionTile extends StatelessWidget {
                   // Метка в кружке постоянного размера: у меток «А» и «VIII»
                   // разная ширина, и без кружка текст вариантов начинается
                   // с разных мест.
+                  //
+                  // Постоянен он в ЛОГИЧЕСКИХ точках, а не в пикселях:
+                  // кружок растёт вместе с системным шрифтом. Жёстких
+                  // 26×26 хватало метке «А» и не хватало «VIII» уже при
+                  // полуторном шрифте — метка обрезалась, и врач с
+                  // крупным шрифтом видел вариант без номера. Потолок
+                  // масштаба — вдвое: дальше кружок занимает половину
+                  // строки, и текст варианта теряет больше, чем метка
+                  // выигрывает.
                   Container(
-                    width: 26,
-                    height: 26,
+                    width: markSide,
+                    height: markSide,
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,

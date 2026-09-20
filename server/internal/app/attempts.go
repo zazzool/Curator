@@ -187,11 +187,39 @@ func insertAttempt(ctx context.Context, tx pgx.Tx, accountID int64, one Attempt,
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		 ON CONFLICT (account_id, idem_key) WHERE idem_key <> '' DO NOTHING`,
 		accountID, one.CaseID, one.Correct, trim(one.Answer, 200),
-		trim(one.Mode, 32), one.SpentMs, trim(one.IdemKey, 128), happened)
+		trim(one.Mode, 32), clampSpent(one.SpentMs), trim(one.IdemKey, 128), happened)
 	if err != nil {
 		return false, fmt.Errorf("попытка не записана: %w", err)
 	}
 	return tag.RowsAffected() > 0, nil
+}
+
+// maxSpentMs — потолок времени над одной задачей.
+//
+// То же число, что и в приложении (`PendingAttempt.maxSpentMs`), и оно
+// намеренно стоит по обе стороны провода. В приложении — потому что
+// промежуток считается от показа до ответа и включает свёрнутое
+// приложение, уснувший телефон и ночь между ними: врач, вернувшийся к
+// задаче наутро, записывал девятичасовой ответ. Здесь — потому что
+// присылает это число устройство, а устройству мы не верим: на руках у
+// врачей стоят сборки, которые обновятся не завтра, и обрезка в
+// приложении доедет до них тогда же.
+//
+// Медиана решаемости к выбросам устойчива, и в этом соблазн ничего не
+// делать. Но она считается ПО ПОЛОЖИТЕЛЬНЫМ (`spent_ms > 0`), а
+// отрицательное время от переведённых назад часов молча выпадало из
+// выборки — то есть тихо меняло знаменатель, а не бросалось в глаза.
+const maxSpentMs = 10 * 60 * 1000
+
+// clampSpent приводит присланное время к тому, что можно записать.
+func clampSpent(measured int64) int64 {
+	if measured < 0 {
+		return 0
+	}
+	if measured > maxSpentMs {
+		return maxSpentMs
+	}
+	return measured
 }
 
 // loadState читает состояние повторения и отвечает, разбирали ли задачу.

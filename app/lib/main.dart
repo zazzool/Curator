@@ -17,6 +17,7 @@ import 'api/client.dart';
 import 'api/token_store.dart';
 import 'cases/outbox.dart';
 import 'core/app_scope.dart';
+import 'core/build_info.dart';
 import 'core/design/app_theme.dart';
 import 'core/design/tokens.dart';
 import 'core/ui/surface.dart';
@@ -243,7 +244,22 @@ class _StartScreenState extends State<StartScreen> {
 
   Future<ApiFailure?> _enroll() async {
     try {
-      await widget.api.ensureEnrolled(platform: 'android');
+      // Версия уезжает вместе с заведением устройства, и это не
+      // мелочь: вся доктрина проводной совместимости стоит на том,
+      // какие сборки на руках у врачей, — а поле для версии было и
+      // приезжало пустым. Пустая строка не отправляется вовсе (`?`
+      // в теле запроса): «appVersion: ""» в базе хуже отсутствия, он
+      // выглядит как ответ.
+      //
+      // Записывается при этом версия УСТАНОВКИ, а не работающая
+      // сейчас: заведение случается однажды, и обновлённое приложение
+      // о себе не сообщает. Дотянуть это может только телеметрия, у
+      // которой поле для версии тоже есть, — но приложение не шлёт её
+      // ни одним событием (ПРИ-22 аудита, не закрыт).
+      await widget.api.ensureEnrolled(
+        platform: 'android',
+        appVersion: appVersion.isEmpty ? null : appVersion,
+      );
       return null;
     } on ApiFailure catch (failure) {
       return failure;
