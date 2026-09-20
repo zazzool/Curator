@@ -39,6 +39,7 @@ import (
 	"curator/server/internal/mail"
 	"curator/server/internal/packs"
 	"curator/server/internal/progress"
+	"curator/server/internal/rules"
 	"curator/server/internal/sales"
 	"curator/server/internal/signs"
 	"curator/server/internal/source"
@@ -428,6 +429,15 @@ func generation(ctx context.Context, gate *dbgate.Gate, desk *studio.Desk, sourc
 		log.Printf("затравки заданий не положены: %v", err)
 	}
 
+	// Свод правил: то, чего конвейер держится, когда пишет задачу.
+	// Встроенные правила кладутся по тому же уговору, что и затравки, —
+	// только недостающие: правленое составителем правило накатом не
+	// затирается.
+	rulebook := rules.NewStore(gate)
+	if err := rulebook.Seed(seedCtx); err != nil {
+		log.Printf("встроенные правила не положены: %v", err)
+	}
+
 	providers := llmProviders()
 	if len(providers) == 0 {
 		log.Print("OPENROUTER_API_KEY не задан: очередь генерации разбирать некому")
@@ -454,7 +464,9 @@ func generation(ctx context.Context, gate *dbgate.Gate, desk *studio.Desk, sourc
 	// после которых отвечал сосед. Чинится это тем, что задание и узел
 	// поедут к цепочке в контексте обращения, и тогда записывать будет
 	// цепочка — одна, всё, что состоялось. Это отдельная работа.
-	runner := gen.NewRunner(jobs, prompts, chain).WithLedger(ledger, prices)
+	runner := gen.NewRunner(jobs, prompts, chain).
+		WithLedger(ledger, prices).
+		WithRules(rulebook)
 	go gen.Work(ctx, runner)
 
 	// Разбор документов разбирает СВОЙ исполнитель, а не общий.

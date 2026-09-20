@@ -102,6 +102,18 @@ type UnitRef struct {
 	Label string `json:"label"`
 	Title string `json:"title"`
 
+	// Path — путь единицы от корня («3/3.1»). Нужен своду правил: правило
+	// про раздел обязано доставаться его пунктам, иначе область пришлось
+	// бы перечислять поимённо и переписывать при каждом пополнении
+	// источника. У соседей не заполняется: круг различения берётся
+	// метками.
+	//
+	// Поле необязательное, и у заданий, заказанных до его появления, оно
+	// пусто. Сверка области это знает и падает обратно на метку — иначе
+	// правило про источник перестало бы действовать на его старых
+	// заданиях, и объяснить это было бы нечем.
+	Path string `json:"path,omitempty"`
+
 	// StatementsMd — положения соседа. Заполняются только у кандидатов
 	// неверных вариантов и только ради различающей сверки: условие готовой
 	// задачи прогоняется и против положений каждого неверного варианта,
@@ -212,11 +224,15 @@ func (r *Resolver) Resolve(ctx context.Context, order Order) (Plan, error) {
 
 	var parentLabel string
 	var answerable bool
+	// Путь читается здесь же, одним запросом: по нему свод правил решает,
+	// достаётся ли задаче правило, написанное про вышестоящий раздел.
+	// Собрать путь из метки обратно нельзя — это была бы вторая
+	// реализация вложенности, и расходилась бы она с первой молча.
 	err = r.gate.QueryRow(ctx,
-		`SELECT title, parent_label, answerable
+		`SELECT title, parent_label, answerable, path
 		   FROM source_units
 		  WHERE source_id = $1 AND label = $2 AND kind = 'entry'`,
-		order.SourceID, label).Scan(&plan.Unit.Title, &parentLabel, &answerable)
+		order.SourceID, label).Scan(&plan.Unit.Title, &parentLabel, &answerable, &plan.Unit.Path)
 	if err != nil {
 		return Plan{}, fmt.Errorf("в источнике нет такой единицы: %s", label)
 	}
