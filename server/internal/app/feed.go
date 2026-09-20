@@ -40,6 +40,32 @@ type Case struct {
 	Version   int64
 }
 
+// Scope — чем урезан корпус: номера наборов, открытых пришедшему.
+//
+// # Почему корпус — это объединение наборов, а не всё опубликованное
+//
+// До наряда 20 `GET /v1/cases` отдавал весь опубликованный корпус всякому
+// заведённому устройству, а устройство заводится в первую минуту после
+// установки. Пакетная система при этом обходилась одним запросом: платный
+// набор приезжал внутри корпуса целиком, с условием, вариантами и
+// разбором. Подписка не отличалась от её отсутствия ничем, что делает
+// сервер (СЕР-8 приговора аудита).
+//
+// Отсюда и то, что задача, не попавшая ни в один набор, не отдаётся
+// вовсе: корпус — это объединение наборов, на которые есть право. Иначе
+// «ничья» задача стала бы способом раздать что угодно мимо всех линеек.
+type Scope struct {
+	// Cut — есть ли что резать. Ложь означает, что у установки нет ни
+	// одного выпущенного набора, и тогда корпус отдаётся целиком: урезать
+	// его в пустоту значило бы показать врачу пустое приложение там, где
+	// никто ничего не закрывал.
+	Cut bool
+
+	// PackIDs — наборы, открытые пришедшему. Пустой список при Cut —
+	// исправный случай: врачу не открыт ни один набор.
+	PackIDs []int64
+}
+
 // Cursor — откуда продолжать.
 type Cursor struct {
 	After string
@@ -65,7 +91,7 @@ type Page struct {
 // Порядок по номеру задачи, а не по времени выпуска: время у двух задач,
 // выпущенных одной транзакцией, совпадает, и курсор по нему зациклился бы
 // на них навсегда. Номер уникален, и это делает страницы устойчивыми.
-func (f *Feed) Page(ctx context.Context, c Cursor) (Page, error) {
+func (f *Feed) Page(ctx context.Context, c Cursor, scope Scope) (Page, error) {
 	limit := c.Limit
 	if limit <= 0 || limit > 200 {
 		limit = 50
@@ -76,15 +102,22 @@ func (f *Feed) Page(ctx context.Context, c Cursor) (Page, error) {
 		return Page{}, err
 	}
 
+	// Отбор по правам стоит В ЗАПРОСЕ, а не в обходе прочитанного, и по
+	// той же причине, по которой там же стоит `status = 'published'`:
+	// отбор после чтения однажды забудут, и узнают об этом не сразу —
+	// корпус выглядит исправным при любом составе.
 	rows, err := f.gate.Query(ctx,
 		`SELECT id, source_id, unit_label, unit_path, body
 		   FROM cases
 		  WHERE status = 'published'
 		    AND ($1 = '' OR id > $1)
 		    AND ($2 = '' OR unit_path = $2 OR unit_path LIKE $3 ESCAPE '\')
+		    AND (NOT $5 OR EXISTS (SELECT 1 FROM pack_items i
+		                            WHERE i.case_id = cases.id
+		                              AND i.pack_id = ANY ($6)))
 		  ORDER BY id
 		  LIMIT $4`,
-		c.After, c.Path, escapeLike(c.Path)+`/%`, limit+1)
+		c.After, c.Path, escapeLike(c.Path)+`/%`, limit+1, scope.Cut, scope.PackIDs)
 	if err != nil {
 		return Page{}, fmt.Errorf("лента не прочитана: %w", err)
 	}
@@ -116,7 +149,11 @@ func (f *Feed) Page(ctx context.Context, c Cursor) (Page, error) {
 }
 
 // Case отдаёт одну опубликованную задачу.
-func (f *Feed) Case(ctx context.Context, id string) (Case, error) {
+//
+// Права спрашиваются и здесь, а не только у страницы: ручка по номеру —
+// это тот же корпус, выданный по одной задаче, и оставь её открытой,
+// обойти отбор можно было бы перебором номеров.
+func (f *Feed) Case(ctx context.Context, id string, scope Scope) (Case, error) {
 	version, err := f.Version(ctx)
 	if err != nil {
 		return Case{}, err
@@ -124,7 +161,12 @@ func (f *Feed) Case(ctx context.Context, id string) (Case, error) {
 	var one Case
 	err = f.gate.QueryRow(ctx,
 		`SELECT id, source_id, unit_label, unit_path, body
-		   FROM cases WHERE id = $1 AND status = 'published'`, id).
+		   FROM cases
+		  WHERE id = $1 AND status = 'published'
+		    AND (NOT $2 OR EXISTS (SELECT 1 FROM pack_items i
+		                            WHERE i.case_id = cases.id
+		                              AND i.pack_id = ANY ($3)))`,
+		id, scope.Cut, scope.PackIDs).
 		Scan(&one.ID, &one.SourceID, &one.UnitLabel, &one.UnitPath, &one.Body)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Case{}, errors.New("такой задачи нет")

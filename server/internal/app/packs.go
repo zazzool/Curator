@@ -61,6 +61,11 @@ func (r *packRoutes) shelf(w http.ResponseWriter, req *http.Request, caller Call
 		out = append(out, map[string]any{
 			"slug": one.Slug, "title": one.Title, "summaryMd": one.SummaryMd,
 			"version": one.Version, "cases": one.Cases,
+			// Линейка уезжает в приложение затем, чтобы закрытый набор
+			// говорил, ЧЕМ он открывается. «Закрыт» без этого — тупик:
+			// врач не знает, войти ему, купить или подписаться, и
+			// одинаково часто не делает ничего.
+			"line":    one.Line,
 			"kopecks": kopecks, "owned": owned,
 		})
 	}
