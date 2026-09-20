@@ -232,6 +232,19 @@ export type AppKey = {
   createdAt: string
 }
 
+// Пользователь студии, каким его видит мастерская.
+//
+// Секрета аутентификатора здесь нет и быть не может: его показывают
+// единственный раз — при заведении. Поле «секрет» в списке однажды
+// кто-нибудь заполнил бы, и второй довод лёг бы рядом с первым.
+export type StudioUser = {
+  login: string
+  displayName: string
+  permissions: string[]
+  disabled: boolean
+  createdAt: string
+}
+
 export type Me = {
   login: string
   displayName: string
@@ -513,6 +526,28 @@ export const api = {
     request<{ status: string }>(
       'POST',
       `/admin/api/app-keys/${encodeURIComponent(keyId)}/disable`,
+    ),
+
+  users: () => request<{ users: StudioUser[] }>('GET', '/admin/api/users'),
+
+  // Ответ несёт секрет аутентификатора — единственный раз в жизни входа.
+  // Дальше его не покажет никто: в базе он лежит, чтобы сверять коды, а
+  // не чтобы его смотреть.
+  createUser: (user: { login: string; displayName: string; permissions: string[] }) =>
+    request<{ login: string; secret: string; note: string }>('POST', '/admin/api/users', user),
+
+  setUserPermissions: (login: string, permissions: string[]) =>
+    request<{ permissions: string[] }>(
+      'PUT',
+      `/admin/api/users/${encodeURIComponent(login)}/permissions`,
+      { permissions },
+    ),
+
+  setUserDisabled: (login: string, disabled: boolean) =>
+    request<{ disabled: boolean }>(
+      'PUT',
+      `/admin/api/users/${encodeURIComponent(login)}/disabled`,
+      { disabled },
     ),
 
   contentVersion: () => request<{ version: number }>('GET', '/admin/api/content-version'),

@@ -164,6 +164,7 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 	if gate != nil {
 		desk := studio.NewDesk(studio.NewUsers(gate), studio.NewSessions(gate))
 		studio.Routes(desk)
+		studio.UserRoutes(desk)
 		source.Routes(desk, source.NewStore(gate))
 		casestore.Routes(desk, casestore.NewStore(gate))
 		app.KeyRoutes(desk, keys)

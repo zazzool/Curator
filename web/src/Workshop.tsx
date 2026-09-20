@@ -1,20 +1,223 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 
 import { датой } from './words'
+import { ПРАВА, праваСловами } from './permissions'
 import { ApiError, api } from './api'
-import type { AppKey, Me, Prompt } from './api'
+import type { AppKey, Me, Prompt, StudioUser } from './api'
 
-// Мастерская: задания моделям и ключи программ.
+// Мастерская: пользователи студии, задания моделям и ключи программ.
 //
-// Оба раздела — настройка службы, а не работа над задачами, и закрыты они
+// Всё это настройка службы, а не работа над задачами, и закрыто оно
 // разными правами: задания правит тот, кто отвечает за качество
-// генерации, ключи заводит тот, кто выкладывает сборки.
+// генерации, ключи заводит тот, кто выкладывает сборки, а пользователей —
+// тот, кому доверено раздавать доступ.
 
 export function Workshop({ me }: { me: Me }) {
   return (
     <div>
+      <Users me={me} />
       <Prompts me={me} />
       <AppKeys me={me} />
+    </div>
+  )
+}
+
+// Пользователи студии.
+//
+// До этого экрана нового составителя заводили на контуре руками. Ручка,
+// которой нет, не безопаснее ручки под правом: она выносит ту же власть в
+// ssh, где ни журнала, ни отказа за последнего мастера.
+function Users({ me }: { me: Me }) {
+  const [users, setUsers] = useState<StudioUser[] | null>(null)
+  const [draft, setDraft] = useState<{ login: string; displayName: string; permissions: string[] }>(
+    { login: '', displayName: '', permissions: [] },
+  )
+  const [made, setMade] = useState<{ login: string; secret: string; note: string } | null>(null)
+  const [open, setOpen] = useState<string | null>(null)
+  const [failure, setFailure] = useState('')
+
+  const canWorkshop = me.permissions.includes('workshop')
+
+  const reload = useCallback(async () => {
+    try {
+      setUsers((await api.users())?.users ?? [])
+    } catch (error) {
+      setFailure(error instanceof ApiError ? error.message : 'Пользователи не прочитаны')
+    }
+  }, [])
+
+  useEffect(() => {
+    void reload()
+  }, [reload])
+
+  async function create(event: FormEvent) {
+    event.preventDefault()
+    setFailure('')
+    try {
+      const out = await api.createUser(draft)
+      setMade({ login: out.login, secret: out.secret, note: out.note })
+      setDraft({ login: '', displayName: '', permissions: [] })
+      await reload()
+    } catch (error) {
+      setFailure(error instanceof ApiError ? error.message : 'Пользователь не заведён')
+    }
+  }
+
+  async function togglePermission(user: StudioUser, code: string) {
+    setFailure('')
+    setMade(null)
+    const next = user.permissions.includes(code)
+      ? user.permissions.filter((one) => one !== code)
+      : [...user.permissions, code]
+    try {
+      await api.setUserPermissions(user.login, next)
+      await reload()
+    } catch (error) {
+      // Текст сервера показывается как есть: на последнем мастере он
+      // говорит, что делать («сначала дайте право второму»), а своё «не
+      // удалось» отправило бы человека нажимать ту же кнопку снова.
+      setFailure(error instanceof ApiError ? error.message : 'Права не изменены')
+    }
+  }
+
+  async function setDisabled(user: StudioUser, disabled: boolean) {
+    setFailure('')
+    setMade(null)
+    try {
+      await api.setUserDisabled(user.login, disabled)
+      await reload()
+    } catch (error) {
+      setFailure(error instanceof ApiError ? error.message : 'Вход не изменён')
+    }
+  }
+
+  return (
+    <div>
+      <div className="page-head">
+        <h2>Пользователи студии</h2>
+      </div>
+      <p className="hint">
+        Вход именованный: по журналу должно быть видно, кто что сделал.
+        Отключённый вход не удаляется, а закрывается — имя в приходах и
+        правках обязано остаться читаемым.
+      </p>
+      {!canWorkshop && (
+        <p className="hint">Пользователей заводит тот, кому выдано право «мастерская».</p>
+      )}
+
+      {failure && <p className="alarm">{failure}</p>}
+
+      {made && (
+        <p className="done">
+          Вход «{made.login}» заведён. {made.note}
+          <br />
+          <span className="label">{made.secret}</span>
+        </p>
+      )}
+
+      <div className="page-section">
+        {users === null ? (
+          <p className="empty">Читаем…</p>
+        ) : (
+          <div className="list">
+            {users.map((user) => (
+              <div key={user.login} className="list-row">
+                <div className="row-body">
+                  <div className="row-line">
+                    <span>
+                      <span className="label">{user.login}</span> {user.displayName}
+                      {user.disabled && <span className="kind">вход закрыт</span>}
+                    </span>
+                    <span className="row-tools">
+                      <span className="muted">заведён {датой(user.createdAt)}</span>
+                      {canWorkshop && (
+                        <button onClick={() => setOpen(open === user.login ? null : user.login)}>
+                          {open === user.login ? 'Свернуть' : 'Права'}
+                        </button>
+                      )}
+                      {canWorkshop && (
+                        <button onClick={() => setDisabled(user, !user.disabled)}>
+                          {user.disabled ? 'Открыть вход' : 'Закрыть вход'}
+                        </button>
+                      )}
+                    </span>
+                  </div>
+                  <div className="muted">{праваСловами(user.permissions)}</div>
+                  {open === user.login && canWorkshop && (
+                    <ul className="units">
+                      {ПРАВА.map((right) => (
+                        <li key={right.code}>
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={user.permissions.includes(right.code)}
+                              onChange={() => togglePermission(user, right.code)}
+                            />{' '}
+                            {right.title} <span className="muted">— {right.about}</span>
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {canWorkshop && (
+        <form className="page-section form-grid" onSubmit={create}>
+          <h3 className="sub">Завести вход</h3>
+          <label className="form-row">
+            <span className="fld-label">Имя входа</span>
+            <input
+              value={draft.login}
+              onChange={(e) => setDraft({ ...draft, login: e.target.value })}
+              placeholder="ivanova"
+            />
+          </label>
+          <label className="form-row">
+            <span className="fld-label">Как зовут</span>
+            <input
+              value={draft.displayName}
+              onChange={(e) => setDraft({ ...draft, displayName: e.target.value })}
+              placeholder="Иванова А. П."
+            />
+          </label>
+          <ul className="units">
+            {ПРАВА.map((right) => (
+              <li key={right.code}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={draft.permissions.includes(right.code)}
+                    onChange={() =>
+                      setDraft({
+                        ...draft,
+                        permissions: draft.permissions.includes(right.code)
+                          ? draft.permissions.filter((one) => one !== right.code)
+                          : [...draft.permissions, right.code],
+                      })
+                    }
+                  />{' '}
+                  {right.title} <span className="muted">— {right.about}</span>
+                </label>
+              </li>
+            ))}
+          </ul>
+          <p className="hint">
+            Секрет аутентификатора покажется один раз — сразу после
+            заведения. Второй раз его не покажет никто: он хранится, чтобы
+            сверять коды, а не чтобы его смотреть.
+          </p>
+          <div className="form-actions">
+            <button className="primary" type="submit" disabled={draft.login.trim() === ''}>
+              Завести вход
+            </button>
+          </div>
+        </form>
+      )}
     </div>
   )
 }

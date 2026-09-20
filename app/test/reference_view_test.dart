@@ -134,6 +134,35 @@ void main() {
     expect(texts.where((t) => t.contains('G1')).length, 1);
   });
 
+  testWidgets('длинное название рода переносится, а не упирается в край', (
+    tester,
+  ) async {
+    // Род зовётся словом самого источника, а источник любой: название
+    // длиннее строки — обычный случай, а не край. Упёршись в край, Flutter
+    // не переносит, а рисует полосу отказа и съедает хвост названия.
+    // Ловится это только узким экраном: на широком переполнения нет, и
+    // проверка молча подтверждала бы исправность.
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await show(
+      tester,
+      CriteriaList(
+        statementWord: 'критерий',
+        statements: [
+          statement(
+            id: 1,
+            kind: 'дифференциальный диагноз и сходные состояния',
+            body: 'Отграничивается от органического расстройства.',
+          ),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('обозначение-метка показывается с названием и ведёт к нему', (
     tester,
   ) async {

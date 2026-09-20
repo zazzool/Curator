@@ -153,3 +153,133 @@ func permStrings(perms []Permission) []string {
 	}
 	return out
 }
+
+// Shown — пользователь студии в списке.
+//
+// Секрета здесь нет и быть не может: секрет, который можно посмотреть в
+// студии, перестаёт быть вторым доводом и становится вторым паролем,
+// лежащим рядом с первым.
+type Shown struct {
+	Login       string
+	DisplayName string
+	Permissions []Permission
+	Disabled    bool
+	CreatedAt   time.Time
+}
+
+// All отдаёт пользователей студии.
+func (u *Users) All(ctx context.Context) ([]Shown, error) {
+	rows, err := u.gate.Query(ctx,
+		`SELECT login, display_name, permissions, disabled_at, created_at
+		   FROM users ORDER BY login`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []Shown{}
+	for rows.Next() {
+		var one Shown
+		var perms []string
+		var disabled *time.Time
+		if err := rows.Scan(&one.Login, &one.DisplayName, &perms, &disabled, &one.CreatedAt); err != nil {
+			return nil, err
+		}
+		one.Disabled = disabled != nil
+		one.Permissions = []Permission{}
+		// Право не из словаря выбрасывается молча по тому же доводу, что
+		// и в ByLogin: строка могла остаться от прежней редакции, а
+		// показать право, которого никто не понимает, значит соврать.
+		for _, raw := range perms {
+			if p := Permission(raw); Known(p) {
+				one.Permissions = append(one.Permissions, p)
+			}
+		}
+		out = append(out, one)
+	}
+	return out, rows.Err()
+}
+
+// ErrLastWorkshop — отказ, оберегающий вход в мастерскую.
+//
+// Заводит пользователей право workshop, и оно же их отключает. Сними его
+// с последнего — и завести первого снова будет нельзя по кругу: входа,
+// из-под которого это делается, не останется ни у кого, и лечится это
+// только руками на контуре.
+var ErrLastWorkshop = errors.New(
+	"это последний человек с правом мастерской: сняв его, " +
+		"завести пользователя будет некому")
+
+// SetPermissions меняет права пользователя.
+func (u *Users) SetPermissions(ctx context.Context, login string, perms []Permission) error {
+	for _, p := range perms {
+		if !Known(p) {
+			return fmt.Errorf("права %q не существует", p)
+		}
+	}
+	keeps := false
+	for _, p := range perms {
+		if p == PermWorkshop {
+			keeps = true
+		}
+	}
+	return u.change(ctx, login, keeps, func(ctx context.Context, login string) error {
+		tag, err := u.gate.Exec(ctx,
+			`UPDATE users SET permissions = $2 WHERE login = $1`, login, permStrings(perms))
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("пользователя %q нет", login)
+		}
+		return nil
+	})
+}
+
+// SetDisabled закрывает или открывает вход пользователю студии.
+//
+// Отметка, а не удаление строки: на пользователя ссылаются приходы и
+// правки, подписанные его именем, и удаление порвало бы ответ на вопрос,
+// кто это сделал.
+func (u *Users) SetDisabled(ctx context.Context, login string, disabled bool) error {
+	return u.change(ctx, login, !disabled, func(ctx context.Context, login string) error {
+		var at any
+		if disabled {
+			at = time.Now()
+		}
+		tag, err := u.gate.Exec(ctx,
+			`UPDATE users SET disabled_at = $2 WHERE login = $1`, login, at)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("пользователя %q нет", login)
+		}
+		return nil
+	})
+}
+
+// change применяет правку, если после неё в мастерскую останется кому
+// войти.
+//
+// Считается не «сам ли ты это делаешь», а сколько таких людей останется:
+// запрет снимать право с себя обходится в два хода через второго
+// пользователя, и запирается установка так же насмерть.
+func (u *Users) change(ctx context.Context, login string, keepsWorkshop bool,
+	apply func(context.Context, string) error) error {
+	login = strings.TrimSpace(strings.ToLower(login))
+	if !keepsWorkshop {
+		var others int
+		err := u.gate.QueryRow(ctx, `
+			SELECT count(*) FROM users
+			 WHERE login <> $1 AND disabled_at IS NULL
+			   AND $2 = ANY (permissions)`, login, string(PermWorkshop)).Scan(&others)
+		if err != nil {
+			return err
+		}
+		if others == 0 {
+			return ErrLastWorkshop
+		}
+	}
+	return apply(ctx, login)
+}

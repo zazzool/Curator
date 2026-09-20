@@ -25,6 +25,35 @@ const ЗАДАНИЯ = {
   ],
 }
 
+const ПОЛЬЗОВАТЕЛИ = {
+  users: [
+    {
+      login: 'мастер',
+      displayName: 'Мастер',
+      permissions: ['prompts', 'workshop'],
+      disabled: false,
+      createdAt: '2026-09-01T10:00:00Z',
+    },
+    {
+      login: 'всевластный',
+      displayName: 'Владелец',
+      permissions: [
+        'source:read', 'source:accept', 'case:read', 'case:write',
+        'generate', 'prompts', 'packs', 'clients', 'sales', 'analytics', 'workshop',
+      ],
+      disabled: false,
+      createdAt: '2026-07-01T10:00:00Z',
+    },
+    {
+      login: 'уволенный',
+      displayName: 'Бывший составитель',
+      permissions: [],
+      disabled: true,
+      createdAt: '2026-08-01T10:00:00Z',
+    },
+  ],
+}
+
 const КЛЮЧИ = {
   keys: [
     {
@@ -36,14 +65,21 @@ const КЛЮЧИ = {
   ],
 }
 
-function serve(prompts: unknown, keys: unknown) {
+// Мастерская ходит за тремя списками сразу, и подставлять их надо все
+// три: экран, которому не ответили, остаётся в «Читаем…» и молча уводит
+// проверку от того, что она проверяет.
+function ответ(path: string, prompts: unknown, keys: unknown, users: unknown) {
+  if (path.startsWith('/admin/api/prompts')) return prompts
+  if (path.startsWith('/admin/api/users')) return users
+  return keys
+}
+
+function serve(prompts: unknown, keys: unknown, users: unknown = ПОЛЬЗОВАТЕЛИ) {
   vi.stubGlobal(
     'fetch',
     vi.fn((path: string) =>
       Promise.resolve(
-        new Response(JSON.stringify(path.startsWith('/admin/api/prompts') ? prompts : keys), {
-          status: 200,
-        }),
+        new Response(JSON.stringify(ответ(path, prompts, keys, users)), { status: 200 }),
       ),
     ),
   )
@@ -78,10 +114,9 @@ describe('мастерская', () => {
           )
         }
         return Promise.resolve(
-          new Response(
-            JSON.stringify(path.startsWith('/admin/api/prompts') ? ЗАДАНИЯ : КЛЮЧИ),
-            { status: 200 },
-          ),
+          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ)), {
+            status: 200,
+          }),
         )
       }),
     )
@@ -106,10 +141,9 @@ describe('мастерская', () => {
           )
         }
         return Promise.resolve(
-          new Response(
-            JSON.stringify(path.startsWith('/admin/api/prompts') ? ЗАДАНИЯ : КЛЮЧИ),
-            { status: 200 },
-          ),
+          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ)), {
+            status: 200,
+          }),
         )
       }),
     )
@@ -133,7 +167,89 @@ describe('мастерская', () => {
     render(<Workshop me={РЕДАКТОР} />)
     await screen.findByText('Черновик задачи')
     expect(screen.queryByText('Завести ключ')).toBeNull()
+    expect(screen.queryByText('Завести вход')).toBeNull()
     expect(screen.getByText(/кому выдано право «задания»/)).toBeTruthy()
-    expect(screen.getByText(/кому выдано право «мастерская»/)).toBeTruthy()
+    // Оба раздела мастерской говорят, кто держит право: скрытое действие
+    // без объяснения выглядит поломкой, а не запретом.
+    expect(screen.getAllByText(/кому выдано право «мастерская»/)).toHaveLength(2)
+  })
+
+  it('список пользователей показывает права словами и закрытый вход', async () => {
+    render(<Workshop me={МАСТЕР} />)
+    expect(await screen.findByText('Бывший составитель')).toBeTruthy()
+    // Права показаны словами: код «prompts» ничего не говорит тому, кто
+    // решает, что выдать человеку.
+    expect(screen.getByText(/задания моделям, мастерская/)).toBeTruthy()
+    expect(screen.getByText('вход закрыт')).toBeTruthy()
+    expect(screen.getByText(/прав нет: войти сможет, а разделов не увидит/)).toBeTruthy()
+    // Полный набор сворачивается: перечисленный целиком, он одинаков у
+    // каждого такого человека, и список превращается в стену, по которой
+    // не видно, чем люди отличаются.
+    expect(screen.getByText('все права')).toBeTruthy()
+  })
+
+  it('секрет аутентификатора показывается целиком и один раз', async () => {
+    // Он хранится, чтобы сверять коды, а не чтобы его смотреть: не показав
+    // сейчас, мы не покажем никогда, и вход придётся заводить заново.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if (init?.method === 'POST') {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                login: 'ivanova',
+                secret: 'СЕКРЕТ-входа',
+                note: 'Передайте секрет человеку сейчас',
+              }),
+              { status: 201 },
+            ),
+          )
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ)), {
+            status: 200,
+          }),
+        )
+      }),
+    )
+    render(<Workshop me={МАСТЕР} />)
+    fireEvent.change(await screen.findByPlaceholderText('ivanova'), {
+      target: { value: 'ivanova' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Завести вход' }))
+    await waitFor(() => expect(screen.getByText('СЕКРЕТ-входа')).toBeTruthy())
+  })
+
+  it('отказ за последнего мастера показывается словами сервера', async () => {
+    // Это не негодный запрос, а верный запрос в негодный момент, и сервер
+    // говорит, что делать. Своё «не удалось» отправило бы человека
+    // нажимать ту же кнопку снова.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if (init?.method === 'PUT') {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                error:
+                  'Это последний человек с правом мастерской: сняв его, ' +
+                  'завести пользователя будет некому',
+              }),
+              { status: 409 },
+            ),
+          )
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ)), {
+            status: 200,
+          }),
+        )
+      }),
+    )
+    render(<Workshop me={МАСТЕР} />)
+    await screen.findByText('Бывший составитель')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Закрыть вход' })[0]!)
+    expect(await screen.findByText(/последний человек с правом мастерской/)).toBeTruthy()
   })
 })
