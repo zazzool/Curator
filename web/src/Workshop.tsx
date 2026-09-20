@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useState, type FormEvent } from 'react'
 
-import { датой } from './words'
+import { датой, датойИвременем } from './words'
+import { dropDraft, readDraft, writeDraft } from './draftStore'
 import { ПРАВА, праваСловами } from './permissions'
 import { ApiError, api } from './api'
 import type { AppKey, Me, Prompt, StudioUser } from './api'
@@ -254,6 +255,8 @@ function Prompts({ me }: { me: Me }) {
   const [prompts, setPrompts] = useState<Prompt[] | null>(null)
   const [open, setOpen] = useState<string | null>(null)
   const [draft, setDraft] = useState({ name: '', systemMd: '', userMd: '', revision: 0 })
+  /** Когда был записан восстановленный черновик; пустая строка — своего нет. */
+  const [restored, setRestored] = useState('')
   const [failure, setFailure] = useState('')
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
@@ -272,16 +275,48 @@ function Prompts({ me }: { me: Me }) {
     void reload()
   }, [reload])
 
+  type Набранное = { name: string; systemMd: string; userMd: string; revision: number }
+
   function edit(prompt: Prompt) {
     setOpen(prompt.id)
     setNote('')
     setFailure('')
-    setDraft({
+    const сСервера: Набранное = {
       name: prompt.name,
       systemMd: prompt.systemMd,
       userMd: prompt.userMd,
       revision: prompt.revision,
-    })
+    }
+
+    // Черновик подхватывается, только если он набран на той же редакции,
+    // что сейчас на сервере. Набранный на прежней означает, что задание
+    // с тех пор правил кто-то другой: подставить его молча значит дать
+    // человеку дописать поверх чужой работы, не показав её. Такой
+    // черновик выбрасывается — сохранить его всё равно не дала бы сверка
+    // редакций на сервере.
+    const свой = readDraft<Набранное>(prompt.id)
+    if (свой !== null && свой.revision === prompt.revision) {
+      setDraft(свой.value)
+      setRestored(свой.savedAt)
+      return
+    }
+    if (свой !== null) dropDraft(prompt.id)
+    setDraft(сСервера)
+    setRestored('')
+  }
+
+  /**
+   * Правит черновик и тут же записывает его в браузер.
+   *
+   * Запись идёт на каждое нажатие клавиши, без задержки: задержка
+   * спасает от частой записи, а теряется набранное именно в последние
+   * секунды — на закрытой вкладке или уснувшей машине, когда отложенная
+   * запись не случится уже никогда. Пишется одна строка в localStorage,
+   * и цена этого не измерима рядом с ценой потери.
+   */
+  function правим(next: Набранное) {
+    setDraft(next)
+    if (open !== null) writeDraft(open, next, next.revision)
   }
 
   async function save(event: FormEvent) {
@@ -293,7 +328,12 @@ function Prompts({ me }: { me: Me }) {
     try {
       const out = await api.savePrompt({ id: open, ...draft })
       await reload()
+      // Сохранённое на сервере больше не черновик: оставленный, он
+      // восстановился бы при следующем заходе и выглядел бы как
+      // несохранённое, которого нет.
+      dropDraft(open)
       setDraft({ ...draft, revision: out.revision })
+      setRestored('')
       setNote(`Задание сохранено, редакция ${out.revision}.`)
     } catch (error) {
       // Отказ по редакции — не поломка, а чужая правка. Текст сервера
@@ -350,23 +390,30 @@ function Prompts({ me }: { me: Me }) {
             <input
               className="fld-long"
               value={draft.name}
-              onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+              onChange={(e) => правим({ ...draft, name: e.target.value })}
             />
           </label>
           <label>
             <span className="fld-label">Что модель знает о себе</span>
             <textarea
               value={draft.systemMd}
-              onChange={(e) => setDraft({ ...draft, systemMd: e.target.value })}
+              onChange={(e) => правим({ ...draft, systemMd: e.target.value })}
             />
           </label>
           <label>
             <span className="fld-label">Что ей поручается</span>
             <textarea
               value={draft.userMd}
-              onChange={(e) => setDraft({ ...draft, userMd: e.target.value })}
+              onChange={(e) => правим({ ...draft, userMd: e.target.value })}
             />
           </label>
+          {restored !== '' && (
+            <p className="banner" role="status">
+              Восстановлено несохранённое от {датойИвременем(restored)}. Сохранённое
+              на сервере не тронуто — нажмите «Вернуть сохранённое», если
+              этот черновик не нужен.
+            </p>
+          )}
           <p className="hint">
             Редакция сверяется при сохранении: двое, открывшие одно задание,
             иначе затрут друг друга молча — и узнает об этом тот, чья правка
@@ -376,6 +423,29 @@ function Prompts({ me }: { me: Me }) {
             <button type="submit" disabled={busy}>
               Сохранить задание
             </button>
+            {restored !== '' && (
+              <button
+                type="button"
+                onClick={() => {
+                  // Выбрасывать черновик — дело человека, а не студии:
+                  // восстановленное он мог не узнать в лицо, и пути
+                  // обратно к сохранённому без этой кнопки нет.
+                  const было = prompts?.find((one) => one.id === open)
+                  if (было) {
+                    dropDraft(было.id)
+                    setDraft({
+                      name: было.name,
+                      systemMd: было.systemMd,
+                      userMd: было.userMd,
+                      revision: было.revision,
+                    })
+                    setRestored('')
+                  }
+                }}
+              >
+                Вернуть сохранённое
+              </button>
+            )}
             <button type="button" onClick={() => setOpen(null)}>
               Закрыть
             </button>

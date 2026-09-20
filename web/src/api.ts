@@ -283,6 +283,24 @@ export function currentToken(): string {
   return token
 }
 
+/**
+ * Кого звать, когда сессия кончилась.
+ *
+ * Без этого студия оставалась открытой на вид и мёртвой на деле: токен
+ * протух, а колонка разделов, имя и права по-прежнему на месте.
+ * Составитель правил задание генерации двадцать минут, жал «Сохранить»,
+ * получал красную полосу — и жал ещё раз, потому что ничто не говорило
+ * ему войти заново. Единственной дверью обратно было «Выйти», а оно
+ * стирало набранное.
+ *
+ * Обработчик ставит App и вяжет к нему возврат на вход.
+ */
+let authLost: (() => void) | null = null
+
+export function setAuthLost(handler: (() => void) | null): void {
+  authLost = handler
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const init: RequestInit = { method, headers: {} }
   const headers = init.headers as Record<string, string>
@@ -307,6 +325,18 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     }
   }
   if (!response.ok) {
+    // Сессия кончилась или отозвана. Токен убирается сразу — иначе
+    // следующее обращение уйдёт с тем же мёртвым, — и зовётся тот, кто
+    // умеет спросить код заново.
+    //
+    // Вход исключён намеренно: неверный код тоже отвечает 401, и звать
+    // на нём «сессия кончилась» значит объяснять человеку, что он вышел,
+    // ровно в тот момент, когда он входит.
+    if (response.status === 401 && path !== '/admin/api/login') {
+      token = ''
+      authLost?.()
+    }
+
     const failure = parsed as { error?: string; faults?: Fault[] } | null
     throw new ApiError(
       response.status,

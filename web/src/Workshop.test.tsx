@@ -88,6 +88,7 @@ function serve(prompts: unknown, keys: unknown, users: unknown = ПОЛЬЗОВ�
 describe('мастерская', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
+    localStorage.clear()
     serve(ЗАДАНИЯ, КЛЮЧИ)
   })
 
@@ -96,6 +97,71 @@ describe('мастерская', () => {
     fireEvent.click(await screen.findByText('Черновик задачи'))
     expect(await screen.findByDisplayValue('Ты врач-методист.')).toBeTruthy()
     expect(screen.getByDisplayValue('Напиши задачу по {{unit}}.')).toBeTruthy()
+  })
+
+  it('набранное переживает закрытие вкладки', async () => {
+    // Токен студии живёт только в памяти страницы, поэтому F5 по
+    // привычке, уснувший ноутбук и истёкшая сессия — одно и то же
+    // событие. Методист переписывает задание сорок минут; терять это
+    // из-за нажатия Ctrl-R нельзя.
+    const { unmount } = render(<Workshop me={МАСТЕР} />)
+    fireEvent.click(await screen.findByText('Черновик задачи'))
+    const поле = await screen.findByDisplayValue('Ты врач-методист.')
+    fireEvent.change(поле, { target: { value: 'Ты врач-методист. Пиши строго.' } })
+    unmount()
+
+    render(<Workshop me={МАСТЕР} />)
+    fireEvent.click(await screen.findByText('Черновик задачи'))
+    expect(await screen.findByDisplayValue('Ты врач-методист. Пиши строго.')).toBeTruthy()
+    expect(screen.getByText(/Восстановлено несохранённое/)).toBeTruthy()
+  })
+
+  it('черновик от прежней редакции не подставляется молча', async () => {
+    // Задание с тех пор правил кто-то другой. Подставь черновик — и
+    // человек допишет поверх чужой работы, не увидев её; сохранить это
+    // всё равно не дала бы сверка редакций на сервере.
+    const { unmount } = render(<Workshop me={МАСТЕР} />)
+    fireEvent.click(await screen.findByText('Черновик задачи'))
+    const поле = await screen.findByDisplayValue('Ты врач-методист.')
+    fireEvent.change(поле, { target: { value: 'моё несохранённое' } })
+    unmount()
+
+    const ушедшее = {
+      prompts: [{ ...ЗАДАНИЯ.prompts[0]!, systemMd: 'чужая правка', revision: 5 }],
+    }
+    serve(ушедшее, КЛЮЧИ)
+    render(<Workshop me={МАСТЕР} />)
+    fireEvent.click(await screen.findByText('Черновик задачи'))
+    expect(await screen.findByDisplayValue('чужая правка')).toBeTruthy()
+    expect(screen.queryByText(/Восстановлено несохранённое/)).toBeNull()
+  })
+
+  it('сохранённое задание не возвращается как несохранённое', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if (init?.method === 'PUT') {
+          return Promise.resolve(new Response(JSON.stringify({ revision: 5 }), { status: 200 }))
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ)), {
+            status: 200,
+          }),
+        )
+      }),
+    )
+    const { unmount } = render(<Workshop me={МАСТЕР} />)
+    fireEvent.click(await screen.findByText('Черновик задачи'))
+    const поле = await screen.findByDisplayValue('Ты врач-методист.')
+    fireEvent.change(поле, { target: { value: 'выверено и сохранено' } })
+    fireEvent.click(screen.getByText('Сохранить задание'))
+    await waitFor(() => expect(screen.getByText(/Задание сохранено/)).toBeTruthy())
+    unmount()
+
+    render(<Workshop me={МАСТЕР} />)
+    fireEvent.click(await screen.findByText('Черновик задачи'))
+    expect(await screen.findByDisplayValue('Ты врач-методист.')).toBeTruthy()
+    expect(screen.queryByText(/Восстановлено несохранённое/)).toBeNull()
   })
 
   it('отказ по чужой правке показывается словами сервера', async () => {

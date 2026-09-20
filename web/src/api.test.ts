@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { ApiError, api, setToken } from './api'
+import { ApiError, api, currentToken, setAuthLost, setToken } from './api'
 
 function answer(status: number, body: unknown) {
   return Promise.resolve(
@@ -11,6 +11,7 @@ function answer(status: number, body: unknown) {
 describe('обращение к редакционному API', () => {
   beforeEach(() => {
     setToken('')
+    setAuthLost(null)
     vi.restoreAllMocks()
   })
 
@@ -58,5 +59,32 @@ describe('обращение к редакционному API', () => {
     // браузер, и заданный вручную Content-Type её теряет — сервер получает
     // форму, которую не может разобрать.
     expect((init.headers as Record<string, string>)['Content-Type']).toBeUndefined()
+  })
+
+  it('истёкшая сессия убирает токен и зовёт на вход', async () => {
+    // Без этого студия оставалась открытой на вид и мёртвой на деле:
+    // колонка, имя и права на месте, а всякое сохранение отказывает, и
+    // ничто не говорит человеку войти заново.
+    let позвали = 0
+    setAuthLost(() => {
+      позвали++
+    })
+    setToken('протухший')
+    vi.stubGlobal('fetch', vi.fn(() => answer(401, { error: 'Сессия не найдена' })))
+    await expect(api.sources()).rejects.toThrow('Сессия не найдена')
+    expect(позвали).toBe(1)
+    expect(currentToken()).toBe('')
+  })
+
+  it('неверный код на входе не объявляется концом сессии', async () => {
+    // Вход тоже отвечает 401. Позови отсюда «сессия кончилась» — и
+    // человеку объяснят, что он вышел, ровно когда он входит.
+    let позвали = 0
+    setAuthLost(() => {
+      позвали++
+    })
+    vi.stubGlobal('fetch', vi.fn(() => answer(401, { error: 'Имя или код не подошли' })))
+    await expect(api.login('мастер', '000000')).rejects.toThrow('Имя или код не подошли')
+    expect(позвали).toBe(0)
   })
 })

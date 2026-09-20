@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { Login } from './Login'
 import { Packs } from './Packs'
@@ -7,13 +7,14 @@ import { Sales } from './Sales'
 import { Workshop } from './Workshop'
 import { SourceList } from './SourceList'
 import { SourceScreen } from './SourceScreen'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { Sidebar } from './components/Sidebar'
 import { IdentityBar } from './components/IdentityBar'
 import { StatusBar } from './components/StatusBar'
 import { Toolbar } from './components/Toolbar'
 import { readSidebarCollapsed, writeSidebarCollapsed } from './sidebarState'
 import type { SectionId } from './sections'
-import { api, setToken } from './api'
+import { api, setAuthLost, setToken } from './api'
 import type { Me } from './api'
 
 /**
@@ -47,8 +48,35 @@ export function App() {
    * сворачивать её заново на каждой странице.
    */
   const [navCollapsed, setNavCollapsed] = useState(readSidebarCollapsed)
+  /**
+   * Почему студия закрылась сама. Пустая строка — человек ещё не входил
+   * или вышел сам.
+   */
+  const [lost, setLost] = useState('')
 
-  if (!me) return <Login onEnter={setMe} />
+  // Слой обращений не знает ни о состоянии, ни о входе — и не должен:
+  // иначе он потянул бы за собой половину студии. Он лишь зовёт того,
+  // кого здесь привязали, когда сервер ответил «сессии нет».
+  useEffect(() => {
+    setAuthLost(() => {
+      setMe(null)
+      setOpenSource(null)
+      setLost('Сессия кончилась. Войдите заново.')
+    })
+    return () => setAuthLost(null)
+  }, [])
+
+  if (!me) {
+    return (
+      <Login
+        onEnter={(who) => {
+          setLost('')
+          setMe(who)
+        }}
+        notice={lost}
+      />
+    )
+  }
 
   async function leave() {
     // Выход не ждёт ответа сервера: человек нажал «выйти» и должен выйти.
@@ -89,19 +117,26 @@ export function App() {
               же прокруткой, а «кто я» нужно в любой момент работы. */}
           <IdentityBar who={me.displayName || me.login} permissions={me.permissions} />
 
-          {section === 'packs' ? (
-            <Packs me={me} />
-          ) : section === 'sales' ? (
-            <Sales me={me} />
-          ) : section === 'reports' ? (
-            <Reports me={me} />
-          ) : section === 'workshop' ? (
-            <Workshop me={me} />
-          ) : openSource === null ? (
-            <SourceList me={me} onOpen={(id, title) => setOpenSource({ id, title })} />
-          ) : (
-            <SourceScreen me={me} id={openSource.id} onBack={() => setOpenSource(null)} />
-          )}
+          {/* Граница отказа охватывает только рабочую область: кривая
+              задача должна стоить одной панели, а не всей студии вместе с
+              колонкой разделов и именем вошедшего. Ключ сбрасывает
+              упавшее при переходе — иначе отказ на одном экране висел бы
+              и на исправных. */}
+          <ErrorBoundary key={`${section}:${openSource?.id ?? ''}`}>
+            {section === 'packs' ? (
+              <Packs me={me} />
+            ) : section === 'sales' ? (
+              <Sales me={me} />
+            ) : section === 'reports' ? (
+              <Reports me={me} />
+            ) : section === 'workshop' ? (
+              <Workshop me={me} />
+            ) : openSource === null ? (
+              <SourceList me={me} onOpen={(id, title) => setOpenSource({ id, title })} />
+            ) : (
+              <SourceScreen me={me} id={openSource.id} onBack={() => setOpenSource(null)} />
+            )}
+          </ErrorBoundary>
         </main>
 
         {/* Полоса ждёт сведений об открытом экране и пока пуста — пустая
