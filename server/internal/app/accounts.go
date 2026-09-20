@@ -60,28 +60,22 @@ type About struct {
 // запись, к которой никто не может войти, и появилась бы она молча, при
 // обрыве связи ровно посередине.
 func (a *Accounts) Enroll(ctx context.Context, about About) (Device, error) {
-	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
-		return Device{}, fmt.Errorf("токен устройства не выдан: %w", err)
+	token, err := newToken()
+	if err != nil {
+		return Device{}, err
 	}
-	token := base64.RawURLEncoding.EncodeToString(raw)
 
 	var out Device
-	err := a.gate.InTx(ctx, func(tx pgx.Tx) error {
+	err = a.gate.InTx(ctx, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx,
 			`INSERT INTO accounts DEFAULT VALUES RETURNING id`).Scan(&out.AccountID); err != nil {
 			return fmt.Errorf("учётная запись не заведена: %w", err)
 		}
-		err := tx.QueryRow(ctx,
-			`INSERT INTO devices (account_id, token_hash, platform, os_version, model, app_version, last_seen)
-			 VALUES ($1, $2, $3, $4, $5, $6, NOW())
-			 RETURNING id`,
-			out.AccountID, fingerprint(token),
-			trim(about.Platform, 32), trim(about.OSVersion, 64),
-			trim(about.Model, 64), trim(about.AppVersion, 32)).Scan(&out.DeviceID)
+		id, err := addDevice(ctx, tx, out.AccountID, token, about)
 		if err != nil {
-			return fmt.Errorf("устройство не заведено: %w", err)
+			return err
 		}
+		out.DeviceID = id
 		return nil
 	})
 	if err != nil {
@@ -89,6 +83,64 @@ func (a *Accounts) Enroll(ctx context.Context, about About) (Device, error) {
 	}
 	out.Token = token
 	return out, nil
+}
+
+// EnrollOn заводит устройство на уже существующей записи.
+//
+// Этим возвращается доступ тому, кто подтвердил почту с нового телефона:
+// запись остаётся прежней — с опытом, знаками и купленным доступом, — а
+// устройство добавляется рядом. Прежние устройства при этом не выбрасываются
+// намеренно: врач, восстановившийся на планшете, не должен обнаружить, что
+// его телефон разлогинился; лишнее он уберёт сам в «Устройствах».
+func (a *Accounts) EnrollOn(ctx context.Context, accountID int64, about About) (Device, error) {
+	token, err := newToken()
+	if err != nil {
+		return Device{}, err
+	}
+
+	out := Device{AccountID: accountID}
+	err = a.gate.InTx(ctx, func(tx pgx.Tx) error {
+		id, err := addDevice(ctx, tx, accountID, token, about)
+		if err != nil {
+			return err
+		}
+		out.DeviceID = id
+		return nil
+	})
+	if err != nil {
+		return Device{}, err
+	}
+	out.Token = token
+	return out, nil
+}
+
+// addDevice — общая половина обоих заведений.
+//
+// Вынесена не ради краткости, а потому что колонки устройства правятся
+// целиком: две копии этого INSERT разошлись бы на первой же новой колонке,
+// и разошлись бы молча — оба пути возвращают рабочий токен.
+func addDevice(ctx context.Context, tx pgx.Tx, accountID int64, token string, about About) (int64, error) {
+	var id int64
+	err := tx.QueryRow(ctx,
+		`INSERT INTO devices (account_id, token_hash, platform, os_version, model, app_version, last_seen)
+		 VALUES ($1, $2, $3, $4, $5, $6, NOW())
+		 RETURNING id`,
+		accountID, fingerprint(token),
+		trim(about.Platform, 32), trim(about.OSVersion, 64),
+		trim(about.Model, 64), trim(about.AppVersion, 32)).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("устройство не заведено: %w", err)
+	}
+	return id, nil
+}
+
+// newToken порождает токен устройства.
+func newToken() (string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("токен устройства не выдан: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
 // ErrNoDevice — устройство не опознано.

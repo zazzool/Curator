@@ -802,6 +802,11 @@ CREATE TABLE IF NOT EXISTS email_codes (
     email      TEXT        NOT NULL CHECK (email <> ''),
     -- Код хранится отпечатком по той же причине, что и токен устройства.
     code_hash  TEXT        NOT NULL CHECK (code_hash <> ''),
+    -- Зачем выдан код. Разделено не для отчёта: код привязки уходит на
+    -- адрес, который ещё никому не принадлежит, а код возврата доступа —
+    -- на уже привязанный, и это две разные двери. Один общий код означал
+    -- бы, что выданное для одной двери открывает другую.
+    purpose    TEXT        NOT NULL DEFAULT 'bind' CHECK (purpose IN ('bind', 'recovery')),
     expires_at TIMESTAMPTZ NOT NULL,
     used_at    TIMESTAMPTZ NULL,
     attempts   INTEGER     NOT NULL DEFAULT 0,
