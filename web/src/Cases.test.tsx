@@ -153,6 +153,64 @@ describe('задачи источника', () => {
     expect(screen.getByText(/верный ответ/)).toBeTruthy()
   })
 
+  it('задача правится и сохраняется со своей редакцией', async () => {
+    // До этой правки право «править задачи» обещало словами то, чего
+    // студия не умела вовсе: написанное моделью можно было только
+    // прочитать.
+    const посланное: unknown[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if (init?.method === 'PUT') {
+          посланное.push(JSON.parse(String(init.body)))
+          return Promise.resolve(
+            new Response(JSON.stringify(задача({ revision: 2 })), { status: 200 }),
+          )
+        }
+        if (path.startsWith('/admin/api/cases/')) {
+          return Promise.resolve(new Response(JSON.stringify(задача()), { status: 200 }))
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify({ cases: [задача()] }), { status: 200 }),
+        )
+      }),
+    )
+    render(<Cases me={СОСТАВИТЕЛЬ} source={SOURCE} path="" />)
+
+    await waitFor(() => expect(screen.getByText('Открыть')).toBeTruthy())
+    fireEvent.click(screen.getByText('Открыть'))
+    fireEvent.click(await screen.findByText('Править'))
+
+    const поле = await screen.findByDisplayValue('Заявление подано в понедельник.')
+    fireEvent.change(поле, { target: { value: 'Заявление подано во вторник.' } })
+    fireEvent.click(screen.getByText('Сохранить задачу'))
+
+    await waitFor(() => expect(посланное.length).toBe(1))
+    const ушло = посланное[0] as { revision: number; body: { segments: { text: string }[] } }
+    // Редакция уезжает на сервер: сверяет её он, а не студия — двое,
+    // открывшие задачу разом, иначе затрут друг друга молча.
+    expect(ушло.revision).toBe(1)
+    expect(ушло.body.segments[0]!.text).toBe('Заявление подано во вторник.')
+    // Разбиение на фрагменты цело: на нём держится разметка.
+    expect(ушло.body.segments).toHaveLength(2)
+  })
+
+  it('раздаваемая задача не правится, и сказано почему', async () => {
+    // Правка раздаваемой молча меняет то, что уже видят на устройствах, и
+    // расходится с попытками, записанными по прежнему тексту.
+    const живая = задача({ status: 'published', statusWord: 'раздаётся' })
+    serve({
+      '/admin/api/cases/': живая,
+      '/admin/api/cases': { cases: [живая] },
+    })
+    render(<Cases me={СОСТАВИТЕЛЬ} source={SOURCE} path="" />)
+
+    await waitFor(() => expect(screen.getByText('Открыть')).toBeTruthy())
+    fireEvent.click(screen.getByText('Открыть'))
+    expect(await screen.findByText(/Снимите её с раздачи/)).toBeTruthy()
+    expect(screen.queryByText('Править')).toBeNull()
+  })
+
   it('недописанная моделью задача открывается, а не роняет экран', async () => {
     // Поля тела объявлены обязательными, но пишет их модель, и
     // недописанное она отдаёт молча. Перебор отсутствующего бросает во
