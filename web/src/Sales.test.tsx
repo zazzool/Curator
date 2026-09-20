@@ -115,6 +115,41 @@ describe('продажи', () => {
     expect(posted).toBe(0)
   })
 
+  it('второй приход того же врача идёт своим ключом повторности', async () => {
+    // Ключ складывался из врача, назначения, суммы и числа месяца, и у
+    // двух РАЗНЫХ приходов совпадал. Врач, купивший второй месяц в тот
+    // же день, получал «уже оформлен» и второго месяца не получал, а
+    // деньги за него были приняты.
+    const ключи: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if (init?.method === 'POST' && path.includes('/payments')) {
+          ключи.push(JSON.parse(String(init.body)).idemKey)
+          return Promise.resolve(
+            new Response(JSON.stringify({ id: ключи.length, kopecks: 199000 }), {
+              status: 200,
+            }),
+          )
+        }
+        const found = ОБЫЧНО.find(([key]) => path.startsWith(key))
+        return Promise.resolve(
+          new Response(JSON.stringify(found ? found[1] : {}), { status: 200 }),
+        )
+      }),
+    )
+    render(<Sales me={ОПЕРАТОР} />)
+    fireEvent.click(await screen.findByText('Иванов И.И.'))
+    for (const _ of [1, 2]) {
+      const поле = await screen.findByPlaceholderText('1990')
+      fireEvent.change(поле, { target: { value: '1990' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Оформить приход' }))
+      await waitFor(() => expect(screen.getByText(/Приход оформлен/)).toBeTruthy())
+    }
+    expect(ключи).toHaveLength(2)
+    expect(ключи[0]).not.toBe(ключи[1])
+  })
+
   it('закрытый вход назван закрытым, и предлагается его открыть', async () => {
     serve([['/admin/api/clients/7/payments', { payments: [] }],
            ['/admin/api/clients/7/entitlements', { entitlements: [] }],

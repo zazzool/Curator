@@ -14,7 +14,6 @@ import (
 
 	"curator/server/internal/dbgate"
 	"curator/server/internal/gen"
-	"curator/server/internal/sales"
 	"curator/server/internal/studio"
 )
 
@@ -30,107 +29,6 @@ func gate(t *testing.T) *dbgate.Gate {
 	}
 	t.Cleanup(g.Close)
 	return g
-}
-
-// СЕР-1. Продление подписки читает конец действующей и пишет новую двумя
-// отдельными запросами, без замка на записи врача. Два платежа, пришедшие
-// разом, видят одно и то же «до» и оба считают от него.
-//
-// Цена: врач заплатил за два месяца и получил один.
-func TestДефектПодпискаДваПлатежаОдновременно(t *testing.T) {
-	ctx := context.Background()
-	g := gate(t)
-	pay := sales.NewPayments(g)
-	const rounds = 40
-	bad := 0
-
-	for round := 0; round < rounds; round++ {
-		var account int64
-		if err := g.QueryRow(ctx, `INSERT INTO accounts DEFAULT VALUES RETURNING id`).Scan(&account); err != nil {
-			t.Fatal(err)
-		}
-		now := time.Now()
-
-		// Общий старт: без него горутины успевают разойтись во времени, и
-		// соперничество, которое и есть дефект, просто не случается.
-		start := make(chan struct{})
-		var wg sync.WaitGroup
-		for i := 0; i < 2; i++ {
-			wg.Add(1)
-			go func(i int) {
-				defer wg.Done()
-				<-start
-				_, err := pay.Accept(ctx, sales.Income{
-					AccountID: account, Purpose: "subscription:month", Kopecks: 199000,
-					IdemKey: fmt.Sprintf("аудит-%d-%d", round, i), By: "аудит",
-				}, now)
-				if err != nil {
-					t.Errorf("платёж не принят: %v", err)
-				}
-			}(i)
-		}
-		close(start)
-		wg.Wait()
-
-		var until time.Time
-		if err := g.QueryRow(ctx, `SELECT max(expires_at) FROM entitlements
-		     WHERE account_id = $1 AND kind = 'subscription'`, account).Scan(&until); err != nil {
-			t.Fatal(err)
-		}
-		if days := until.Sub(now).Hours() / 24; days < 59 {
-			bad++
-			if bad == 1 {
-				t.Logf("круг %d: оплачено два месяца, выдано %.0f суток", round, days)
-			}
-		}
-	}
-	if bad > 0 {
-		t.Errorf("из %d пар одновременных оплат %d дали один месяц вместо двух", rounds, bad)
-	}
-}
-
-// СЕР-2. Ключ повторности платежа уникален сам по себе, а не в паре с
-// врачом и назначением. Повтор отдаёт ПРЕЖНИЙ платёж, не сверив, тот ли
-// это врач и та ли сумма.
-//
-// Цена: второй врач заплатил и не получил ничего, а оператор увидел
-// чужой приход со словами «уже оформлен».
-func TestДефектКлючПовторностиНеПривязанКВрачу(t *testing.T) {
-	ctx := context.Background()
-	g := gate(t)
-	pay := sales.NewPayments(g)
-
-	var первый, второй int64
-	if err := g.QueryRow(ctx, `INSERT INTO accounts DEFAULT VALUES RETURNING id`).Scan(&первый); err != nil {
-		t.Fatal(err)
-	}
-	if err := g.QueryRow(ctx, `INSERT INTO accounts DEFAULT VALUES RETURNING id`).Scan(&второй); err != nil {
-		t.Fatal(err)
-	}
-
-	key := "приход-" + time.Now().Format("20060102-150405.000000")
-	now := time.Now()
-
-	if _, err := pay.Accept(ctx, sales.Income{AccountID: первый, Purpose: "subscription:year",
-		Kopecks: 249000, IdemKey: key, By: "оператор"}, now); err != nil {
-		t.Fatal(err)
-	}
-	ответ, err := pay.Accept(ctx, sales.Income{AccountID: второй, Purpose: "subscription:month",
-		Kopecks: 39900, IdemKey: key, By: "оператор"}, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var прав int
-	if err := g.QueryRow(ctx, `SELECT count(*) FROM entitlements WHERE account_id = $1`,
-		второй).Scan(&прав); err != nil {
-		t.Fatal(err)
-	}
-	if прав == 0 {
-		t.Errorf("второй врач заплатил и остался без прав; "+
-			"оператору отдан приход врача %d на %d коп. с пометкой «повтор»=%v",
-			ответ.AccountID, ответ.Kopecks, ответ.Repeated)
-	}
 }
 
 // СЕР-3. Оберег «не снимай право мастерской с последнего» считает

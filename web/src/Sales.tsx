@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 
 import { рублями, вКопейки } from './Money'
 import { датой, счётом } from './words'
@@ -275,6 +275,7 @@ function ClientCard({ me, id, onBack }: { me: Me; id: number; onBack: () => void
   const [income, setIncome] = useState({ purpose: 'subscription:month', rubles: '', note: '' })
   const [failure, setFailure] = useState('')
   const [note, setNote] = useState('')
+  const ключПопытки = useRef('')
   const [busy, setBusy] = useState(false)
 
   const canSell = me.permissions.includes('sales')
@@ -307,23 +308,39 @@ function ClientCard({ me, id, onBack }: { me: Me; id: number; onBack: () => void
       setFailure('Сумма пишется рублями и копейками: 1990 или 1990,00')
       return
     }
+    // Ключ повторности рождается один раз на попытку и живёт до её
+    // успеха.
+    //
+    // Прежде он складывался из врача, назначения, суммы и числа месяца —
+    // и был одинаковым у двух РАЗНЫХ приходов. Врач, купивший второй
+    // месяц в тот же день, получал в ответ «уже оформлен», второго месяца
+    // не получал, а деньги за него были приняты: оператор читал уверенное
+    // слово и не пересчитывал. Случайный ключ таких совпадений не даёт.
+    //
+    // Но он и не рождается заново на каждое нажатие: при обрыве связи
+    // оператор нажимает ещё раз, и повторная попытка обязана попасть в
+    // тот же ключ — иначе сервер оформит второй приход, а деньги были
+    // одни. Потому ключ сбрасывается только после удавшегося ответа.
+    if (ключПопытки.current === '') ключПопытки.current = crypto.randomUUID()
     setBusy(true)
     try {
-      // Ключ повтора придумывается здесь и один раз на попытку: сервер
-      // отвечает на повтор прежним платежом, а не вторым приходом.
       const out = await api.acceptPayment({
         accountId: id,
         purpose: income.purpose,
         kopecks,
-        idemKey: `студия-${id}-${income.purpose}-${kopecks}-${new Date().toISOString().slice(0, 10)}`,
+        idemKey: ключПопытки.current,
         note: income.note,
       })
       await reload()
       setNote(
         out.repeated
-          ? `Такой приход уже оформлен сегодня (платёж № ${out.id}). Второй раз деньги не приняты.`
+          ? `Этот приход уже доехал (платёж № ${out.id}). Второй раз деньги не приняты.`
           : `Приход оформлен: платёж № ${out.id}, ${рублями(out.kopecks)}. Право выдано.`,
       )
+      // Попытка закрыта — следующему приходу нужен свой ключ, иначе
+      // второй платёж того же врача за тот же месяц сервер примет за
+      // повтор первого.
+      ключПопытки.current = ''
       setIncome({ ...income, rubles: '', note: '' })
     } catch (error) {
       setFailure(error instanceof ApiError ? error.message : 'Приход не оформлен')

@@ -231,6 +231,27 @@ void main() {
       expect(await outbox.pending(), 0);
     });
 
+    test('ответ, данный во время отправки, не пропадает', () async {
+      // Тот самый случай, ради которого правки очереди выстроены в
+      // очередь. Прежде flush снимал список, уходил в сеть, а вернувшись
+      // — записывал поверх очереди пустоту: ответ, данный врачом за эти
+      // секунды, исчезал молча, и счётчик «ждут отправки» показывал ноль.
+      final store = MemoryOutboxStore();
+      final box = Outbox(api, store);
+      await box.add(attempt('c-1'));
+      server.replies.add(Reply(200, {'accepted': 1}));
+
+      final flushing = box.flush();
+      await box.add(attempt('c-2'));
+      final out = await flushing;
+
+      expect(out.sent, 1);
+      expect(out.left, 1, reason: 'второй ответ обязан остаться в очереди');
+      final left = await store.read();
+      expect(left.length, 1);
+      expect(left.single['idemKey'], 'k-c-2');
+    });
+
     test('негодная строка не уезжает и не уносит очередь', () async {
       final store = MemoryOutboxStore();
       await store.write([

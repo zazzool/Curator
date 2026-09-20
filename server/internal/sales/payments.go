@@ -74,6 +74,29 @@ func (p *Payments) Accept(ctx context.Context, in Income, now time.Time) (Paymen
 
 	var out Payment
 	err = p.gate.InTx(ctx, func(tx pgx.Tx) error {
+		// Запись врача берётся под замок ПЕРВОЙ командой транзакции, и это
+		// не осторожность, а починка — причём двух бед подряд.
+		//
+		// Первая: чтение конца действующей подписки и вставка нового права
+		// — два запроса, и под обычным уровнем изоляции они не мешают друг
+		// другу. Две оплаты, пришедшие разом, видели одно и то же «до» и
+		// обе считали от него: врач платил за два месяца и получал один.
+		// Воспроизводилось в тридцати девяти случаях из сорока.
+		//
+		// Вторая: замок обязан стоять ИМЕННО ЗДЕСЬ, до вставки платежа, а
+		// не там, где читается срок. Вставка в payments держит внешний ключ
+		// на accounts и потому сама берёт строку врача под FOR KEY SHARE.
+		// Замок, поставленный после неё, — это повышение уже взятого
+		// разделяемого до исключительного, и два соперника повышают его
+		// одновременно: база отвечает «deadlock detected» и роняет один из
+		// платежей. Замок перед вставкой выстраивает оплаты в очередь
+		// раньше, чем кто-то успеет взять разделяемый.
+		if _, err := tx.Exec(ctx,
+			`SELECT id FROM accounts WHERE id = $1 FOR UPDATE`,
+			in.AccountID); err != nil {
+			return fmt.Errorf("запись врача не взята под замок: %w", err)
+		}
+
 		var id int64
 		err := tx.QueryRow(ctx, `
 			INSERT INTO payments (account_id, source, purpose, amount_kopecks,
@@ -83,14 +106,30 @@ func (p *Payments) Accept(ctx context.Context, in Income, now time.Time) (Paymen
 			RETURNING id`,
 			in.AccountID, string(purpose), in.Kopecks, in.IdemKey, in.Note, in.By, now).Scan(&id)
 
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			// Такой ключ уже приходил. Отдаём прежний платёж, а не
 			// отказ: оператор должен увидеть, что приход уже оформлен, и
 			// не оформить его ещё раз другим ключом.
-			out, err = load(ctx, tx, in.IdemKey)
+			//
+			// Но прежде сверяем, ТОТ ЛИ это приход. Ключ уникален сам по
+			// себе, а не в паре с врачом и назначением, и раньше ответ
+			// отдавался без сверки: второй врач платил, получал чужой
+			// платёж с пометкой «повтор» и оставался без прав, а оператор
+			// читал уверенное «уже оформлен». Совпадение ключа у двух
+			// разных приходов — это описка, и говорить о ней надо словами.
+			prior, err := load(ctx, tx, in.IdemKey)
 			if err != nil {
 				return err
 			}
+			if prior.AccountID != in.AccountID ||
+				prior.Purpose != string(purpose) ||
+				prior.Kopecks != in.Kopecks {
+				return fmt.Errorf(
+					"ключ повторности %q уже занят другим приходом "+
+						"(врач %d, %s, %d коп.): возьмите другой ключ",
+					in.IdemKey, prior.AccountID, prior.Purpose, prior.Kopecks)
+			}
+			out = prior
 			out.Repeated = true
 			return nil
 		}
@@ -134,6 +173,9 @@ func grant(ctx context.Context, tx pgx.Tx, accountID int64, purpose Purpose, pay
 		return fmt.Errorf("назначение %q не даёт ни набора, ни срока", purpose)
 	}
 
+	// Замок на записи врача здесь уже держится — его ставит Accept первой
+	// командой транзакции. Довод, почему именно там, записан у него.
+
 	// Подписка продлевается от конца действующей, а не от сегодня: купивший
 	// второй месяц за неделю до конца первого иначе потерял бы неделю, за
 	// которую уже заплатил.
@@ -143,7 +185,7 @@ func grant(ctx context.Context, tx pgx.Tx, accountID int64, purpose Purpose, pay
 		SELECT max(expires_at) FROM entitlements
 		 WHERE account_id = $1 AND kind = 'subscription'
 		   AND revoked_at IS NULL AND expires_at > $2`, accountID, now).Scan(&until)
-	if err != nil && err != pgx.ErrNoRows {
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
 	if until != nil && until.After(now) {
