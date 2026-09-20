@@ -12,6 +12,7 @@ import (
 
 	"curator/server/internal/llm"
 	"curator/server/internal/llmusage"
+	"curator/server/internal/rules"
 )
 
 // Конвейер: что происходит с заданием от очереди до черновика.
@@ -39,6 +40,17 @@ type Runner struct {
 	ledger *llmusage.Store
 	prices llm.Prices
 
+	// rules — свод правил. Пусто — свода нет вовсе, и конвейер работает
+	// как до него; так он проверяется без базы свода. На бою пусто не
+	// бывает.
+	//
+	// Различие между «свода нет» и «свод не прочитался» здесь — не
+	// придирка, а то же правило, что у детектора подсказок: задача,
+	// написанная без свода, выглядит обычной работой, и заметить утрату
+	// можно только по тому, что ошибки, от которых свод и заведён,
+	// вернулись все разом.
+	rules *rules.Store
+
 	// shuffle — перемешивание вариантов перед слепой сверкой. Полем ради
 	// проверок: сверка, у которой верный вариант всегда первый, проверяет
 	// не то, что надо.
@@ -48,6 +60,12 @@ type Runner struct {
 // NewRunner собирает конвейер.
 func NewRunner(jobs *Jobs, prompts *Prompts, talker Talker) *Runner {
 	return &Runner{jobs: jobs, prompts: prompts, talker: talker, shuffle: rand.Perm}
+}
+
+// WithRules подключает свод правил.
+func (r *Runner) WithRules(store *rules.Store) *Runner {
+	r.rules = store
+	return r
 }
 
 // WithLedger добавляет учёт расхода.
@@ -276,8 +294,17 @@ func (r *Runner) compose(ctx context.Context, job Job) (Draft, error) {
 	}
 	plan := job.Plan
 
+	block, err := r.ruleBlock(ctx, plan, NodeCompose)
+	if err != nil {
+		return Draft{}, err
+	}
+
+	// Свод дописывается ПОСЛЕ подстановки переменных, а не переменной в
+	// самом задании. Переменную составитель может стереть, правя задание
+	// в студии, — и свод перестал бы уходить молча, а задачи стали бы
+	// хуже без единого следа в журнале.
 	answer, err := r.ask(ctx, job, NodeCompose, llm.Prompt{
-		System:     Render(prompt.SystemMd, plan),
+		System:     Render(prompt.SystemMd, plan) + block,
 		User:       Render(prompt.UserMd, plan),
 		Schema:     DraftSchema(plan),
 		SchemaName: "case_draft",
@@ -294,6 +321,33 @@ func (r *Runner) compose(ctx context.Context, job Job) (Draft, error) {
 		return Draft{}, err
 	}
 	return draft, nil
+}
+
+// ruleBlock — блок свода для узла, готовый к дописыванию в задание.
+//
+// Отказ чтения свода роняет задание, а не проходит пустотой. Пустой
+// блок и непрочитанный свод — разные вещи ровно в том же смысле, в каком
+// «подсказок нет» и «судить не могу»: задача, написанная без свода,
+// выглядит обычной работой, и утрату замечают по тому, что ошибки,
+// от которых свод заведён, вернулись все разом.
+func (r *Runner) ruleBlock(ctx context.Context, plan Plan, node string) (string, error) {
+	if r.rules == nil {
+		return "", nil
+	}
+	book, err := r.rules.Book(ctx)
+	if err != nil {
+		return "", fmt.Errorf("свод правил не прочитан: %w", err)
+	}
+	block := book.Block(rules.Context{
+		SourceID: plan.SourceID,
+		UnitPath: plan.Unit.Path,
+		TaskKind: plan.TaskKind,
+		Node:     node,
+	})
+	if block == "" {
+		return "", nil
+	}
+	return "\n\n" + block, nil
 }
 
 // verify — слепая сверка.
