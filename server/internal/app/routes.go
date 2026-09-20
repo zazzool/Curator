@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -108,10 +109,21 @@ func (r *routes) me(w http.ResponseWriter, req *http.Request, caller Caller) {
 	// Права читаются отдельно и их отказ не роняет ответ: кто я такой —
 	// сведения о самом враче, а права о том, что он купил. Уроним ответ
 	// целиком — и приложение не покажет даже имени.
+	//
+	// Но и молчать об отказе нельзя. Пустой список прав значит «ничего не
+	// куплено», и оплативший врач при отказе чтения видел ровно то же,
+	// что неоплативший, — а приложение видело то же самое и закрывало
+	// ему платное. Поэтому рядом со списком едет признак, прочитались ли
+	// права вообще: пусто и «неизвестно» — разные вещи, и врачу о них
+	// говорят по-разному.
 	rights := []map[string]any{}
+	rightsKnown := r.access == nil
 	if r.access != nil {
 		live, err := r.access.Live(req.Context(), caller.AccountID, r.now())
-		if err == nil {
+		if err != nil {
+			log.Printf("/v1/me: права врача %d не прочитаны: %v", caller.AccountID, err)
+		} else {
+			rightsKnown = true
 			for _, one := range live {
 				row := map[string]any{
 					"kind": one.Kind, "pack": one.Pack, "origin": one.Origin,
@@ -135,6 +147,11 @@ func (r *routes) me(w http.ResponseWriter, req *http.Request, caller Caller) {
 		"displayName": profile.DisplayName,
 		"createdAt":   profile.CreatedAt.Format(time.RFC3339),
 		"rights":      rights,
+		// Поле добавлено, а не переосмыслено существующее: сборки на
+		// руках его не знают и продолжат читать один «rights», как
+		// читали. Истина у них при отказе чтения прав будет прежней —
+		// неверной, — и это единственное, чего исправить нельзя.
+		"rightsKnown": rightsKnown,
 	})
 }
 

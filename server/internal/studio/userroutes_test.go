@@ -63,7 +63,7 @@ func aloneInWorkshop(t *testing.T, gate *dbgate.Gate, keep string) {
 func TestPgСписокПользователейОтдаётПраваИНеОтдаётСекрет(t *testing.T) {
 	ctx := context.Background()
 	gate := testGate(t)
-	users := NewUsers(gate)
+	users := NewUsers(gate, nil)
 
 	login := newLogin()
 	if _, _, err := users.Create(ctx, login, "Продавец",
@@ -98,7 +98,7 @@ func TestPgСписокПользователейОтдаётПраваИНеО�
 func TestPgПраваМеняютсяИНеизвестноеОтвергается(t *testing.T) {
 	ctx := context.Background()
 	gate := testGate(t)
-	users := NewUsers(gate)
+	users := NewUsers(gate, nil)
 
 	login := newLogin()
 	if _, _, err := users.Create(ctx, login, "Составитель",
@@ -127,7 +127,7 @@ func TestPgПраваМеняютсяИНеизвестноеОтвергает�
 func TestPgОтключениеЗакрываетВходИОткрываетОбратно(t *testing.T) {
 	ctx := context.Background()
 	gate := testGate(t)
-	users := NewUsers(gate)
+	users := NewUsers(gate, nil)
 
 	login := newLogin()
 	if _, _, err := users.Create(ctx, login, "Уволенный",
@@ -166,7 +166,7 @@ func TestPgОтключениеЗакрываетВходИОткрываетО�
 func TestPgПоследнегоМастераНеСнимают(t *testing.T) {
 	ctx := context.Background()
 	gate := testGate(t)
-	users := NewUsers(gate)
+	users := NewUsers(gate, nil)
 
 	master := newLogin()
 	if _, _, err := users.Create(ctx, master, "Мастер",
@@ -199,7 +199,7 @@ func TestPgПоследнегоМастераНеСнимают(t *testing.T) {
 func workshopDesk(t *testing.T, gate *dbgate.Gate, perms ...Permission) (*Desk, string, string) {
 	t.Helper()
 	ctx := context.Background()
-	users, sessions := NewUsers(gate), NewSessions(gate)
+	users, sessions := NewUsers(gate, nil), NewSessions(gate)
 	desk := NewDesk(users, sessions)
 	UserRoutes(desk)
 
@@ -267,7 +267,7 @@ func TestPgЗаведениеЧерезРучкуОтдаётРабочийСе�
 	if made.Secret == "" || made.Note == "" {
 		t.Fatalf("секрет или предупреждение не отданы: %s", rec.Body.String())
 	}
-	if _, err := NewUsers(gate).VerifyCode(ctx, login,
+	if _, err := NewUsers(gate, nil).VerifyCode(ctx, login,
 		codeFor(t, made.Secret), time.Now()); err != nil {
 		t.Errorf("по отданному секрету вход не работает: %v", err)
 	}

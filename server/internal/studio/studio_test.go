@@ -41,7 +41,7 @@ func newLogin() string {
 func TestPgВходПоОдноразовомуКоду(t *testing.T) {
 	ctx := context.Background()
 	gate := testGate(t)
-	users, sessions := NewUsers(gate), NewSessions(gate)
+	users, sessions := NewUsers(gate, nil), NewSessions(gate)
 	desk := NewDesk(users, sessions)
 
 	login := newLogin()
@@ -76,7 +76,7 @@ func TestPgВходПоОдноразовомуКоду(t *testing.T) {
 func TestPgЧужойКодНеПускает(t *testing.T) {
 	ctx := context.Background()
 	gate := testGate(t)
-	users, sessions := NewUsers(gate), NewSessions(gate)
+	users, sessions := NewUsers(gate, nil), NewSessions(gate)
 	desk := NewDesk(users, sessions)
 
 	login := newLogin()
@@ -93,7 +93,7 @@ func TestPgОтключённыйНеВходитИНеХодитПоСтаро�
 	// живёт уже выданная сессия.
 	ctx := context.Background()
 	gate := testGate(t)
-	users, sessions := NewUsers(gate), NewSessions(gate)
+	users, sessions := NewUsers(gate, nil), NewSessions(gate)
 
 	login := newLogin()
 	user, secret, err := users.Create(ctx, login, "Бывший", []Permission{PermSourceRead})
@@ -120,7 +120,7 @@ func TestPgОтключённыйНеВходитИНеХодитПоСтаро�
 func TestPgИстёкшаяСессияОтказывает(t *testing.T) {
 	ctx := context.Background()
 	gate := testGate(t)
-	users, sessions := NewUsers(gate), NewSessions(gate)
+	users, sessions := NewUsers(gate, nil), NewSessions(gate)
 
 	login := newLogin()
 	user, _, err := users.Create(ctx, login, "Составитель", nil)
@@ -140,7 +140,7 @@ func TestPgИстёкшаяСессияОтказывает(t *testing.T) {
 func TestPgМаршрутЗакрытПравом(t *testing.T) {
 	ctx := context.Background()
 	gate := testGate(t)
-	users, sessions := NewUsers(gate), NewSessions(gate)
+	users, sessions := NewUsers(gate, nil), NewSessions(gate)
 	desk := NewDesk(users, sessions)
 
 	desk.Handle(PermSourceAccept, "GET /admin/api/проверка", func(w http.ResponseWriter, r *http.Request, u User) {
@@ -198,7 +198,7 @@ func TestPgСекретНеЛежитВТокене(t *testing.T) {
 	// отпечаток, а не токен.
 	ctx := context.Background()
 	gate := testGate(t)
-	users, sessions := NewUsers(gate), NewSessions(gate)
+	users, sessions := NewUsers(gate, nil), NewSessions(gate)
 
 	login := newLogin()
 	user, _, err := users.Create(ctx, login, "Составитель", nil)
@@ -223,7 +223,7 @@ func TestPgСекретНеЛежитВТокене(t *testing.T) {
 func TestPgСессииУбираютсяПоСроку(t *testing.T) {
 	ctx := context.Background()
 	gate := testGate(t)
-	users, sessions := NewUsers(gate), NewSessions(gate)
+	users, sessions := NewUsers(gate, nil), NewSessions(gate)
 
 	login := newLogin()
 	user, _, err := users.Create(ctx, login, "Составитель", nil)
@@ -268,16 +268,16 @@ func TestPgПереборКодаУпираетсяВПредел(t *testing.T) 
 	// Защитой это становится только тогда, когда попытки считают.
 	ctx := context.Background()
 	gate := testGate(t)
-	desk := NewDesk(NewUsers(gate), NewSessions(gate))
+	desk := NewDesk(NewUsers(gate, nil), NewSessions(gate))
 	// Задержка подменяется пустышкой: она здесь не предмет проверки, а
 	// настоящая растянула бы дюжину попыток на минуту.
 	desk.SetHold(func(context.Context, time.Duration) {})
 
 	login := newLogin()
-	if _, _, err := NewUsers(gate).Create(ctx, login, "Составитель", nil); err != nil {
+	if _, _, err := NewUsers(gate, nil).Create(ctx, login, "Составитель", nil); err != nil {
 		t.Fatal(err)
 	}
-	_, secret, err := NewUsers(gate).ByLogin(ctx, login)
+	_, secret, err := NewUsers(gate, nil).ByLogin(ctx, login)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +305,7 @@ func TestPgГодныйКодНеПроходитДважды(t *testing.T) {
 	// время подсмотренный через плечо код работал бы второй раз.
 	ctx := context.Background()
 	gate := testGate(t)
-	users := NewUsers(gate)
+	users := NewUsers(gate, nil)
 	desk := NewDesk(users, NewSessions(gate))
 	desk.SetHold(func(context.Context, time.Duration) {})
 
@@ -336,11 +336,11 @@ func TestPgОтказВходаНичегоНеРассказывает(t *testi
 	// существует ли имя.
 	ctx := context.Background()
 	gate := testGate(t)
-	desk := NewDesk(NewUsers(gate), NewSessions(gate))
+	desk := NewDesk(NewUsers(gate, nil), NewSessions(gate))
 	desk.SetHold(func(context.Context, time.Duration) {})
 
 	login := newLogin()
-	if _, _, err := NewUsers(gate).Create(ctx, login, "Составитель", nil); err != nil {
+	if _, _, err := NewUsers(gate, nil).Create(ctx, login, "Составитель", nil); err != nil {
 		t.Fatal(err)
 	}
 

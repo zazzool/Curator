@@ -96,7 +96,8 @@
         "email": "string",
         "displayName": "string",
         "createdAt": "string",
-        "rights": "array"
+        "rights": "array",
+        "rightsKnown": "boolean"
       },
       "each": {
         "rights": {

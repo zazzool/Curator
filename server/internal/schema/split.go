@@ -16,6 +16,13 @@
 // Строчные комментарии выбрасываются до разбора: точка с запятой внутри
 // пояснения — обычное дело («…; и это не опечатка»), и, оставленная в
 // тексте, она разрезала бы команду по живому.
+//
+// Выбрасывается при этом и пояснение В КОНЦЕ строки, а не только строка
+// целиком из пояснения. Прежде выбрасывалась только целая: строка вида
+// `id INT, -- пока так;` внутри CREATE TABLE разрезала бы объявление
+// пополам, и накат ушёл бы в postgres половиной команды. Отказ при этом
+// был бы громкий, но случился бы он на выкатке — там, где чинить дороже
+// всего.
 package schema
 
 import "strings"
@@ -29,10 +36,11 @@ func Split(text string) []string {
 	var cur strings.Builder
 
 	for _, line := range strings.Split(text, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "--") {
+		if strings.HasPrefix(strings.TrimSpace(line), "--") {
 			continue
 		}
+		line = cutComment(line)
+		trimmed := strings.TrimSpace(line)
 		cur.WriteString(line)
 		cur.WriteString("\n")
 		if strings.HasSuffix(trimmed, ";") {
@@ -52,4 +60,37 @@ func Split(text string) []string {
 		out = []string{}
 	}
 	return out
+}
+
+// cutComment отрезает строчное пояснение, не тронув его подобия в тексте.
+//
+// Два знака минуса внутри строковой постоянной пояснением не являются:
+// `DEFAULT 'шкала a--b'` — законное значение, и обрезанное по ним
+// объявление колонки станет негодным SQL. Поэтому состояние кавычек
+// отслеживается, а не ищется первое вхождение «--».
+//
+// Одиночная кавычка удваивается внутри постоянной ('O”Брайен'), и
+// отдельного разбора это не требует: вторая кавычка просто открывает
+// постоянную снова, и до конца строки состояние сходится.
+func cutComment(line string) string {
+	inString := false
+	inQuoted := false
+	runes := []rune(line)
+	for i := 0; i < len(runes); i++ {
+		switch runes[i] {
+		case '\'':
+			if !inQuoted {
+				inString = !inString
+			}
+		case '"':
+			if !inString {
+				inQuoted = !inQuoted
+			}
+		case '-':
+			if !inString && !inQuoted && i+1 < len(runes) && runes[i+1] == '-' {
+				return strings.TrimRight(string(runes[:i]), " \t")
+			}
+		}
+	}
+	return line
 }

@@ -177,7 +177,7 @@ func goodSlug(slug string) bool {
 func packID(ctx context.Context, tx pgx.Tx, slug string) (int64, error) {
 	var id int64
 	err := tx.QueryRow(ctx, `SELECT id FROM packs WHERE slug = $1`, slug).Scan(&id)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, fmt.Errorf("набора %s нет", slug)
 	}
 	return id, err

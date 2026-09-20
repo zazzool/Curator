@@ -71,9 +71,35 @@ func main() {
 	}
 
 	srv := &http.Server{
-		Addr:              addr(),
-		Handler:           routes(ctx, gate),
+		Addr:    addr(),
+		Handler: routes(ctx, gate),
+
+		// Сроки названы все четыре, и это не полнота ради полноты.
+		// Стоял один ReadHeaderTimeout: соединение, приславшее заголовки
+		// и замолчавшее на теле, держалось вечно, и десяток таких
+		// занимает исполнителей без единого запроса. Так работает
+		// медленная запись — приём, для которого не нужно ничего, кроме
+		// открытого сокета.
 		ReadHeaderTimeout: 10 * time.Second,
+
+		// Тело целиком. Минута, а не десять секунд: сюда приносят
+		// документ источника в несколько мегабайт, и узкая связь у
+		// составителя — обычное дело.
+		ReadTimeout: 60 * time.Second,
+
+		// Ответ целиком. Самый долгий ответ здесь — страница задач или
+		// выпуск набора; полторы минуты покрывают их с запасом. Обращения
+		// к моделям идут НЕ отсюда: их ждёт фоновый исполнитель очереди,
+		// а не соединение с браузером.
+		WriteTimeout: 90 * time.Second,
+
+		// Простаивающее соединение после keep-alive. Держать его дольше
+		// значит платить исполнителем за тишину.
+		IdleTimeout: 120 * time.Second,
+
+		// Заголовки. Умолчание — мегабайт, и мегабайт заголовков не
+		// присылает никто, кроме того, кто занимает память нарочно.
+		MaxHeaderBytes: 64 << 10,
 	}
 
 	go func() {
@@ -213,7 +239,18 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 	// поднятые ручки, отвечающие пустотой, работа примет за правду и
 	// запишет пустоту как результат.
 	if gate != nil {
-		desk := studio.NewDesk(studio.NewUsers(gate), studio.NewSessions(gate))
+		// Ключ запечатывания секретов аутентификатора. Довод — в
+		// studio/secret.go; здесь важно, что негодный ключ роняет службу,
+		// а отсутствующий только объявляется: выкатка на контур, где ключ
+		// ещё не положили, не должна закрывать вход в студию всем сразу.
+		seal, err := studio.SealKeyFromEnv()
+		if err != nil {
+			log.Fatalf("ключ запечатывания секретов негоден: %v", err)
+		}
+		if len(seal) == 0 {
+			log.Print("CURATOR_SECRET_KEY не задан: секреты аутентификаторов лежат в базе открытым текстом")
+		}
+		desk := studio.NewDesk(studio.NewUsers(gate, seal), studio.NewSessions(gate))
 		studio.Routes(desk)
 		studio.UserRoutes(desk)
 		source.Routes(desk, source.NewStore(gate))
@@ -255,7 +292,11 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 	if dir := os.Getenv("CURATOR_EDITOR_DIR"); dir != "" {
 		mux.Handle("/", http.FileServer(http.Dir(dir)))
 	}
-	return mux
+
+	// Заголовки безопасности — снаружи всего, включая живость и
+	// готовность: обёртка, надетая на часть маршрутов, забывается ровно
+	// на том, который заведут следующим.
+	return limits.Headers(mux)
 }
 
 // sweep сводит решаемость задач в фоне.

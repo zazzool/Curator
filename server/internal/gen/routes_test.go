@@ -25,7 +25,7 @@ import (
 func newDesk(t *testing.T, perms ...studio.Permission) (*httptest.Server, string) {
 	t.Helper()
 	gate := testGate(t)
-	users, sessions := studio.NewUsers(gate), studio.NewSessions(gate)
+	users, sessions := studio.NewUsers(gate, nil), studio.NewSessions(gate)
 	desk := studio.NewDesk(users, sessions)
 	studio.Routes(desk)
 

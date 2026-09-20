@@ -239,6 +239,61 @@ func TestPgВозвратДоступаОтдаётТуЖеЗапись(t *testi
 	}
 }
 
+func TestPgВторойКодГаситПервый(t *testing.T) {
+	// Врач просит код, письма нет, он просит второй. Оба приходят, он
+	// открывает ПЕРВОЕ — оно сверху в списке — и читает «код не подошёл
+	// или устарел». Код при этом не устарел: выбирался всегда новейший, а
+	// прежний стоял в базе неиспользованным, то есть по базе годным. Два
+	// разных ответа на один вопрос жили рядом.
+	//
+	// Идём мимо ручки: у неё своя задержка в минуту между письмами, и
+	// проверять сквозь неё значило бы ждать минуту по-настоящему.
+	srv, gate, key, post := почтоваяДверь(t)
+	auth := map[string]string{"Authorization": "Bearer " + устройство(t, srv, key)}
+	mail := адрес()
+
+	call(t, srv, "POST", "/v1/me/email", auth, map[string]any{"email": mail})
+	call(t, srv, "POST", "/v1/me/email/confirm", auth,
+		map[string]any{"code": post.код(t)})
+
+	emails := NewEmails(NewAccounts(gate))
+	ctx := context.Background()
+	now := time.Now()
+
+	первый, err := emails.StartRecovery(ctx, mail, now)
+	if err != nil || первый == "" {
+		t.Fatalf("первый код не выдан: %v", err)
+	}
+	// Позже задержки между письмами — иначе второго кода не будет вовсе,
+	// и проверять станет нечего.
+	второй, err := emails.StartRecovery(ctx, mail, now.Add(2*codeCooldown))
+	if err != nil || второй == "" {
+		t.Fatalf("второй код не выдан: %v", err)
+	}
+	if первый == второй {
+		t.Fatal("оба кода совпали: проверять нечего")
+	}
+
+	// Прежний код погашен, и погашен ЯВНО: по базе он больше не годен.
+	var живых int
+	err = gate.QueryRow(ctx,
+		`SELECT count(*) FROM email_codes
+		  WHERE email = $1 AND purpose = 'recovery' AND used_at IS NULL`,
+		Normalize(mail)).Scan(&живых)
+	if err != nil {
+		t.Fatalf("коды не прочитаны: %v", err)
+	}
+	if живых != 1 {
+		t.Fatalf("живых кодов %d, а должен быть ровно один", живых)
+	}
+
+	// И новый по-прежнему работает: гашение прежних не должно задевать
+	// тот, ради которого оно и делалось.
+	if _, err := emails.ConfirmRecovery(ctx, mail, второй, About{}, now.Add(2*codeCooldown)); err != nil {
+		t.Fatalf("новый код не подошёл: %v", err)
+	}
+}
+
 func TestPgНезнакомаяПочтаОтвечаетТемЖеСамым(t *testing.T) {
 	srv, _, key, post := почтоваяДверь(t)
 	программа := map[string]string{"X-App-Key": key}

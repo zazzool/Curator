@@ -260,7 +260,7 @@ func (r *routes) uploadDocument(w http.ResponseWriter, req *http.Request, user s
 	if !ok {
 		return
 	}
-	filename, body, err := readUpload(req)
+	filename, body, err := readUpload(w, req)
 	if err != nil {
 		studio.WriteError(w, http.StatusBadRequest, studio.Sentence(err.Error()))
 		return
@@ -434,7 +434,20 @@ func (r *routes) acceptDraft(w http.ResponseWriter, req *http.Request, user stud
 // из командной строки удобнее телом запроса с именем файла в заголовке.
 // Второй способ — не послабление: имя всё равно обязательно, потому что из
 // него берётся формат.
-func readUpload(req *http.Request) (string, []byte, error) {
+func readUpload(w http.ResponseWriter, req *http.Request) (string, []byte, error) {
+	// Потолок ставится на ТЕЛО, а не на разбор. Довод у ParseMultipartForm
+	// обманчив: её число — предел памяти, а всё сверх него уезжает во
+	// временные файлы, и общего потолка у них нет. Гигабайтная форма
+	// разберётся без отказа и ляжет на диск контейнера; повторённая
+	// десяток раз — забьёт его, и упадёт не загрузка, а сервер целиком,
+	// потому что писать снимки и журнал станет некуда.
+	//
+	// Запас вдвое: границу MaxDocumentBytes стережёт Prepare, и отказ
+	// оттуда объясняет врачу, ЧТО не так («файл больше 30 МБ»). Обрежь
+	// тело ровно по границе — и файл на 30 МБ ровно оборвался бы
+	// невнятным «форма с файлом не разобрана».
+	req.Body = http.MaxBytesReader(w, req.Body, 2*MaxDocumentBytes)
+
 	if strings.HasPrefix(req.Header.Get("Content-Type"), "multipart/form-data") {
 		if err := req.ParseMultipartForm(MaxDocumentBytes); err != nil {
 			return "", nil, errors.New("форма с файлом не разобрана")

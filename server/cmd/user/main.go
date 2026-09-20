@@ -58,7 +58,14 @@ func main() {
 	}
 	defer gate.Close()
 
-	users := studio.NewUsers(gate)
+	// Тем же ключом, что и служба: утилита пишет в ту же таблицу, и
+	// запечатанное одним ключом, а прочитанное другим — это «код не
+	// подошёл» у человека, у которого всё правильно.
+	seal, err := studio.SealKeyFromEnv()
+	if err != nil {
+		log.Fatalf("ключ запечатывания секретов негоден: %v", err)
+	}
+	users := studio.NewUsers(gate, seal)
 
 	if *list {
 		showAll(ctx, gate)

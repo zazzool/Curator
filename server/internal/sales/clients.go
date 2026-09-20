@@ -124,7 +124,7 @@ func (c *Clients) One(ctx context.Context, id int64) (Client, error) {
 		  FROM accounts a WHERE a.id = $1`, id).
 		Scan(&one.ID, &one.Email, &one.DisplayName, &one.CreatedAt, &one.LastSeen,
 			&one.Blocked, &one.Devices, &one.Rights)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return Client{}, errors.New("такой учётной записи нет")
 	}
 	if err != nil {

@@ -39,7 +39,7 @@ func gate(t *testing.T) *dbgate.Gate {
 func TestДефектПоследнийМастерСнимаетсяДвумяСразу(t *testing.T) {
 	ctx := context.Background()
 	g := gate(t)
-	users := studio.NewUsers(g)
+	users := studio.NewUsers(g, nil)
 	const rounds = 40
 	bad := 0
 
