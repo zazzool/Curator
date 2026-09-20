@@ -3,6 +3,7 @@ package gen
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"time"
 
 	"curator/server/internal/studio"
@@ -74,18 +75,28 @@ func (r *routes) pipeline(w http.ResponseWriter, req *http.Request, _ studio.Use
 		studio.WriteError(w, http.StatusInternalServerError, "Задания узлов не прочитаны")
 		return
 	}
-	// Умолчание узла, а не первое попавшееся задание: работает именно
-	// оно (ForNode берёт is_default), и показать вместо него запасное
-	// значило бы показать настройку, которой конвейер не пользуется —
-	// составитель поправил бы модель у задания, мимо которого задачи не
-	// ходят.
+	// Источник в запросе — чей конвейер показывать. Пусто или ноль —
+	// общий: он и работает там, где источник своего задания не завёл.
+	sourceID, _ := strconv.ParseInt(req.URL.Query().Get("source"), 10, 64)
+
+	// Отбор тот же, что у ForNode, и повторён он здесь намеренно одним
+	// правилом: своё задание источника старше общего умолчания. Разойдись
+	// экран с исполнителем — составитель правил бы задание, мимо которого
+	// задачи не ходят, и узнал бы об этом по качеству задач через неделю.
 	//
 	// Первое по порядку сюда просится само и молчит: список идёт по узлу
 	// и по идентификатору, и запасное задание с именем поменьше встаёт
 	// ВЫШЕ рабочего. Проверка на это есть.
 	byNode := map[string]Prompt{}
 	for _, p := range prompts {
-		if p.IsDefault {
+		switch {
+		case sourceID > 0 && p.SourceID == sourceID:
+			byNode[p.Node] = p
+		case p.IsDefault:
+			if got, taken := byNode[p.Node]; taken && got.SourceID == sourceID {
+				// Своё задание уже взято — умолчание его не вытесняет.
+				continue
+			}
 			byNode[p.Node] = p
 		}
 	}
@@ -111,16 +122,75 @@ func (r *routes) pipeline(w http.ResponseWriter, req *http.Request, _ studio.Use
 		out = append(out, map[string]any{
 			"node": node, "word": NodeWord(node),
 			"promptId": p.ID, "promptName": p.Name, "model": p.Model,
+			// «Своё» говорится прямо, а не выводится из совпадения
+			// идентификаторов в студии: два места для одного правила
+			// расходятся молча, и разойдясь, показали бы общее задание
+			// как своё — то есть позвали бы править его всем источникам
+			// сразу.
+			"own":   p.SourceID == sourceID && sourceID > 0,
 			"calls": u.Calls, "failed": u.Failed,
 			"medianNanoUsd": u.MedianNanoUSD, "medianMs": u.MedianMs,
 			"estimated": u.Estimated,
 		})
 	}
 	studio.WriteJSON(w, http.StatusOK, map[string]any{
-		"nodes": out,
+		"nodes":  out,
+		"source": sourceID,
 		// Срок уезжает числом, а не словами в студии: два места для
 		// одного числа расходятся молча, и разойдясь, подписали бы
 		// «за 30 суток» числа за неделю.
 		"days": pipelineDays,
 	})
+}
+
+// forkPrompt заводит источнику своё задание узла.
+func (r *routes) forkPrompt(w http.ResponseWriter, req *http.Request, _ studio.User) {
+	sourceID, err := strconv.ParseInt(req.PathValue("id"), 10, 64)
+	if err != nil || sourceID <= 0 {
+		studio.WriteError(w, http.StatusBadRequest, "Источник назван не числом")
+		return
+	}
+	node := req.PathValue("node")
+	if !knownNode(node) {
+		// Словарь узлов закрыт, и незнакомое имя — это опечатка в адресе,
+		// а не новый узел. Заведи мы задание по нему, оно осталось бы в
+		// базе навсегда, не работая никогда.
+		studio.WriteError(w, http.StatusBadRequest, "Такого узла в конвейере нет")
+		return
+	}
+	saved, err := r.prompts.Fork(req.Context(), sourceID, node)
+	if err != nil {
+		studio.WriteError(w, http.StatusBadRequest, studio.Sentence(err.Error()))
+		return
+	}
+	studio.WriteJSON(w, http.StatusOK, map[string]any{
+		"promptId": saved.ID, "node": saved.Node, "sourceId": sourceID,
+	})
+}
+
+// unforkPrompt возвращает узел источника к общему заданию.
+func (r *routes) unforkPrompt(w http.ResponseWriter, req *http.Request, _ studio.User) {
+	sourceID, err := strconv.ParseInt(req.PathValue("id"), 10, 64)
+	if err != nil || sourceID <= 0 {
+		studio.WriteError(w, http.StatusBadRequest, "Источник назван не числом")
+		return
+	}
+	if err := r.prompts.Unfork(req.Context(), sourceID, req.PathValue("node")); err != nil {
+		studio.WriteError(w, http.StatusInternalServerError, studio.Sentence(err.Error()))
+		return
+	}
+	studio.WriteJSON(w, http.StatusOK, map[string]any{"status": "общее"})
+}
+
+// knownNode — есть ли такой узел в конвейере.
+//
+// По объявленному перечню, а не по тому, что нашлось в базе: задание
+// неизвестного узла в базе как раз и завелось бы опечаткой в адресе.
+func knownNode(node string) bool {
+	for _, one := range Nodes {
+		if one == node {
+			return true
+		}
+	}
+	return false
 }

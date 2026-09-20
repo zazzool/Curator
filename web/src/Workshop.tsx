@@ -308,8 +308,38 @@ function Users({ me }: { me: Me }) {
  * покороче.
  */
 function Pipeline({ me }: { me: Me }) {
-  const read = useCallback(async () => await api.pipeline(), [])
+  // Чей конвейер показан. Ноль — общий: он и работает там, где источник
+  // своего задания не завёл.
+  const [источник, setИсточник] = useState(0)
+  const [отказ, setОтказ] = useState('')
+  const [занят, setЗанят] = useState(false)
+
+  const read = useCallback(async () => await api.pipeline(источник), [источник])
   const конвейер = useResource(read, 'Конвейер не прочитан')
+  const reload = конвейер.reload
+
+  const readSources = useCallback(async () => (await api.sources())?.sources ?? [], [])
+  const источники = useResource(readSources, '')
+
+  async function своё(node: string, было: boolean) {
+    setОтказ('')
+    setЗанят(true)
+    try {
+      if (было) {
+        await api.unforkNodePrompt(источник, node)
+      } else {
+        await api.forkNodePrompt(источник, node)
+      }
+      await reload()
+    } catch (error) {
+      // Текст сервера как есть: он пишет по-русски и говорит, чего не
+      // хватает. Своё «не удалось» отправило бы человека нажимать ту же
+      // кнопку снова.
+      setОтказ(error instanceof ApiError ? error.message : 'Задание узла не изменено')
+    } finally {
+      setЗанят(false)
+    }
+  }
 
   if (!me.permissions.includes('prompts')) return null
 
@@ -318,6 +348,28 @@ function Pipeline({ me }: { me: Me }) {
       <div className="page-head">
         <h2>Конвейер</h2>
       </div>
+      <label className="form-row">
+        <span className="fld-label">Чей конвейер</span>
+        <select
+          className="fld-long"
+          value={источник}
+          onChange={(e) => setИсточник(Number(e.target.value))}
+        >
+          {/*
+            «Общий» стоит первым и выбран сразу: им работают все
+            источники, кроме тех, кому завели своё. Открой мы экран на
+            чьём-то конвейере, составитель правил бы задание одного
+            источника, думая, что правит общее.
+          */}
+          <option value={0}>Общий — им работают все</option>
+          {(источники.state === 'ready' ? источники.value : []).map((one) => (
+            <option key={one.id} value={one.id}>
+              {one.title}
+            </option>
+          ))}
+        </select>
+      </label>
+      {отказ && <Banner kind="error">{отказ}</Banner>}
       <Loaded from={конвейер}>
         {(сведения) => (
           <>
@@ -337,6 +389,7 @@ function Pipeline({ me }: { me: Me }) {
                     <th>Отказов</th>
                     <th>Цена обращения</th>
                     <th>Время</th>
+                    {источник > 0 && <th>Задание</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -367,11 +420,38 @@ function Pipeline({ me }: { me: Me }) {
                           `${узел.medianMs} мс`
                         )}
                       </td>
+                      {источник > 0 && (
+                        <td>
+                          {/*
+                            Состояние названо словом, а кнопка — тем, что
+                            она сделает. Кнопка, подписанная состоянием
+                            («своё»), читается как «уже своё», и нажимают
+                            её именно те, кто хотел вернуть общее.
+                          */}
+                          <button
+                            type="button"
+                            disabled={занят}
+                            onClick={() => void своё(узел.node, узел.own)}
+                          >
+                            {узел.own ? 'Вернуть общее' : 'Завести своё'}
+                          </button>
+                          {узел.own && <span className="tag">своё</span>}
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+            {источник > 0 && (
+              <p className="hint">
+                Своё задание — копия общего, которую дальше правят отдельно:
+                разбор приказа и разбор клинических рекомендаций читают
+                по-разному. «Вернуть общее» снимает только привязку —
+                правленое задание остаётся в базе, и «Завести своё»
+                находит его снова.
+              </p>
+            )}
             <p className="hint">
               Цена — медианная за одно состоявшееся обращение, а не средняя:
               одно обращение разбора документа стоит десятка обращений

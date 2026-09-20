@@ -403,7 +403,7 @@ func (r *Runner) keepCheck(ctx context.Context, jobID, draftID int64, check Chec
 // не может — не потому, что мы это ловим, а потому, что её об этом не
 // спрашивают.
 func (r *Runner) compose(ctx context.Context, job Job, set AnswerSet) (Draft, error) {
-	prompt, err := r.prompts.ForNode(ctx, NodeCompose)
+	prompt, err := r.prompts.ForNode(ctx, NodeCompose, job.SourceID)
 	if err != nil {
 		return Draft{}, err
 	}
@@ -483,7 +483,7 @@ func (r *Runner) ruleBlock(ctx context.Context, plan Plan, node string) (string,
 // Варианты перемешиваются: сверка, у которой верный всегда первый,
 // проверяет порядок, а не задачу.
 func (r *Runner) verify(ctx context.Context, job Job, draft Draft) (*Verdict, error) {
-	prompt, err := r.prompts.ForNode(ctx, NodeVerify)
+	prompt, err := r.prompts.ForNode(ctx, NodeVerify, job.SourceID)
 	if err != nil {
 		return nil, err
 	}

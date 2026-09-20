@@ -264,7 +264,7 @@ func (r *ParseRunner) run(ctx context.Context, job Job) (ParseResult, error) {
 func (r *ParseRunner) parsePart(ctx context.Context, job Job, plan ParsePlan,
 	part Part, at, total int) ([]source.Unit, []source.Statement, int, error) {
 
-	prompt, err := r.prompts.ForNode(ctx, NodeParse)
+	prompt, err := r.prompts.ForNode(ctx, NodeParse, job.SourceID)
 	if err != nil {
 		return nil, nil, 0, err
 	}

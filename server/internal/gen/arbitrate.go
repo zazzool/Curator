@@ -155,7 +155,7 @@ func (r *Runner) arbitrate(ctx context.Context, job Job, draft Draft) (*Arbitrat
 		return nil, fmt.Errorf("у соседей нет положений: разбор свёлся бы к сличению названий")
 	}
 
-	prompt, err := r.prompts.ForNode(ctx, NodeArbitrate)
+	prompt, err := r.prompts.ForNode(ctx, NodeArbitrate, job.SourceID)
 	if err != nil {
 		return nil, err
 	}

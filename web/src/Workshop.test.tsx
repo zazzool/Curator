@@ -28,21 +28,32 @@ const ЗАДАНИЯ = {
 
 const КОНВЕЙЕР = {
   days: 30,
+  source: 0,
   nodes: [
     {
       node: 'compose', word: 'написание', promptId: 'compose-default',
       promptName: 'Написание условия', model: 'дорогая/рассуждающая',
-      calls: 40, failed: 2, medianNanoUsd: 3_200_000, medianMs: 4200, estimated: 38,
+      calls: 40, failed: 2, medianNanoUsd: 3_200_000, medianMs: 4200, estimated: 38, own: false,
     },
     {
       node: 'verify', word: 'слепая сверка', promptId: 'verify-default',
       promptName: 'Слепая сверка', model: '',
-      calls: 0, failed: 0, medianNanoUsd: 0, medianMs: 0, estimated: 0,
+      calls: 0, failed: 0, medianNanoUsd: 0, medianMs: 0, estimated: 0, own: false,
     },
     {
       node: 'siblings', word: 'различающая сверка', promptId: '',
       promptName: '', model: 'дешёвая/быстрая',
-      calls: 6, failed: 6, medianNanoUsd: 0, medianMs: 0, estimated: 0,
+      calls: 6, failed: 6, medianNanoUsd: 0, medianMs: 0, estimated: 0, own: false,
+    },
+  ],
+}
+
+const ИСТОЧНИКИ = {
+  sources: [
+    {
+      id: 7, slug: 'prikaz', kind: 'decree', title: 'Приказ о сроках',
+      unitWord: 'пункт', statementWord: 'указание', purpose: 'legal',
+      hierarchy: 'part-of', completeness: 'fragment', edition: '', status: 'ready',
     },
   ],
 }
@@ -145,6 +156,7 @@ function ответ(path: string, prompts: unknown, keys: unknown, users: unknow
   // «Читаем…» и молча уводит проверку от её предмета.
   if (path.startsWith('/admin/api/models')) return МОДЕЛИ
   if (path.startsWith('/admin/api/pipeline')) return КОНВЕЙЕР
+  if (path.startsWith('/admin/api/sources')) return ИСТОЧНИКИ
   return keys
 }
 
@@ -277,6 +289,185 @@ describe('мастерская', () => {
     await waitFor(() => {
       expect(screen.queryByText('Конвейер')).toBeNull()
     })
+  })
+
+  it('конвейер открывается на общем, а не на чьём-то', async () => {
+    // Общим работают все источники, кроме тех, кому завели своё. Открой
+    // экран на чьём-то конвейере, и составитель правил бы задание одного
+    // источника, думая, что правит общее, — а узнал бы об этом по
+    // качеству чужих задач.
+    render(<Workshop me={МАСТЕР} />)
+    const выбор = (await screen.findByLabelText('Чей конвейер')) as HTMLSelectElement
+    expect(выбор.value).toBe('0')
+    // Кнопок «Завести своё» на общем нет: своё заводится источнику, а
+    // не никому.
+    expect(screen.queryByText('Завести своё')).toBeNull()
+  })
+
+  it('на конвейере источника видно, где своё задание, а где общее', async () => {
+    serve(ЗАДАНИЯ, КЛЮЧИ)
+    render(<Workshop me={МАСТЕР} />)
+    const выбор = await screen.findByLabelText('Чей конвейер')
+    // Список источников — с сервера: вторая таблица «какие бывают
+    // источники» разошлась бы с первой молча.
+    expect(screen.getByText('Приказ о сроках')).toBeTruthy()
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string) => {
+        if (String(path).startsWith('/admin/api/pipeline?source=7')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                ...КОНВЕЙЕР,
+                source: 7,
+                nodes: [{ ...КОНВЕЙЕР.nodes[0]!, own: true }, ...КОНВЕЙЕР.nodes.slice(1)],
+              }),
+              { status: 200 },
+            ),
+          )
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ, СВОД)), {
+            status: 200,
+          }),
+        )
+      }),
+    )
+    fireEvent.change(выбор, { target: { value: '7' } })
+
+    // Кнопка названа тем, что она сделает, а не тем, что уже есть:
+    // подписанная состоянием («своё»), она читается как «уже своё», и
+    // нажимают её именно те, кто хотел вернуть общее.
+    expect(await screen.findByText('Вернуть общее')).toBeTruthy()
+    expect(screen.getAllByText('Завести своё').length).toBe(КОНВЕЙЕР.nodes.length - 1)
+  })
+
+  it('заведение своего задания шлёт узел и источник', async () => {
+    render(<Workshop me={МАСТЕР} />)
+    const выбор = await screen.findByLabelText('Чей конвейер')
+    fireEvent.change(выбор, { target: { value: '7' } })
+    fireEvent.click((await screen.findAllByText('Завести своё'))[0]!)
+
+    await waitFor(() => {
+      const sent = (globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.find(
+        (call) => (call[1] as { method?: string })?.method === 'POST',
+      )
+      expect(sent).toBeTruthy()
+      expect(String(sent![0])).toBe('/admin/api/sources/7/pipeline/compose')
+    })
+  })
+
+  it('возврат к общему шлёт снятие, а не заведение', async () => {
+    // Снимается только привязка, и путать её с заведением нельзя: одно
+    // нажатие вместо другого завело бы копию там, где составитель
+    // возвращался к общему.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        const метод = (init as { method?: string })?.method
+        if (метод === 'POST' || метод === 'DELETE') {
+          return Promise.resolve(new Response(JSON.stringify({ status: 'общее' }), { status: 200 }))
+        }
+        if (String(path).startsWith('/admin/api/pipeline?source=7')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                ...КОНВЕЙЕР,
+                source: 7,
+                nodes: [{ ...КОНВЕЙЕР.nodes[0]!, own: true }],
+              }),
+              { status: 200 },
+            ),
+          )
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ, СВОД)), {
+            status: 200,
+          }),
+        )
+      }),
+    )
+    render(<Workshop me={МАСТЕР} />)
+    const выбор = await screen.findByLabelText('Чей конвейер')
+    fireEvent.change(выбор, { target: { value: '7' } })
+    fireEvent.click(await screen.findByText('Вернуть общее'))
+
+    await waitFor(() => {
+      const sent = (globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.find(
+        (call) => (call[1] as { method?: string })?.method === 'DELETE',
+      )
+      expect(sent).toBeTruthy()
+      expect(String(sent![0])).toBe('/admin/api/sources/7/pipeline/compose')
+    })
+  })
+
+  it('заведение своего задания перечитывает экран', async () => {
+    // Без перечитывания строка остаётся прежней: кнопка по-прежнему
+    // зовёт завести своё, и пометки «своё» нет. Составитель жмёт второй
+    // раз, а задание уже заведено — то есть экран показывает не то, что
+    // в базе, и молчит об этом.
+    let завели = false
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if ((init as { method?: string })?.method === 'POST') {
+          завели = true
+          return Promise.resolve(
+            new Response(JSON.stringify({ promptId: 'compose-источник-7' }), { status: 200 }),
+          )
+        }
+        if (String(path).startsWith('/admin/api/pipeline?source=7')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                ...КОНВЕЙЕР,
+                source: 7,
+                nodes: [{ ...КОНВЕЙЕР.nodes[0]!, own: завели }],
+              }),
+              { status: 200 },
+            ),
+          )
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ, СВОД)), {
+            status: 200,
+          }),
+        )
+      }),
+    )
+    render(<Workshop me={МАСТЕР} />)
+    fireEvent.change(await screen.findByLabelText('Чей конвейер'), { target: { value: '7' } })
+    fireEvent.click(await screen.findByText('Завести своё'))
+
+    expect(await screen.findByText('Вернуть общее')).toBeTruthy()
+  })
+
+  it('отказ правки конвейера показан словами сервера', async () => {
+    // Текст сервера говорит, чего не хватает. Своё «не удалось»
+    // отправило бы человека нажимать ту же кнопку снова.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if (init?.method === 'POST') {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ error: 'У узла «написание» нет общего задания: копировать нечего' }),
+              { status: 400 },
+            ),
+          )
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ, СВОД)), {
+            status: 200,
+          }),
+        )
+      }),
+    )
+    render(<Workshop me={МАСТЕР} />)
+    fireEvent.change(await screen.findByLabelText('Чей конвейер'), { target: { value: '7' } })
+    fireEvent.click((await screen.findAllByText('Завести своё'))[0]!)
+    expect(await screen.findByText(/копировать нечего/)).toBeTruthy()
   })
 
   it('модель узла видна в списке, не открывая задание', async () => {

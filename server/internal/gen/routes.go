@@ -39,6 +39,8 @@ func Routes(desk *studio.Desk, jobs *Jobs, resolver *Resolver, prompts *Prompts,
 	// мастерской закрыт правом на сервере, а не спрятан в студии.
 	desk.Handle(studio.PermPrompts, "GET /admin/api/models", r.listModels)
 	desk.Handle(studio.PermPrompts, "GET /admin/api/pipeline", r.pipeline)
+	desk.Handle(studio.PermPrompts, "POST /admin/api/sources/{id}/pipeline/{node}", r.forkPrompt)
+	desk.Handle(studio.PermPrompts, "DELETE /admin/api/sources/{id}/pipeline/{node}", r.unforkPrompt)
 }
 
 type routes struct {

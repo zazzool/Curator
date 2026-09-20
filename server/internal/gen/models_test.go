@@ -160,7 +160,7 @@ func TestPgСнятаяМодельУзлаСохраняетсяПустой(t 
 	if err := prompts.Seed(ctx); err != nil {
 		t.Fatal(err)
 	}
-	было, err := prompts.ForNode(ctx, NodeVerify)
+	было, err := prompts.ForNode(ctx, NodeVerify, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestPgСнятаяМодельУзлаСохраняетсяПустой(t 
 	}
 	// И перечитанное из базы тоже пусто: ответ ручки мог вернуть
 	// записанное не туда.
-	снова, err := prompts.ForNode(ctx, NodeVerify)
+	снова, err := prompts.ForNode(ctx, NodeVerify, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

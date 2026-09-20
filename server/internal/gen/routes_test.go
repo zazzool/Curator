@@ -259,7 +259,7 @@ func TestPgПрежняяРедакцияЗаданияОстаётсяВИст�
 	if err := prompts.Seed(ctx); err != nil {
 		t.Fatal(err)
 	}
-	before, err := prompts.ForNode(ctx, NodeCompose)
+	before, err := prompts.ForNode(ctx, NodeCompose, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestPgПустоеЗаданиеНеСохраняется(t *testing.T) {
 	if err := prompts.Seed(ctx); err != nil {
 		t.Fatal(err)
 	}
-	before, err := prompts.ForNode(ctx, NodeVerify)
+	before, err := prompts.ForNode(ctx, NodeVerify, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
