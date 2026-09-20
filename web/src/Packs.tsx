@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { счётом } from './words'
 import { ApiError, api } from './api'
 import { Loaded, useResource } from './useResource'
+import { confirmed } from './confirm'
 import type { Case, Me, PackItem } from './api'
 
 // Наборы задач: что собрано, из чего и что уехало на устройства.
@@ -221,6 +222,21 @@ function PackCard({ me, slug, onBack }: { me: Me; slug: string; onBack: () => vo
   async function saveCard() {
     setFailure('')
     setNote('')
+    // Снятие с витрины спрашивается, остальная правка карточки — нет:
+    // название и описание исправляются тем же полем, а снятый набор
+    // пропадает у всех врачей, и произойдёт это внутри «сохранить».
+    if (
+      card.status === 'retired' &&
+      pack !== null &&
+      pack.status !== 'retired' &&
+      !confirmed(
+        `Снять набор «${card.title}» с витрины?`,
+        'В приложении его больше не предложат. Уже скачанное у врачей остаётся: ' +
+          'подписанный выпуск не отзывается.',
+      )
+    ) {
+      return
+    }
     setBusy(true)
     try {
       await api.savePack(slug, card)
@@ -236,6 +252,20 @@ function PackCard({ me, slug, onBack }: { me: Me; slug: string; onBack: () => vo
   async function release() {
     setFailure('')
     setNote('')
+    // Единственное действие студии, которое уезжает НАРУЖУ и подписью:
+    // выпуск уходит на телефоны врачей, и отозвать подписанное нельзя —
+    // так и написано на самом экране. Спрашивается поэтому всегда, а не
+    // только в одну сторону.
+    if (
+      !confirmed(
+        `Выпустить набор «${card.title}» составом из ` +
+          `${счётом(items.length, 'задачи', 'задач', 'задач')}?`,
+        'Выпуск подписывается и уходит на устройства врачей. Отозвать подписанное нельзя: ' +
+          'исправляется оно только следующим выпуском.',
+      )
+    ) {
+      return
+    }
     setBusy(true)
     try {
       const out = await api.releasePack(slug)

@@ -4,6 +4,7 @@ import { рублями, вКопейки } from './Money'
 import { датой, счётом } from './words'
 import { ApiError, api } from './api'
 import { Loaded, useResource } from './useResource'
+import { askReason, confirmed } from './confirm'
 import type { Client, Entitlement, Me, Pack, Payment } from './api'
 
 // Продажи: кому продано, за что и почём.
@@ -331,9 +332,25 @@ function ClientCard({ me, id, onBack }: { me: Me; id: number; onBack: () => void
   async function refund(payment: Payment) {
     setFailure('')
     setNote('')
+    // Причина спрашивается ДО подтверждения, а не после: отказавшийся её
+    // писать возврат не оформил, и лишнего вопроса ему задавать незачем.
+    const why = askReason(
+      `Почему возвращается платёж № ${payment.id} на ${рублями(payment.kopecks)}?`,
+      'Это единственное поле, по которому возврат потом разбирают. ' +
+        'Напишите так, чтобы через полгода было понятно без вас.',
+    )
+    if (why === null) return
+    if (
+      !confirmed(
+        `Вернуть платёж № ${payment.id} на ${рублями(payment.kopecks)}?`,
+        'Право, купленное этим платежом, будет отозвано. Отменить возврат нельзя.',
+      )
+    ) {
+      return
+    }
     setBusy(true)
     try {
-      await api.refundPayment(payment.id, 'возврат оформлен в студии')
+      await api.refundPayment(payment.id, why)
       await reload()
       setNote(`Платёж № ${payment.id} возвращён, право по нему отозвано.`)
     } catch (error) {
@@ -346,6 +363,18 @@ function ClientCard({ me, id, onBack }: { me: Me; id: number; onBack: () => void
   async function block(blocked: boolean) {
     setFailure('')
     setNote('')
+    // Спрашивается только закрытие: открыть вход обратно можно той же
+    // кнопкой, и подтверждение у обратимого приучает отвечать «да» не
+    // читая — а вместе с ним перестают читать и остальные вопросы.
+    if (
+      blocked &&
+      !confirmed(
+        client === null ? 'Закрыть вход врачу?' : `Закрыть вход врачу ${именем(client)}?`,
+        'Он не сможет ни заниматься, ни вернуть доступ по почте, пока вход не откроют обратно.',
+      )
+    ) {
+      return
+    }
     try {
       await api.setClientBlocked(id, blocked)
       await reload()
@@ -425,7 +454,7 @@ function ClientCard({ me, id, onBack }: { me: Me; id: number; onBack: () => void
                     {payment.by && ` · ${payment.by}`}
                   </span>
                   {canSell && payment.status === 'paid' && (
-                    <button onClick={() => refund(payment)} disabled={busy}>
+                    <button className="danger" onClick={() => refund(payment)} disabled={busy}>
                       Вернуть
                     </button>
                   )}
@@ -497,7 +526,13 @@ function ClientCard({ me, id, onBack }: { me: Me; id: number; onBack: () => void
           возврат платежа.
         </p>
         <div className="form-actions">
-          <button onClick={() => block(!client.blocked)} disabled={busy}>
+          {/* Красным только закрытие: открыть вход обратно — не опасное
+              действие, и одинаковый вид у обоих стёр бы разницу. */}
+          <button
+            className={client.blocked ? undefined : 'danger'}
+            onClick={() => block(!client.blocked)}
+            disabled={busy}
+          >
             {client.blocked ? 'Открыть вход' : 'Закрыть вход'}
           </button>
         </div>

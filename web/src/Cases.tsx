@@ -3,6 +3,7 @@ import { useCallback, useState } from 'react'
 import { ApiError, api } from './api'
 import { dropDraft, readDraft, writeDraft } from './draftStore'
 import { Loaded, useResource } from './useResource'
+import { confirmed } from './confirm'
 import type { Case, CaseBody, Fault, Me, Source } from './api'
 import { датойИвременем } from './words'
 
@@ -41,6 +42,19 @@ export function Cases({ me, source, path }: { me: Me; source: Source; path: stri
   }
 
   async function act(what: 'publish' | 'withdraw', id: string) {
+    // Спрашивается только снятие: раздать задачу обратно можно той же
+    // кнопкой, а снятую врач теряет из ленты и из повторения сразу —
+    // и заметит это не здесь.
+    if (
+      what === 'withdraw' &&
+      !confirmed(
+        'Снять задачу с раздачи?',
+        'Врачи перестанут получать её в ленте и в повторении. ' +
+          'Из базы она не удаляется — попытки по ней остаются.',
+      )
+    ) {
+      return
+    }
     setBusy(true)
     clear()
     try {
@@ -133,7 +147,11 @@ export function Cases({ me, source, path }: { me: Me; source: Source; path: stri
                 </button>
               )}
               {canWrite && one.status === 'published' && (
-                <button onClick={() => act('withdraw', one.id)} disabled={busy}>
+                <button
+                  className="danger"
+                  onClick={() => act('withdraw', one.id)}
+                  disabled={busy}
+                >
                   Снять с раздачи
                 </button>
               )}

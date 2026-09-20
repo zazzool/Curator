@@ -63,6 +63,84 @@ describe('продажи', () => {
     serve(ОБЫЧНО)
   })
 
+  it('возврат спрашивает причину и уносит именно её', async () => {
+    // Единственное поле, которым возврат объясняется в разбирательстве,
+    // прежде не спрашивалось вовсе: во все возвраты, какие когда-либо
+    // будут, вписывалось одно «возврат оформлен в студии».
+    let ушло: unknown = null
+    const ПЛАТЁЖ = {
+      payments: [
+        {
+          id: 41,
+          purpose: 'subscription:month',
+          kopecks: 199000,
+          status: 'paid',
+          source: 'operator',
+          at: '2026-09-10T10:00:00Z',
+          by: 'оператор',
+        },
+      ],
+    }
+    const ответы: [string, unknown][] = [['/admin/api/clients/7/payments', ПЛАТЁЖ], ...ОБЫЧНО]
+    vi.stubGlobal('prompt', vi.fn(() => '  ошиблись назначением, деньги вернули на карту  '))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if (init?.method === 'POST' && path.includes('/refund')) {
+          ушло = JSON.parse(String(init.body))
+        }
+        const found = ответы.find(([key]) => path.startsWith(key))
+        return Promise.resolve(
+          new Response(JSON.stringify(found ? found[1] : {}), { status: 200 }),
+        )
+      }),
+    )
+    render(<Sales me={ОПЕРАТОР} />)
+    fireEvent.click(await screen.findByText('Иванов И.И.'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Вернуть' }))
+
+    await waitFor(() => expect(ушло).not.toBeNull())
+    // Пробелы по краям срезаются: причина «   » — это отсутствие причины.
+    expect(ушло).toMatchObject({ note: 'ошиблись назначением, деньги вернули на карту' })
+  })
+
+  it('возврат без причины на сервер не уходит', async () => {
+    let posted = 0
+    const ПЛАТЁЖ = {
+      payments: [
+        {
+          id: 41,
+          purpose: 'subscription:month',
+          kopecks: 199000,
+          status: 'paid',
+          source: 'operator',
+          at: '2026-09-10T10:00:00Z',
+          by: 'оператор',
+        },
+      ],
+    }
+    const ответы: [string, unknown][] = [['/admin/api/clients/7/payments', ПЛАТЁЖ], ...ОБЫЧНО]
+    // Отказ писать причину и пустая причина — одно и то же: возврат без
+    // причины и есть тот возврат, который потом нечем объяснить.
+    vi.stubGlobal('prompt', vi.fn(() => '   '))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if (init?.method === 'POST' && path.includes('/refund')) posted++
+        const found = ответы.find(([key]) => path.startsWith(key))
+        return Promise.resolve(
+          new Response(JSON.stringify(found ? found[1] : {}), { status: 200 }),
+        )
+      }),
+    )
+    render(<Sales me={ОПЕРАТОР} />)
+    fireEvent.click(await screen.findByText('Иванов И.И.'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Вернуть' }))
+
+    await new Promise((done) => setTimeout(done, 0))
+    expect(posted).toBe(0)
+  })
+
   it('цена показывается рублями, а не копейками', async () => {
     // В базе цена лежит копейками намеренно, а оператор думает рублями.
     // Показанные копейки он прочтёт как цену — и она будет в сто раз не та.
