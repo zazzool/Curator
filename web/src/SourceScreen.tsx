@@ -52,6 +52,11 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
   const [looking, setLooking] = useState<Document | null>(null)
 
   const canAccept = me.permissions.includes('source:accept')
+  // Разбор закрыт правом генерации, а не правом принимать: он тратит
+  // деньги у поставщика моделей и кладёт черновик, а истину источника не
+  // меняет. Кнопка прячется только потому, что всё равно отказала бы, и
+  // рядом сказано почему.
+  const canParse = me.permissions.includes('generate')
 
   const read = useCallback(async () => {
     const [loaded, sliced, docs] = await Promise.all([
@@ -91,6 +96,27 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
       await reload(path)
     } catch (error) {
       setFailure(error instanceof ApiError ? error.message : 'Документ не принят')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // Разбор документа моделью: заказ уходит в очередь, а не выполняется
+  // тут же. Документ на сотню страниц разбирается минутами, и держать на
+  // нём вкладку нельзя — закрытая вкладка не должна отменять оплаченное.
+  async function parse(documentId: number) {
+    setBusy(true)
+    setFailure('')
+    setNote('')
+    try {
+      await api.parseDocument(documentId)
+      setNote(
+        'Документ отдан модели. Ход разбора виден в списке заданий ниже; ' +
+          'разобранное ляжет черновиком, и принять его надо будет отдельно.',
+      )
+      await reload(path)
+    } catch (error) {
+      setFailure(error instanceof ApiError ? error.message : 'Разбор не заказан')
     } finally {
       setBusy(false)
     }
@@ -243,6 +269,11 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
                   {Math.max(1, Math.round(document.byteSize / 1024))} КБ
                   {document.uploadedBy && ` · принёс ${document.uploadedBy}`}
                 </span>
+                {canParse && (
+                  <button onClick={() => void parse(document.id)} disabled={busy}>
+                    Разобрать моделью
+                  </button>
+                )}
                 {canAccept && (
                   // Смотреть, а не принимать. Принятый разбор — это
                   // решение о том, что теперь считается истиной
@@ -268,6 +299,12 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
             Принести документ и принять разбор может тот, кому выдано право
             принимать: принятый разбор — это решение о том, что теперь
             считается истиной источника.
+          </p>
+        )}
+        {!canParse && (
+          <p className="hint">
+            Отдать документ модели может тот, кому выдано право запускать
+            генерацию: разбор обращается к модели и стоит денег.
           </p>
         )}
 

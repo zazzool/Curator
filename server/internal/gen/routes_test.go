@@ -336,7 +336,7 @@ func TestPgОтменённоеЗаданиеИсполнителюНеДост�
 	}
 
 	for {
-		job, took, err := NewJobs(gate).Take(context.Background())
+		job, took, err := NewJobs(gate).Take(context.Background(), KindCase)
 		if err != nil {
 			t.Fatal(err)
 		}

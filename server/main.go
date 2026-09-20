@@ -254,7 +254,8 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 		desk := studio.NewDesk(studio.NewUsers(gate, seal), sessions)
 		studio.Routes(desk)
 		studio.UserRoutes(desk)
-		source.Routes(desk, source.NewStore(gate))
+		sources := source.NewStore(gate)
+		source.Routes(desk, sources)
 		casestore.Routes(desk, casestore.NewStore(gate))
 		app.KeyRoutes(desk, keys)
 		packs.Routes(desk, packStore)
@@ -279,7 +280,7 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 			Offsite:   offsite(),
 		}).Every(ctx, 24*time.Hour)
 
-		generation(ctx, gate, desk)
+		generation(ctx, gate, desk, sources)
 
 		// Потолок студии крупнее: сюда приносят документ источника, и
 		// приказ на сотню страниц в DOCX весит мегабайты. Он всё равно
@@ -403,7 +404,7 @@ func housekeeping(ctx context.Context, sessions *studio.Sessions, ledger *llmusa
 // очередь и задания (они уже есть в базе от прежних прогонов) и говорить,
 // почему новое не пишется, а не прятать раздел. Спрятанный раздел человек
 // принимает за поломку студии и идёт искать её в студии.
-func generation(ctx context.Context, gate *dbgate.Gate, desk *studio.Desk) {
+func generation(ctx context.Context, gate *dbgate.Gate, desk *studio.Desk, sources *source.Store) {
 	jobs := gen.NewJobs(gate)
 	prompts := gen.NewPrompts(gate)
 	gen.Routes(desk, jobs, gen.NewResolver(gate), prompts)
@@ -446,7 +447,18 @@ func generation(ctx context.Context, gate *dbgate.Gate, desk *studio.Desk) {
 	// цепочка — одна, всё, что состоялось. Это отдельная работа.
 	runner := gen.NewRunner(jobs, prompts, chain).WithLedger(ledger, prices)
 	go gen.Work(ctx, runner)
-	log.Printf("генерация: исполнитель очереди поднят, поставщиков %d", len(providers))
+
+	// Разбор документов разбирает СВОЙ исполнитель, а не общий.
+	//
+	// Разбор идёт минутами и держит одно задание надолго: приказ на
+	// восемьдесят частей — это восемьдесят обращений подряд. Написание
+	// задач, стоящее за ним в общей очереди, ждало бы конца разбора,
+	// и составитель, заказавший одну задачу, получил бы её через час —
+	// не потому, что она трудная, а потому, что кто-то принёс документ.
+	parser := gen.NewParseRunner(jobs, prompts, chain, sources).WithLedger(ledger, prices)
+	go gen.ParseWork(ctx, parser)
+
+	log.Printf("генерация: исполнители очереди подняты, поставщиков %d", len(providers))
 }
 
 // llmProviders — список поставщиков из окружения.
