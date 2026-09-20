@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"curator/server/internal/limits"
 )
 
 // Ручки почты: привязка и возврат доступа.
@@ -41,7 +43,17 @@ func EmailRoutes(door *Door, emails *Emails, post Postman, now func() time.Time)
 	door.Device("POST /v1/me/email", r.startBind)
 	door.Device("POST /v1/me/email/confirm", r.confirmBind)
 
-	door.Keyed("POST /v1/recovery", r.startRecovery)
+	// Возврат доступа считается по адресу, и это не осторожность.
+	// Письмо уходит на ЧУЖОЙ адрес, названный в запросе. Промежуток в
+	// минуту между письмами на один ящик — не защита ящика, а
+	// расписание: 1440 писем в сутки с нашего обратного адреса, и
+	// отвечает за них наша почтовая репутация, а не тот, кто их заказал.
+	// Счёт по адресу обращающегося закрывает это с той стороны, с
+	// которой промежуток не закрывает вовсе.
+	door.Keyed("POST /v1/recovery", Metered(
+		limits.NewBucket(5, 2), now,
+		"Слишком много попыток вернуть доступ с этого адреса. Попробуйте позже",
+		r.startRecovery))
 	door.Keyed("POST /v1/recovery/confirm", r.confirmRecovery)
 }
 
