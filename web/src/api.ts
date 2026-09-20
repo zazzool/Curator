@@ -705,8 +705,12 @@ export const api = {
       `/admin/api/clients/${id}/audiences`,
     ),
 
+  // Связи набора и все группы приезжают одним ответом: карточка набора
+  // закрыта правом наборов, а список групп — правом клиентов, и вторым
+  // обращением составитель без права на клиентов получал бы отказ вместо
+  // выбора.
   packAudiences: (slug: string) =>
-    request<{ audiences: PackAudience[] }>(
+    request<{ audiences: PackAudience[]; all: { slug: string; title: string; broken: string }[] }>(
       'GET',
       `/admin/api/packs/${encodeURIComponent(slug)}/audiences`,
     ),

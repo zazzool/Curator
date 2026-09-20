@@ -4,7 +4,7 @@ import { счётом } from './words'
 import { ApiError, api } from './api'
 import { Loaded, useResource } from './useResource'
 import { confirmed } from './confirm'
-import type { Audience, Case, Me, PackAudience, PackItem } from './api'
+import type { Case, Me, PackAudience, PackItem } from './api'
 import { Banner } from './components/Banner'
 
 // Наборы задач: что собрано, из чего и что уехало на устройства.
@@ -631,8 +631,8 @@ function PackAudiences({ slug }: { slug: string }) {
   const [busy, setBusy] = useState(false)
 
   const read = useCallback(async () => {
-    const [mine, all] = await Promise.all([api.packAudiences(slug), api.audiences()])
-    return { mine: mine?.audiences ?? [], all: all?.audiences ?? [] }
+    const answer = await api.packAudiences(slug)
+    return { mine: answer?.audiences ?? [], all: answer?.all ?? [] }
   }, [slug])
   const opened = useResource(read, 'Группы набора не прочитаны')
   const reload = opened.reload
@@ -646,7 +646,7 @@ function PackAudiences({ slug }: { slug: string }) {
     setBound(loaded.mine)
   }, [loaded])
 
-  function set(group: Audience, mode: 'open' | 'hidden' | 'none') {
+  function set(group: { slug: string; title: string }, mode: 'open' | 'hidden' | 'none') {
     const без = bound.filter((one) => one.slug !== group.slug)
     if (mode === 'none') {
       setBound(без)
