@@ -1,26 +1,34 @@
 #!/usr/bin/env bash
-# Заводит автоматическую выкатку: ключ от контура и два секрета
-# репозитория. Гоняется ОДИН раз и с машины, у которой уже есть доступ к
-# контуру по ssh, — то есть с машины владельца.
+# Заводит автоматическую выкатку: ключ от контура и два секрета в
+# репозитории на Forgejo. Гоняется ОДИН раз и с машины, у которой уже есть
+# доступ к контуру по ssh, — то есть с машины владельца.
+#
+# # Почему Forgejo, а не GitHub
+#
+# Выкатывает Forgejo (решение владельца 20.09.2026): он стоит внутри
+# периметра владельца, и ключ от боевого контура не уезжает к GitHub
+# вовсе. GitHub остаётся сторожем проверок. Разбор — docs/deploy.md.
 #
 # # Почему это не делает сессия
 #
 # Ключ, которым сторож ходит на контур, порождается здесь и уезжает прямо
 # в секреты репозитория, минуя чей-либо экран, разговор и переписку.
-# Сессия сделать этого не может и не должна: у неё нет доступа к контуру
-# (порт 22 закрыт), а закрытая половина ключа, показанная в чате, уже не
-# закрытая.
+# Сессия сделать этого не может и не должна: у неё нет доступа ни к
+# контуру, ни к Forgejo (оба закрыты политикой выхода её окружения), а
+# закрытая половина ключа, показанная в чате, уже не закрытая.
 #
 # # Что остаётся после
 #
-# На контуре — одна строка в authorized_keys для root. В репозитории — два
-# секрета: CURATOR_SSH_KEY (закрытая половина) и CURATOR_SSH_KNOWN_HOSTS
-# (отпечаток хоста). Закрытая половина на этой машине НЕ остаётся: каталог
-# с ней стирается при выходе, как бы скрипт ни кончился.
+# На контуре — одна строка в authorized_keys для root. В репозитории на
+# Forgejo — два секрета: CURATOR_SSH_KEY (закрытая половина) и
+# CURATOR_SSH_KNOWN_HOSTS (отпечаток хоста). Закрытая половина на этой
+# машине НЕ остаётся: каталог с ней стирается при выходе, как бы скрипт ни
+# кончился.
 set -euo pipefail
 
 HOST="${CURATOR_HOST:-root@curator.psync.ru}"
-REPO="${CURATOR_REPO:-zazzool/Curator}"
+FORGEJO_URL="${FORGEJO_URL:-https://exam.psync.ru}"
+FORGEJO_REPO="${FORGEJO_REPO:-zazzool/Curator}"
 
 die() {
     printf '%s\n' "$@" >&2
@@ -29,11 +37,27 @@ die() {
 
 command -v ssh-keygen >/dev/null || die "Нет ssh-keygen."
 command -v ssh-keyscan >/dev/null || die "Нет ssh-keyscan."
-command -v gh >/dev/null ||
-    die "Нет gh — утилиты GitHub, которой кладутся секреты." \
-        "Поставить: https://cli.github.com, затем gh auth login." \
-        "Без неё секреты заводятся руками: Settings → Secrets and variables →" \
-        "Actions. Что именно класть, скрипт напечатает и без gh не сможет."
+command -v curl >/dev/null || die "Нет curl."
+
+# Токен спрашивается, а не берётся из аргументов: строка запуска попадает
+# в историю оболочки и в список процессов, и токен Forgejo пережил бы там
+# эту сессию.
+if [ -z "${FORGEJO_TOKEN:-}" ]; then
+    printf 'Токен Forgejo (Settings → Applications → Access Tokens, права write:repository): '
+    read -r -s FORGEJO_TOKEN
+    printf '\n'
+fi
+[ -n "$FORGEJO_TOKEN" ] || die "Без токена секреты завести нечем."
+
+API="$FORGEJO_URL/api/v1/repos/$FORGEJO_REPO"
+
+# Токен проверяется ДО того, как что-либо меняется: узнать, что он не
+# годится, после записи ключа на контур — значит чинить половину
+# сделанного.
+echo "== Проверяю доступ к $FORGEJO_REPO на Forgejo =="
+curl -fsS -o /dev/null -H "Authorization: token $FORGEJO_TOKEN" "$API" ||
+    die "Forgejo не отвечает или токен не годится: $API" \
+        "Проверьте FORGEJO_URL, FORGEJO_REPO и права токена (write:repository)."
 
 # Имя хоста отдельно от имени пользователя: ssh-keyscan спрашивает хост, а
 # в HOST он приходит вместе с root@.
@@ -48,7 +72,7 @@ case "$HOSTNAME_ONLY" in
 esac
 
 echo "Контур:      $HOST"
-echo "Репозиторий: $REPO"
+echo "Forgejo:     $FORGEJO_URL/$FORGEJO_REPO"
 echo
 
 # Каталог стирается при любом выходе, включая Ctrl-C: закрытая половина
@@ -59,8 +83,8 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 echo "== Порождаю ключ =="
 # Без пароля намеренно: пароль у ключа, которым пользуется сторож, значил
 # бы, что пароль лежит вторым секретом рядом. Защита ключа здесь — в том,
-# что закрытую половину видит только GitHub.
-ssh-keygen -t ed25519 -N '' -C "curator-deploy (GitHub Actions)" -f "$WORK/key" >/dev/null
+# что закрытую половину видит только Forgejo.
+ssh-keygen -t ed25519 -N '' -C "curator-deploy (Forgejo)" -f "$WORK/key" >/dev/null
 echo "Открытая половина: $(cat "$WORK/key.pub")"
 echo
 
@@ -90,18 +114,45 @@ ssh -i "$WORK/key" -o IdentitiesOnly=yes -o BatchMode=yes \
     die "Новый ключ на контур не пускает (или на контуре нет docker compose)." \
         "Секреты не заведены — чинить нечего, можно просто повторить."
 
-echo "== Кладу секреты в $REPO =="
-gh secret set CURATOR_SSH_KEY --repo "$REPO" < "$WORK/key"
-gh secret set CURATOR_SSH_KNOWN_HOSTS --repo "$REPO" < "$WORK/known_hosts"
+# Значение секрета уезжает телом запроса в JSON, и его надо закодировать.
+# Ни python, ни jq для этого не зовутся: их нет на части машин, а здесь
+# хватает замены переводов строк. Это безопасно ИМЕННО для этих двух
+# значений и ни для каких других: ключ OpenSSH и вывод ssh-keyscan состоят
+# из base64, пробелов и дефисов — ни кавычек, ни обратных косых в них нет
+# и быть не может.
+json_lines() {
+    awk '{printf "%s\\n", $0}' "$1"
+}
+
+put_secret() {
+    local name="$1" file="$2"
+    printf '{"data":"%s"}' "$(json_lines "$file")" |
+        curl -fsS -o /dev/null -X PUT \
+            -H "Authorization: token $FORGEJO_TOKEN" \
+            -H 'Content-Type: application/json' \
+            --data-binary @- \
+            "$API/actions/secrets/$name" ||
+        die "Не удалось записать секрет $name в $FORGEJO_REPO." \
+            "Нужны права write:repository у токена."
+    echo "  $name — записан"
+}
+
+echo "== Кладу секреты в $FORGEJO_REPO на Forgejo =="
+put_secret CURATOR_SSH_KEY "$WORK/key"
+put_secret CURATOR_SSH_KNOWN_HOSTS "$WORK/known_hosts"
 
 cat <<DONE
 
-Готово. Дальше выкатывает сторож: всякое зелёное слияние в main уезжает на
-$HOST само.
+Готово. Дальше выкатывает Forgejo: всё, что ложится в его главную ветку,
+уезжает на $HOST само — если проверки на GitHub по тому же коммиту зелены.
 
-Толкнуть руками — вкладка Actions → «Выкатка» → Run workflow.
-Там же и возврат предыдущего образа, когда контур уже горит.
+Толкнуть руками — «Выкатка» → запустить вручную, в действиях репозитория
+на Forgejo. Там же и возврат предыдущего образа, когда контур уже горит.
+
+Чего не делает этот скрипт: не заводит сам репозиторий на Forgejo и не
+доставляет туда слияния, сделанные на GitHub. Это отдельный шаг, и он
+описан в docs/deploy.md — без него выкатке нечего выкатывать.
 
 Отозвать доступ, если ключ понадобится убрать:
-    ssh $HOST "sed -i '/curator-deploy (GitHub Actions)/d' ~/.ssh/authorized_keys"
+    ssh $HOST "sed -i '/curator-deploy (Forgejo)/d' ~/.ssh/authorized_keys"
 DONE
