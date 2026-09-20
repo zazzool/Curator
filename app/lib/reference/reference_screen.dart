@@ -109,7 +109,24 @@ class _ReferenceScreenState extends State<ReferenceScreen> {
       _loading = true;
       _note = keepNote;
     });
-    final mine = await widget.store!.sources();
+    var note = keepNote;
+    var mine = const <RefSource>[];
+    try {
+      mine = await widget.store!.sources();
+    } catch (error) {
+      // База устройства портится и переполняется, и отказ её ловился
+      // здесь только у сети: `DatabaseException` уходил необработанным,
+      // признак чтения оставался поднятым, и отметка «разделы
+      // обновляются» крутилась над экраном вечно. Врачу при этом не
+      // говорилось ничего — экран просто не кончал загружаться.
+      //
+      // Предложенное сервером показывается и без базы: оно от неё не
+      // зависит, и лишать врача ещё и списка источников незачем.
+      debugPrint('справочник с устройства не прочёлся: $error');
+      note =
+          'Справочник на устройстве не прочёлся. '
+          'Перезапустите приложение';
+    }
     var offered = const <RefSource>[];
     var failure = '';
     try {
@@ -122,6 +139,7 @@ class _ReferenceScreenState extends State<ReferenceScreen> {
       _mine = mine;
       _offered = offered;
       _offerFailure = failure;
+      _note = note;
       _loading = false;
     });
   }
@@ -137,10 +155,21 @@ class _ReferenceScreenState extends State<ReferenceScreen> {
     // По источникам подряд, в порядке списка: у каждого своя выдача, и
     // сводить их в один ранжированный список нечем — совпадение по началу
     // метки в одном источнике не сравнимо с совпадением в другом.
-    for (final source in _mine) {
-      for (final unit in await store.search(source.slug, query, limit: 20)) {
-        hits.add((source, unit));
+    try {
+      for (final source in _mine) {
+        for (final unit in await store.search(source.slug, query, limit: 20)) {
+          hits.add((source, unit));
+        }
       }
+    } catch (error) {
+      // Отказ базы посреди поиска не роняет экран: показываем то, что
+      // успело найтись, и говорим об отказе словом. Необработанным он
+      // оставлял врача с набранным запросом и пустой выдачей, которую
+      // тот читает как «ничего не найдено» — то есть как правду.
+      debugPrint('поиск по справочнику отказал: $error');
+      const said = 'Поиск по справочнику отказал. Перезапустите приложение';
+      if (!mounted) return;
+      setState(() => _note = said);
     }
     if (!mounted) return;
     // Набранное могло смениться, пока шла выборка: показывать выдачу по
@@ -183,6 +212,15 @@ class _ReferenceScreenState extends State<ReferenceScreen> {
       }
     } on ApiFailure catch (error) {
       note = error.message;
+    } catch (error) {
+      // Закачка справочника — это запись в базу, а на устройстве кончается
+      // место. Ловился здесь только отказ сети, и отказ записи уходил
+      // необработанным: пометка «качается» оставалась на источнике
+      // навсегда, а врач ждал закачки, которая уже не шла.
+      debugPrint('справочник не записался на устройство: $error');
+      note =
+          'Не вышло записать справочник на устройство. '
+          'Проверьте, есть ли на нём место';
     }
     if (!mounted) return;
     setState(() => _busy = '');
@@ -190,8 +228,14 @@ class _ReferenceScreenState extends State<ReferenceScreen> {
   }
 
   Future<void> _forget(RefSource source) async {
-    await widget.store!.forget(source.slug);
-    await _load(keepNote: '«${source.title}» убран с устройства');
+    var note = '«${source.title}» убран с устройства';
+    try {
+      await widget.store!.forget(source.slug);
+    } catch (error) {
+      debugPrint('источник не убрался с устройства: $error');
+      note = 'Не вышло убрать «${source.title}» с устройства';
+    }
+    await _load(keepNote: note);
   }
 
   @override

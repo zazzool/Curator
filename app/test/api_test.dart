@@ -277,6 +277,56 @@ void main() {
       expect(jsonDecode(server.taken.last.body)['email'], 'vn@example.com');
     });
 
+    test('отозванный токен стирается, и отказ говорит об этом', () async {
+      // Самое дорогое место двери. `ensureEnrolled` видит непустой токен
+      // и не заводит устройство заново НИКОГДА: не сотри мы отозванный
+      // токен — и каждый экран отказывал бы «устройство не опознано»
+      // до переустановки приложения, то есть до потери всего, что не
+      // привязано к почте.
+      //
+      // Токен латиницей, и это не мелочь: заголовок HTTP принимает только
+      // ASCII, кириллический токен роняет `FormatException` ещё до похода
+      // к серверу — и проверка сверяла бы совсем другой путь двери.
+      await tokens.write('revoked-1');
+      server.replies.add(Reply(401, {'error': 'Устройство не опознано'}));
+
+      ApiFailure? failure;
+      try {
+        await api.get('/v1/feed');
+      } on ApiFailure catch (error) {
+        failure = error;
+      }
+
+      expect(failure, isNotNull);
+      expect(failure!.status, 401);
+      expect(
+        failure.lostDevice,
+        isTrue,
+        reason: 'экрану нечем предложить возврат записи',
+      );
+      expect(
+        await tokens.read(),
+        isNull,
+        reason: 'приложение осталось окирпиченным навсегда',
+      );
+    });
+
+    test('401 без токена токена не трогает', () async {
+      // Возврат доступа по почте отвечает 401 на неподошедший код. Сотри
+      // мы здесь что-нибудь — врач, ошибшийся в коде, терял бы заодно и
+      // работающее устройство, с которого этот возврат затеял.
+      await tokens.write('рабочий');
+      server.replies.add(Reply(401, {'error': 'Код не подошёл'}));
+
+      await expectLater(
+        api.confirmRecovery('vn@example.com', '000000'),
+        throwsA(
+          isA<ApiFailure>().having((f) => f.lostDevice, 'lostDevice', isFalse),
+        ),
+      );
+      expect(await tokens.read(), 'рабочий');
+    });
+
     test('привязанный адрес берётся из ответа, а не из набранного', () async {
       // Сервер сводит адрес к одному виду — снимает регистр и пробелы.
       // Покажи мы набранное, врач запомнил бы не тот адрес, по которому

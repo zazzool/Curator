@@ -32,6 +32,7 @@ class EmailCard extends StatefulWidget {
     required this.email,
     required this.onBound,
     required this.onRecovered,
+    this.recoveryOnly = false,
   });
 
   final Account account;
@@ -45,6 +46,15 @@ class EmailCard extends StatefulWidget {
   /// Позвать, когда доступ вернулся: токен сменился, и перечитать надо
   /// не только этот экран.
   final VoidCallback onRecovered;
+
+  /// Показать только возврат доступа, сразу развёрнутым.
+  ///
+  /// Так карточка выглядит, когда сервер отозвал токен: запись не
+  /// читается, привязать почту нечему — привязка идёт запросом с токеном
+  /// и отказала бы, — а возврат как раз и есть то, зачем врач сюда попал.
+  /// Свёрнутым он здесь был бы спрятанным выходом с экрана, у которого
+  /// другого выхода нет.
+  final bool recoveryOnly;
 
   @override
   State<EmailCard> createState() => _EmailCardState();
@@ -66,6 +76,12 @@ class _EmailCardState extends State<EmailCard> {
   bool _backOpen = false;
 
   bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _backOpen = widget.recoveryOnly;
+  }
 
   @override
   void dispose() {
@@ -105,7 +121,9 @@ class _EmailCardState extends State<EmailCard> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SectionLabel('Почта'),
-        if (widget.email.isNotEmpty)
+        if (widget.recoveryOnly)
+          _backBlock(theme)
+        else if (widget.email.isNotEmpty)
           _Bound(email: widget.email)
         else ...[
           _bindBlock(theme),

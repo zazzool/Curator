@@ -5,6 +5,8 @@
 /// Поэтому подъём проверяется СО ВСЕХ прежних схем, а не только с чистой.
 library;
 
+import 'dart:io';
+
 import 'package:curator/cases/outbox.dart';
 import 'package:curator/db/database.dart';
 import 'package:curator/db/outbox_store.dart';
@@ -41,6 +43,57 @@ void main() {
     addTearDown(db.close);
     expect(await db.getVersion(), schemaVersion);
     expect(await shape(db), isNotEmpty);
+  });
+
+  test('испорченный файл отводится в сторону, база открывается', () async {
+    // Испорченный файл не станет целым ни от перезапуска, ни от ожидания.
+    // Прежде он оставался лежать, `openLocalDatabase` отказывала каждый
+    // раз, и повторение без сети со справочником были выключены навсегда
+    // — молча: приложение поднималось как ни в чём не бывало.
+    final dir = await Directory.systemTemp.createTemp('curator-db');
+    addTearDown(() => dir.delete(recursive: true));
+    final path = '${dir.path}/curator.db';
+    await File(path).writeAsString('это не база, а мусор');
+
+    final db = await openLocalDatabaseRecovering(factory: factory, path: path);
+    addTearDown(db.close);
+
+    expect(await db.getVersion(), schemaVersion);
+    expect(await shape(db), isNotEmpty);
+    // В сторону, а не насовсем: «испорчена» — наше суждение по словам
+    // SQLite, и ошибись оно, удалёнными оказались бы месяцы занятий.
+    expect(File('$path.broken').existsSync(), isTrue);
+  });
+
+  test('база новее приложения не трогается', () async {
+    // Второй случай того же отказа, и лечится он противоположно: файл
+    // положен более новой сборкой, поэтапная выкладка вернёт её врачу
+    // через день-другой, и отвести такой файл в сторону значит стереть
+    // его занятия ради сообщения в журнале.
+    final dir = await Directory.systemTemp.createTemp('curator-db');
+    addTearDown(() => dir.delete(recursive: true));
+    final path = '${dir.path}/curator.db';
+
+    final ahead = await factory.openDatabase(
+      path,
+      options: OpenDatabaseOptions(
+        version: schemaVersion + 1,
+        onCreate: (db, version) async {},
+      ),
+    );
+    await ahead.close();
+
+    Object? thrown;
+    try {
+      await openLocalDatabaseRecovering(factory: factory, path: path);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown, isA<LocalDatabaseTooNew>(), reason: 'понижение прошло');
+    expect(looksCorrupt(thrown!), isFalse);
+    expect(File('$path.broken').existsSync(), isFalse);
+    expect(File(path).existsSync(), isTrue);
   });
 
   test('подъём со всякой прежней схемы даёт ту же базу', () async {

@@ -87,9 +87,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _read() async {
     final scope = AppScope.of(context);
-    final installed = await scope.packs.installed();
-    if (!mounted) return;
-    setState(() => _installed = installed.length);
+    try {
+      final installed = await scope.packs.installed();
+      if (!mounted) return;
+      setState(() => _installed = installed.length);
+    } catch (error) {
+      // Счёт наборов читается с устройства, и отказ файлов уходил отсюда
+      // необработанным: строки на экране не появлялось вовсе, а причина
+      // не доезжала даже до журнала. Число остаётся непосчитанным, и
+      // строки нет — «0 наборов» на непрочитанном врач принял бы за
+      // правду.
+      debugPrint('наборы на устройстве не сосчитались: $error');
+    }
     try {
       final profile = await Account(scope.api).read();
       if (!mounted) return;

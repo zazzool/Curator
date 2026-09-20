@@ -9,6 +9,7 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 
+import '../account/recover_button.dart';
 import '../api/client.dart';
 import '../core/design/palette.dart';
 import '../core/design/tokens.dart';
@@ -44,6 +45,7 @@ class PracticeScreen extends StatefulWidget {
     this.packs,
     this.schedule,
     this.source = PracticeSource.feed,
+    this.feed,
   });
 
   final Api api;
@@ -59,6 +61,15 @@ class PracticeScreen extends StatefulWidget {
   final Schedule? schedule;
 
   final PracticeSource source;
+
+  /// Лента. Своя собирается из двери, наборов и расписания — и собирается
+  /// в `_load`, а не здесь, потому что экран переживает смену записи.
+  ///
+  /// Подменяется проверкой ровно по правилу из `app/CLAUDE.md`: проверка
+  /// виджетов до сокета не достучится (Flutter подменяет `HttpClient` и
+  /// отвечает 400 на всё), и без этого шва главное действие приложения —
+  /// «ответ врача лёг в очередь» — не проверялось ничем.
+  final Feed? feed;
 
   @override
   State<PracticeScreen> createState() => _PracticeScreenState();
@@ -76,6 +87,15 @@ class _PracticeScreenState extends State<PracticeScreen> {
   ApiFailure? _failure;
   int _waiting = 0;
 
+  /// Разбор, который не удалось записать на устройство.
+  ///
+  /// Хранится целиком, а не признаком: повторная запись обязана уйти с
+  /// ТЕМ ЖЕ ключом повторности. Выдай мы новый, и разбор, записавшийся с
+  /// первого раза наполовину, лёг бы вторым — а дважды положенная попытка
+  /// портит и прогресс, и решаемость, причём незаметно: числа остаются
+  /// правдоподобными.
+  PendingAttempt? _unsaved;
+
   CaseItem? get _current => _at < _cases.length ? _cases[_at] : null;
 
   @override
@@ -90,7 +110,8 @@ class _PracticeScreenState extends State<PracticeScreen> {
       _failure = null;
     });
     try {
-      final feed = Feed(widget.api, widget.packs, widget.schedule);
+      final feed =
+          widget.feed ?? Feed(widget.api, widget.packs, widget.schedule);
       final cases = widget.source == PracticeSource.review
           ? await feed.due()
           : (await feed.page(limit: 20)).cases;
@@ -113,7 +134,16 @@ class _PracticeScreenState extends State<PracticeScreen> {
   }
 
   Future<void> _refreshWaiting() async {
-    final left = await widget.outbox.pending();
+    int left;
+    try {
+      left = await widget.outbox.pending();
+    } catch (error) {
+      // Счёт ждущих отправки читается из той же очереди, и отказ чтения
+      // не должен ронять экран, на котором врач занимается: число просто
+      // остаётся прежним.
+      debugPrint('очередь не сосчиталась: $error');
+      return;
+    }
     if (!mounted) return;
     setState(() => _waiting = left);
   }
@@ -139,7 +169,7 @@ class _PracticeScreenState extends State<PracticeScreen> {
     final key =
         '${DateTime.now().microsecondsSinceEpoch}-${_random.nextInt(1 << 32)}';
 
-    await widget.outbox.add(
+    await _keep(
       PendingAttempt(
         caseId: one.id,
         correct: one.isCorrect(option),
@@ -152,6 +182,30 @@ class _PracticeScreenState extends State<PracticeScreen> {
         happenedAt: DateTime.now(),
       ),
     );
+  }
+
+  /// Кладёт разбор в очередь и доводит дело до конца.
+  ///
+  /// Отдельной работой, а не хвостом `_answer`, потому что зовётся ещё и
+  /// повторно — с той же попыткой, когда первая запись не прошла. Задача
+  /// при этом берётся из самой попытки: к моменту повтора врач может быть
+  /// уже на следующей, а записать надо ту, которую он разобрал.
+  Future<void> _keep(PendingAttempt attempt) async {
+    // Запись на устройство отказывает: на телефоне кончается место.
+    // Прежде отказ уходил отсюда необработанным, и это было самым дорогим
+    // местом во всём приложении: РАЗБОР ВРАЧА ИСЧЕЗАЛ, сообщения не было
+    // никакого, кнопка «Дальше» появлялась как обычно, и врач продолжал
+    // заниматься впустую — узнал бы он об этом по несошедшемуся уровню
+    // через неделю.
+    try {
+      await widget.outbox.add(attempt);
+      if (mounted) setState(() => _unsaved = null);
+    } catch (error) {
+      debugPrint('разбор не записался в очередь: $error');
+      if (!mounted) return;
+      setState(() => _unsaved = attempt);
+      return;
+    }
 
     // Срок следующего повторения считается здесь же и ложится на
     // устройство. Иначе повторение без сети показывало бы вчерашний
@@ -161,22 +215,47 @@ class _PracticeScreenState extends State<PracticeScreen> {
     // Расчёт тот же самый, общий с сервером (`progress/rules.dart`), и
     // второй его реализации здесь нет: сойтись они могут только так.
     final schedule = widget.schedule;
+    var scheduled = false;
     if (schedule != null) {
-      final rules = Rules.defaults;
-      final before = await schedule.state(one.id) ?? rules.fresh;
-      await schedule.put(
-        one.id,
-        rules.next(before, one.isCorrect(option), DateTime.now()),
-      );
+      try {
+        final rules = Rules.defaults;
+        final before = await schedule.state(attempt.caseId) ?? rules.fresh;
+        await schedule.put(
+          attempt.caseId,
+          rules.next(before, attempt.correct, DateTime.now()),
+        );
+        scheduled = true;
+      } catch (error) {
+        // Молча для врача, но не молча для нас: расписание на устройстве
+        // — местная копия, хозяин ей сервер, и разбор уже лежит в
+        // очереди. Потеряно здесь только «когда повторить без сети», и
+        // это вернётся первым же ответом сервера.
+        debugPrint('срок повторения не записался: $error');
+      }
     }
 
     // Отправка не ждётся и не показывается отказом: очередь сохранит
     // разбор, а врачу здесь важен разбор задачи, а не состояние сети.
-    final sent = await widget.outbox.flush();
+    Flushed? sent;
+    try {
+      sent = await widget.outbox.flush();
+    } catch (error) {
+      // Отправка пишет очередь заново, и запись отказывает по тем же
+      // причинам. Разбор при этом уже лежит: отказ здесь значит «уедет
+      // позже», а не «пропал».
+      debugPrint('очередь не отправилась: $error');
+    }
+
     // Доехавшее перестаёт быть «известным только нам»: с этого мгновения
     // слово сервера о сроке старше нашего.
-    if (schedule != null && sent.sent > 0 && sent.failure == null) {
-      await schedule.markSynced([one.id]);
+    if (schedule != null && scheduled && sent != null) {
+      if (sent.sent > 0 && sent.failure == null) {
+        try {
+          await schedule.markSynced([attempt.caseId]);
+        } catch (error) {
+          debugPrint('отметка об отправке не записалась: $error');
+        }
+      }
     }
     await _refreshWaiting();
   }
@@ -230,10 +309,54 @@ class _PracticeScreenState extends State<PracticeScreen> {
   }
 
   Widget _body(BuildContext context) {
+    final unsaved = _unsaved;
+    if (unsaved == null) return _content(context);
+
+    // Полоса стоит НАД задачей и не уходит с переходом к следующей: пока
+    // разбор не записан, он не уйдёт на сервер, и сказать об этом надо
+    // там, где врач смотрит, а не в настройках. Повтор — рядом: место на
+    // устройстве освобождают в ту же минуту, и второй попытке надо дать
+    // случиться, не отнимая у врача занятия.
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const NoteBanner(
+          text:
+              'Разбор не записался на устройство — похоже, на нём нет '
+              'места. Пока он не записан, на сервер он не уйдёт.',
+          icon: Icons.sd_card_alert_outlined,
+        ),
+        const SizedBox(height: Gap.sm),
+        Align(
+          alignment: Alignment.centerRight,
+          child: OutlinedButton(
+            onPressed: () => _keep(unsaved),
+            child: const Text('Записать ещё раз'),
+          ),
+        ),
+        const SizedBox(height: Gap.md),
+        Expanded(child: _content(context)),
+      ],
+    );
+  }
+
+  Widget _content(BuildContext context) {
     if (_loading) return const SizedBox.shrink();
 
     final failure = _failure;
     if (failure != null) {
+      // Отозванный токен лечится не повтором, а возвратом записи по
+      // почте, и предложить это надо здесь: экран разбора — то место,
+      // где врач в это упирается, а возврат лежит в трёх нажатиях вглубь
+      // настроек, и ничто на него не указывает.
+      if (failure.lostDevice) {
+        return EmptyState(
+          icon: const Icon(Icons.no_accounts_outlined),
+          title: 'Устройство не опознано',
+          description: failure.message,
+          action: RecoverAccessButton(api: widget.api, onRecovered: _load),
+        );
+      }
       return _Message(
         icon: Icons.cloud_off_outlined,
         title: 'Задачи не загрузились',
