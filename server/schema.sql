@@ -1018,6 +1018,75 @@ CREATE TABLE IF NOT EXISTS sale_settings (
 );
 INSERT INTO sale_settings (id) VALUES (TRUE) ON CONFLICT (id) DO NOTHING;
 
+-- Группа врачей — она же гибкая роль пользователя приложения.
+--
+-- # Почему группа описывается правилом, а не ярлыком
+--
+-- Ярлык, навешенный руками, работает на десяти врачах и перестаёт на
+-- тысяче: раздать его некому, а через месяц никто не вспомнит, кому и за
+-- что он достался. Правило же пересчитывается само, и переставший платить
+-- выходит из группы плательщиков в тот же час без чьего-либо участия.
+--
+-- # Почему правило лежит одним JSONB, а не таблицей условий
+--
+-- Условия правила не живут по отдельности: их не ищут, на них не
+-- ссылаются, и правится правило всегда целиком. Таблица условий дала бы
+-- строку, осиротевшую при правке, и порядок, который нужно хранить
+-- отдельно. Разбирает и проверяет правило сервер (`internal/audience`), и
+-- он же — единственное место, где оно применяется.
+CREATE TABLE IF NOT EXISTS audiences (
+    id         BIGSERIAL   PRIMARY KEY,
+    slug       TEXT        NOT NULL UNIQUE CHECK (slug ~ '^[a-z0-9][a-z0-9-]*$'),
+    title      TEXT        NOT NULL CHECK (title <> ''),
+    note       TEXT        NOT NULL DEFAULT '',
+    -- Признаки, соединённые «и». Пустое правило НЕ означает «все»: оно
+    -- означает, что группа держится поимённым списком, и это ровно то,
+    -- что нужно кафедре. «Или» делается тем, что набор открывается сразу
+    -- нескольким группам, и тогда оно видно на карточке набора.
+    rule       JSONB       NOT NULL DEFAULT '[]'
+                           CHECK (jsonb_typeof(rule) = 'array'),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Названные в группе поимённо.
+--
+-- Поимённый список не заменяет правило, а дополняет его: врач в группе,
+-- если подходит по правилу ИЛИ назван здесь. Кафедре, которой выдали
+-- доступ списком, правила не подобрать — общего признака у её ординаторов
+-- нет, и выдумывать его пришлось бы ради механизма, а не ради дела.
+CREATE TABLE IF NOT EXISTS audience_members (
+    audience_id BIGINT      NOT NULL REFERENCES audiences (id),
+    account_id  BIGINT      NOT NULL REFERENCES accounts (id),
+    -- Кто добавил. Спросят об этом ровно тогда, когда врач скажет, что
+    -- доступ у него откуда-то взялся или куда-то делся.
+    added_by    TEXT        NOT NULL DEFAULT '',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (audience_id, account_id)
+);
+CREATE INDEX IF NOT EXISTS idx_audience_members_account
+    ON audience_members (account_id);
+
+-- Кому набор открыт и от кого скрыт помимо линейки.
+--
+-- Это расширение линейки, а не второй механизм рядом с ней: решает
+-- по-прежнему одна функция `packs.OpenTo`, которую зовут витрина, корпус
+-- и выгрузка. Встань группы вторым расчётом — витрина показывала бы
+-- «открыто» там, где выгрузка отвечает отказом.
+--
+-- Скрытие сильнее открытия, а купленное сильнее обоих. Порядок этот
+-- записан в `packs.OpenTo` и здесь не повторяется: два места для одного
+-- правила расходятся молча.
+CREATE TABLE IF NOT EXISTS pack_audiences (
+    pack_id     BIGINT      NOT NULL REFERENCES packs (id),
+    audience_id BIGINT      NOT NULL REFERENCES audiences (id),
+    mode        TEXT        NOT NULL CHECK (mode IN ('open', 'hidden')),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (pack_id, audience_id)
+);
+CREATE INDEX IF NOT EXISTS idx_pack_audiences_audience
+    ON pack_audiences (audience_id);
+
 -- ===========================================================================
 -- 5. ПРОГРЕСС, ПОВТОРЕНИЕ И ЗНАКИ
 -- ===========================================================================
