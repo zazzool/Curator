@@ -129,8 +129,12 @@ void main() {
     // голая Icon в дерево доступности не попадает вовсе. Незрячему врачу
     // не говорилось ни «верно», ни «неверно» — после ответа вариант
     // читался так же, как до него, и задача не разбиралась в принципе.
+
+    // Ручка дерева доступности гасится в теле проверки, а не через
+    // addTearDown: Flutter сверяет погашенные ручки раньше, чем зовёт
+    // уборку за проверкой, и отложенное гашение роняет проверку уже
+    // после того, как все сверки прошли.
     final handle = tester.ensureSemantics();
-    addTearDown(handle.dispose);
 
     final one = CaseItem.tryParse({
       'id': 'c-2',
@@ -184,5 +188,7 @@ void main() {
 
     expect(find.bySemanticsLabel(RegExp(r'^неверно\.')), findsOneWidget);
     expect(find.bySemanticsLabel(RegExp(r'^верно\.')), findsOneWidget);
+
+    handle.dispose();
   });
 }
