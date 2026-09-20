@@ -169,7 +169,10 @@ void main() {
 
     expect(find.text('Устройство не опознано'), findsOneWidget);
     expect(find.text('Сервер не признаёт это устройство'), findsOneWidget);
-    expect(find.textContaining('прежней записи'), findsOneWidget);
+    // Поимённо, а не «содержит „прежней записи“»: этими словами набраны и
+    // объяснение, и подпись поля, и общий кусок находил оба.
+    expect(find.textContaining('Задачи, знаки'), findsOneWidget);
+    expect(find.text('Почта прежней записи'), findsOneWidget);
     expect(find.text('Прислать код'), findsOneWidget);
     // Привязки здесь нет: она идёт запросом с токеном и отказала бы.
     expect(find.textContaining('при смене телефона'), findsNothing);
