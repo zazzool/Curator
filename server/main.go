@@ -151,7 +151,7 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 
 		keys = app.NewKeys(gate)
 		door := app.NewDoor(keys, app.NewAccounts(gate))
-		app.Routes(door, app.NewFeed(gate), app.NewAttempts(gate, progress.Default()))
+		app.Routes(door, app.NewFeed(gate), app.NewAttempts(gate, progress.Default()), access)
 		app.ReferenceRoutes(door, app.NewReference(gate))
 		app.PackRoutes(door, packStore, access, prices)
 		app.TelemetryRoutes(door, telemetry.NewStore(gate))
@@ -168,7 +168,7 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 		casestore.Routes(desk, casestore.NewStore(gate))
 		app.KeyRoutes(desk, keys)
 		packs.Routes(desk, packStore)
-		sales.Routes(desk, sales.NewPayments(gate), prices, access)
+		sales.Routes(desk, sales.NewPayments(gate), prices, access, sales.NewClients(gate))
 
 		rollup := analytics.NewRollup(gate)
 		analytics.Routes(desk, rollup)

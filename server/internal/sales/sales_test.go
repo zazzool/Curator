@@ -377,3 +377,141 @@ func TestPgВыключеннаяЦенаДелаетНаборБесплатн�
 		t.Error("набор с выключенной ценой остался закрытым")
 	}
 }
+
+// врачСПочтой заводит учётную запись с почтой и именем: искать по ним и
+// есть то, ради чего поиск заведён.
+func врачСПочтой(t *testing.T, gate *dbgate.Gate, email, name string) int64 {
+	t.Helper()
+	var id int64
+	if err := gate.QueryRow(context.Background(),
+		`INSERT INTO accounts (email, display_name) VALUES ($1, $2) RETURNING id`,
+		email, name).Scan(&id); err != nil {
+		t.Fatalf("учётная запись не заведена: %v", err)
+	}
+	return id
+}
+
+func TestPgКлиентНаходитсяПоПочтеИмениИНомеру(t *testing.T) {
+	// Приход оформляется на номер учётной записи, а взять его было негде:
+	// оператор, которому врач написал с почты, не мог найти его вовсе.
+	gate := testGate(t)
+	clients := NewClients(gate)
+	ctx := context.Background()
+	метка := fmt.Sprintf("%d%d", time.Now().UnixNano(), rand.IntN(1000))
+	id := врачСПочтой(t, gate, "ivanov-"+метка+"@example.ru", "Иванов И.И. "+метка)
+
+	for _, запрос := range []string{"ivanov-" + метка, "Иванов И.И. " + метка} {
+		found, err := clients.Find(ctx, запрос, 0)
+		if err != nil {
+			t.Fatalf("поиск %q: %v", запрос, err)
+		}
+		if len(found) != 1 || found[0].ID != id {
+			t.Errorf("по %q нашлось %d записей, а заводили одну", запрос, len(found))
+		}
+	}
+
+	// Номер ищется точным равенством. Подстрокой «7» нашла бы и 17-го, и
+	// 70-го, а оператор, которому врач назвал номер, ждёт одну строку.
+	found, err := clients.Find(ctx, fmt.Sprint(id), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 1 || found[0].ID != id {
+		t.Errorf("по номеру нашлось %d записей", len(found))
+	}
+}
+
+func TestPgПоискНеНашедшийНикогоОтдаётПустойСписок(t *testing.T) {
+	// Ненайденный клиент — исправный случай. Отдай поиск пустое значение,
+	// экран падал бы ровно на опечатке в почте, то есть чаще всего.
+	clients := NewClients(testGate(t))
+	found, err := clients.Find(context.Background(), "такой-почты-нет@example.ru", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found == nil {
+		t.Fatal("поиск отдал пустое значение вместо пустого списка")
+	}
+	if len(found) != 0 {
+		t.Errorf("по несуществующей почте нашлось %d записей", len(found))
+	}
+}
+
+func TestPgКарточкаСчитаетУстройстваИЖивыеПрава(t *testing.T) {
+	// Оператор решает по карточке, тот ли это человек, и по ней же видит,
+	// за что уже заплачено. Отозванное право в этом числе показало бы
+	// оплаченным то, чего у врача нет.
+	gate := testGate(t)
+	clients := NewClients(gate)
+	ctx := context.Background()
+	id := врач(t, gate)
+
+	if _, err := gate.Exec(ctx,
+		`INSERT INTO devices (account_id, token_hash) VALUES ($1, $2)`,
+		id, fmt.Sprintf("отпечаток-%d-%d", time.Now().UnixNano(), rand.IntN(1000))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gate.Exec(ctx,
+		`INSERT INTO entitlements (account_id, kind, origin) VALUES ($1, 'subscription', 'grant')`,
+		id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gate.Exec(ctx,
+		`INSERT INTO entitlements (account_id, kind, origin, revoked_at)
+		 VALUES ($1, 'subscription', 'grant', NOW())`, id); err != nil {
+		t.Fatal(err)
+	}
+
+	one, err := clients.One(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one.Devices != 1 {
+		t.Errorf("устройств насчитано %d, а заводили одно", one.Devices)
+	}
+	if one.Rights != 1 {
+		t.Errorf("живых прав насчитано %d: отозванное попало в живые", one.Rights)
+	}
+}
+
+func TestPgБлокировкаСтавитсяОтметкойИСнимается(t *testing.T) {
+	// Отметка проверяется на входе устройства, а поставить её было нечем.
+	// Удалять же учётную запись нельзя: на неё ссылаются платежи и права,
+	// и удаление порвало бы разбирательство о деньгах.
+	gate := testGate(t)
+	clients := NewClients(gate)
+	ctx := context.Background()
+	id := врач(t, gate)
+
+	if err := clients.SetBlocked(ctx, id, true, time.Now()); err != nil {
+		t.Fatalf("вход не закрыт: %v", err)
+	}
+	one, err := clients.One(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !one.Blocked {
+		t.Fatal("отметка не встала")
+	}
+
+	if err := clients.SetBlocked(ctx, id, false, time.Now()); err != nil {
+		t.Fatalf("вход не открыт: %v", err)
+	}
+	one, err = clients.One(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one.Blocked {
+		t.Error("отметка не снялась")
+	}
+}
+
+func TestPgБлокировкаЧужогоНомераОтказывает(t *testing.T) {
+	// Молчаливый успех на несуществующем номере сказал бы оператору, что
+	// вход закрыт, — а закрывать было нечего.
+	clients := NewClients(testGate(t))
+	err := clients.SetBlocked(context.Background(), 1<<40, true, time.Now())
+	if err == nil {
+		t.Fatal("блокировка несуществующей записи прошла молча")
+	}
+}

@@ -13,14 +13,17 @@ import (
 // Право стоит первым доводом у каждой. Цены и приход закрыты правом sales,
 // а платежи и права одного врача — правом clients: смотреть карточку
 // клиента и менять цены это разные занятия разных людей.
-func Routes(desk *studio.Desk, payments *Payments, prices *Prices, access *Access) {
-	r := &routes{payments: payments, prices: prices, access: access}
+func Routes(desk *studio.Desk, payments *Payments, prices *Prices, access *Access, clients *Clients) {
+	r := &routes{payments: payments, prices: prices, access: access, clients: clients}
 
 	desk.Handle(studio.PermSales, "GET /admin/api/prices", r.listPrices)
 	desk.Handle(studio.PermSales, "PUT /admin/api/prices", r.setPrice)
 	desk.Handle(studio.PermSales, "POST /admin/api/payments", r.accept)
 	desk.Handle(studio.PermSales, "POST /admin/api/payments/{id}/refund", r.refund)
 
+	desk.Handle(studio.PermClients, "GET /admin/api/clients", r.findClients)
+	desk.Handle(studio.PermClients, "GET /admin/api/clients/{id}", r.showClient)
+	desk.Handle(studio.PermClients, "PUT /admin/api/clients/{id}/blocked", r.setBlocked)
 	desk.Handle(studio.PermClients, "GET /admin/api/clients/{id}/payments", r.clientPayments)
 	desk.Handle(studio.PermClients, "GET /admin/api/clients/{id}/entitlements", r.rights)
 }
@@ -29,6 +32,7 @@ type routes struct {
 	payments *Payments
 	prices   *Prices
 	access   *Access
+	clients  *Clients
 }
 
 type priceRequest struct {
@@ -186,4 +190,67 @@ func pathID(w http.ResponseWriter, req *http.Request) (int64, bool) {
 		return 0, false
 	}
 	return id, true
+}
+
+func (r *routes) findClients(w http.ResponseWriter, req *http.Request, _ studio.User) {
+	limit, _ := strconv.Atoi(req.URL.Query().Get("limit"))
+	list, err := r.clients.Find(req.Context(), req.URL.Query().Get("q"), limit)
+	if err != nil {
+		studio.WriteError(w, http.StatusInternalServerError, "Клиенты не прочитаны")
+		return
+	}
+	out := make([]map[string]any, 0, len(list))
+	for _, one := range list {
+		out = append(out, clientJSON(one))
+	}
+	studio.WriteJSON(w, http.StatusOK, map[string]any{"clients": out})
+}
+
+func (r *routes) showClient(w http.ResponseWriter, req *http.Request, _ studio.User) {
+	id, ok := pathID(w, req)
+	if !ok {
+		return
+	}
+	one, err := r.clients.One(req.Context(), id)
+	if err != nil {
+		studio.WriteError(w, http.StatusNotFound, studio.Sentence(err.Error()))
+		return
+	}
+	studio.WriteJSON(w, http.StatusOK, clientJSON(one))
+}
+
+type blockedRequest struct {
+	Blocked bool `json:"blocked"`
+}
+
+func (r *routes) setBlocked(w http.ResponseWriter, req *http.Request, _ studio.User) {
+	id, ok := pathID(w, req)
+	if !ok {
+		return
+	}
+	var body blockedRequest
+	if err := studio.DecodeBody(req, &body); err != nil {
+		studio.WriteError(w, http.StatusBadRequest, "Запрос не разобран: "+err.Error())
+		return
+	}
+	if err := r.clients.SetBlocked(req.Context(), id, body.Blocked, time.Now()); err != nil {
+		studio.WriteError(w, http.StatusBadRequest, studio.Sentence(err.Error()))
+		return
+	}
+	studio.WriteJSON(w, http.StatusOK, map[string]any{"blocked": body.Blocked})
+}
+
+// clientJSON — одно место на список и карточку: разойдись они, оператор
+// увидел бы в списке одно, а открыв — другое, и не понял бы, что смотрит
+// на того же человека.
+func clientJSON(one Client) map[string]any {
+	row := map[string]any{
+		"id": one.ID, "email": one.Email, "displayName": one.DisplayName,
+		"createdAt": one.CreatedAt.Format(time.RFC3339), "lastSeen": "",
+		"blocked": one.Blocked, "devices": one.Devices, "rights": one.Rights,
+	}
+	if one.LastSeen != nil {
+		row["lastSeen"] = one.LastSeen.Format(time.RFC3339)
+	}
+	return row
 }

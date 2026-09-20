@@ -17,6 +17,7 @@ import (
 	"curator/server/internal/casestore"
 	"curator/server/internal/dbgate"
 	"curator/server/internal/progress"
+	"curator/server/internal/sales"
 	"curator/server/internal/studio"
 )
 
@@ -52,7 +53,7 @@ func дверь(t *testing.T) (*httptest.Server, *dbgate.Gate, string) {
 	}
 
 	door := NewDoor(keys, NewAccounts(gate))
-	Routes(door, NewFeed(gate), NewAttempts(gate, progress.Default()))
+	Routes(door, NewFeed(gate), NewAttempts(gate, progress.Default()), sales.NewAccess(gate))
 	srv := httptest.NewServer(door.Handler())
 	t.Cleanup(srv.Close)
 	return srv, gate, key
@@ -651,5 +652,75 @@ func TestPgБезПраваМастерскойКлючиНеВидны(t *testi
 		if status != http.StatusForbidden {
 			t.Errorf("%s %s: код %d, ожидался отказ по праву: %s", c.method, c.path, status, raw)
 		}
+	}
+}
+
+func TestPgВрачВидитСвоиПраваИСрок(t *testing.T) {
+	// Витрина говорила, куплен ли отдельный набор, а «что у меня вообще
+	// есть и до когда» не говорил никто. Врач, заплативший за подписку,
+	// видел ровно то же, что и не заплативший, и выяснять, дошли ли
+	// деньги, ему приходилось у нас.
+	srv, gate, key := дверь(t)
+	token := устройство(t, srv, key)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+
+	_, до, _ := call(t, srv, "GET", "/v1/me", auth, nil)
+	права, ok := до["rights"].([]any)
+	if !ok {
+		t.Fatalf("прав нет даже пустым списком: %#v", до["rights"])
+	}
+	if len(права) != 0 {
+		t.Fatalf("у нового врача уже %d прав", len(права))
+	}
+
+	// Право выдаётся платежом, а не заведением устройства: это и есть
+	// отвязка права от способа оплаты, и проверяется оно одинаково,
+	// чем бы ни было куплено.
+	accountID := int64(до["accountId"].(float64))
+	срок := time.Now().Add(30 * 24 * time.Hour)
+	if _, err := gate.Exec(context.Background(),
+		`INSERT INTO entitlements (account_id, kind, origin, expires_at)
+		 VALUES ($1, 'subscription', 'subscription', $2)`, accountID, срок); err != nil {
+		t.Fatal(err)
+	}
+
+	_, после, _ := call(t, srv, "GET", "/v1/me", auth, nil)
+	права, _ = после["rights"].([]any)
+	if len(права) != 1 {
+		t.Fatalf("куплённое право до врача не доехало: %#v", после["rights"])
+	}
+	одно := права[0].(map[string]any)
+	if одно["kind"] != "subscription" {
+		t.Errorf("род права приехал как %q", одно["kind"])
+	}
+	if одно["expiresAt"] == "" {
+		t.Error("срок подписки пуст: врач прочтёт это как «бессрочно»")
+	}
+}
+
+func TestPgБессрочноеПравоОтдаётСрокПустойСтрокой(t *testing.T) {
+	// Не отсутствием поля: отсутствие приложение прочло бы как старый
+	// сервер и показало бы «неизвестно», а пустая строка говорит то, что
+	// есть, — срока нет.
+	srv, gate, key := дверь(t)
+	token := устройство(t, srv, key)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+
+	_, me, _ := call(t, srv, "GET", "/v1/me", auth, nil)
+	accountID := int64(me["accountId"].(float64))
+	if _, err := gate.Exec(context.Background(),
+		`INSERT INTO entitlements (account_id, kind, origin) VALUES ($1, 'subscription', 'grant')`,
+		accountID); err != nil {
+		t.Fatal(err)
+	}
+
+	_, после, _ := call(t, srv, "GET", "/v1/me", auth, nil)
+	одно := после["rights"].([]any)[0].(map[string]any)
+	срок, есть := одно["expiresAt"]
+	if !есть {
+		t.Fatal("поля срока нет вовсе")
+	}
+	if срок != "" {
+		t.Errorf("бессрочное право назвало срок %q", срок)
 	}
 }

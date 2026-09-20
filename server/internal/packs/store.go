@@ -447,3 +447,104 @@ func (s *Store) All(ctx context.Context) ([]Shown, error) {
 	}
 	return out, rows.Err()
 }
+
+// Contents — набор целиком: карточка и состав.
+//
+// Состав приходится отдавать отдельно от списка наборов, и это не
+// прихоть экрана. Список знает только, сколько задач в наборе; правится
+// же состав целиком, одним списком. Не видя нынешнего состава,
+// составитель пересобирал бы его вслепую — то есть затирал бы работу,
+// сделанную до него, всякий раз, когда хотел добавить одну задачу.
+type Contents struct {
+	Slug      string
+	Title     string
+	SummaryMd string
+	Status    string
+
+	// Version — номер последнего выпуска, 0 у невыпущенного. Состав и
+	// выпуск живут порознь: правка состава доедет до устройств только
+	// следующим выпуском, и разница между этими двумя числами — главное,
+	// что составителю надо видеть.
+	Version int64
+	Items   []Listed
+}
+
+// Listed — задача в составе, названная так, чтобы человек её узнал.
+//
+// Одного номера мало: состав из тридцати строк вида «c-1758…» нельзя ни
+// проверить, ни пересобрать — по нему не видно даже, та ли это тема.
+type Listed struct {
+	ID        string
+	Ord       int
+	Title     string
+	UnitLabel string
+	Status    string
+}
+
+// One отдаёт набор с составом.
+func (s *Store) One(ctx context.Context, slug string) (Contents, error) {
+	var out Contents
+	err := s.gate.QueryRow(ctx, `
+		SELECT p.slug, p.title, p.summary_md, p.status,
+		       coalesce((SELECT max(version) FROM pack_releases r WHERE r.pack_id = p.id), 0)
+		  FROM packs p WHERE p.slug = $1`, slug).
+		Scan(&out.Slug, &out.Title, &out.SummaryMd, &out.Status, &out.Version)
+	if err == pgx.ErrNoRows {
+		return Contents{}, errors.New("такого набора нет")
+	}
+	if err != nil {
+		return Contents{}, err
+	}
+
+	rows, err := s.gate.Query(ctx, `
+		SELECT c.id, i.ord, coalesce(c.body ->> 'title', ''), c.unit_label, c.status
+		  FROM pack_items i
+		  JOIN cases c ON c.id = i.case_id
+		  JOIN packs p ON p.id = i.pack_id
+		 WHERE p.slug = $1
+		 ORDER BY i.ord, c.id`, slug)
+	if err != nil {
+		return Contents{}, err
+	}
+	defer rows.Close()
+
+	// Пустой состав — [], а не null: только что заведённый набор пуст, и
+	// это исправный случай, а не отсутствие ответа.
+	out.Items = []Listed{}
+	for rows.Next() {
+		var one Listed
+		if err := rows.Scan(&one.ID, &one.Ord, &one.Title, &one.UnitLabel, &one.Status); err != nil {
+			return Contents{}, err
+		}
+		out.Items = append(out.Items, one)
+	}
+	return out, rows.Err()
+}
+
+// Update правит карточку набора и его состояние.
+//
+// Состояние правится здесь же, а не отдельной ручкой: снять набор с
+// витрины — то же решение о товаре, что и переписать его название, и
+// разводить их по двум ручкам значит заставить составителя помнить две.
+// Выпусков это не касается вовсе: снятый набор перестаёт показываться,
+// но подписанное им остаётся подписанным.
+func (s *Store) Update(ctx context.Context, slug, title, summary, status string) error {
+	if title == "" {
+		return errors.New("у набора должно быть название")
+	}
+	switch status {
+	case "draft", "published", "retired":
+	default:
+		return fmt.Errorf("состояния %q у набора не бывает", status)
+	}
+	tag, err := s.gate.Exec(ctx,
+		`UPDATE packs SET title = $2, summary_md = $3, status = $4, updated_at = NOW()
+		  WHERE slug = $1`, slug, title, summary, status)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errors.New("такого набора нет")
+	}
+	return nil
+}

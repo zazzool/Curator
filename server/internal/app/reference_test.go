@@ -12,6 +12,7 @@ import (
 
 	"curator/server/internal/dbgate"
 	"curator/server/internal/progress"
+	"curator/server/internal/sales"
 )
 
 // дверьСправочника поднимает /v1 вместе со справочником и заводит
@@ -32,7 +33,7 @@ func дверьСправочника(t *testing.T) (*httptest.Server, *dbgate.G
 
 	door := NewDoor(keys, NewAccounts(gate))
 	// Заведение устройства объявляет Routes, и без них токен взять негде.
-	Routes(door, NewFeed(gate), NewAttempts(gate, progress.Default()))
+	Routes(door, NewFeed(gate), NewAttempts(gate, progress.Default()), sales.NewAccess(gate))
 	ReferenceRoutes(door, NewReference(gate))
 	srv := httptest.NewServer(door.Handler())
 	t.Cleanup(srv.Close)

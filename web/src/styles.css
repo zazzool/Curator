@@ -136,6 +136,16 @@ button:disabled {
   color: var(--ink-soft);
 }
 
+/* Главная кнопка, ставшая недоступной, теряет и заливку. Без этого на
+   тёмно-зелёном оставался серый текст, и прочесть, что именно сейчас
+   нельзя нажать, было невозможно — а это ровно та кнопка, которую человек
+   ищет глазами. */
+button.primary:disabled {
+  background: var(--paper-soft);
+  border-color: var(--line);
+  color: var(--ink-soft);
+}
+
 .form-actions {
   display: flex;
   gap: var(--gap);
@@ -220,4 +230,57 @@ button:disabled {
   padding: var(--gap);
   margin-bottom: var(--gap);
   white-space: pre-wrap;
+}
+
+/* Разделы студии. Волосяная черта под текущим, а не заливка и не тень:
+   вкладка лежит в странице, а не висит над ней. */
+.tabs {
+  display: flex;
+  gap: var(--gap);
+  margin-top: var(--gap);
+  border-bottom: 1px solid var(--line);
+}
+
+.tab {
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  padding: 6px 2px;
+  color: var(--ink-soft);
+}
+
+.tab-here {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+
+/* Строка списка с кнопками справа: состав набора правится прямо в строке,
+   и уводить кнопки в отдельный столбец значит оторвать их от того, над чем
+   они действуют. */
+.row-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--gap);
+}
+
+.row-tools {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+
+.row-tools button {
+  padding: 2px 8px;
+}
+
+/* Подзаголовок внутри раздела: та же плоскость, отличается только весом.
+   Волосяной черты здесь нет намеренно — она разделяет разделы, и лишняя
+   превратила бы список в решётку. */
+.sub {
+  margin: var(--gap-wide) 0 var(--gap);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink-soft);
 }

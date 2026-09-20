@@ -7,14 +7,18 @@ import (
 	"time"
 
 	"curator/server/internal/progress"
+	"curator/server/internal/sales"
 )
 
 // Маршруты /v1.
 //
 // Каждый объявлен именем, называющим, кого он пускает: Open — всякого,
 // Keyed — сборку с ключом программы, Device — устройство с токеном.
-func Routes(door *Door, feed *Feed, attempts *Attempts) {
-	r := &routes{accounts: door.accounts, feed: feed, attempts: attempts, now: time.Now}
+func Routes(door *Door, feed *Feed, attempts *Attempts, access *sales.Access) {
+	r := &routes{
+		accounts: door.accounts, feed: feed, attempts: attempts,
+		access: access, now: time.Now,
+	}
 
 	// Справка о службе открыта всякому: её спрашивает и приложение до
 	// заведения устройства, и наблюдение снаружи. Ничего о враче она не
@@ -43,6 +47,13 @@ type routes struct {
 	accounts *Accounts
 	feed     *Feed
 	attempts *Attempts
+
+	// access — живые права врача. Нужны /v1/me: витрина говорит, куплен
+	// ли отдельный набор, а «что у меня вообще есть и до когда» не
+	// говорил никто. Врач, заплативший за подписку, видел ровно то же,
+	// что и не заплативший, — и выяснять, дошли ли деньги, ему
+	// приходилось у нас.
+	access *sales.Access
 
 	// now — источник времени. Полем, а не time.Now по месту: проверке
 	// нужно подвинуть часы, чтобы увидеть подошедший срок повторения, а
@@ -83,11 +94,36 @@ func (r *routes) me(w http.ResponseWriter, req *http.Request, caller Caller) {
 		WriteError(w, http.StatusInternalServerError, "Не вышло прочитать вашу запись")
 		return
 	}
+	// Права читаются отдельно и их отказ не роняет ответ: кто я такой —
+	// сведения о самом враче, а права о том, что он купил. Уроним ответ
+	// целиком — и приложение не покажет даже имени.
+	rights := []map[string]any{}
+	if r.access != nil {
+		live, err := r.access.Live(req.Context(), caller.AccountID, r.now())
+		if err == nil {
+			for _, one := range live {
+				row := map[string]any{
+					"kind": one.Kind, "pack": one.Pack, "origin": one.Origin,
+					"startsAt": one.StartsAt.Format(time.RFC3339),
+					// Пусто — бессрочно. Отсутствие поля приложение
+					// прочитало бы как «старый сервер», а пустая строка
+					// говорит то, что есть: срока нет.
+					"expiresAt": "",
+				}
+				if one.ExpiresAt != nil {
+					row["expiresAt"] = one.ExpiresAt.Format(time.RFC3339)
+				}
+				rights = append(rights, row)
+			}
+		}
+	}
+
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"accountId":   profile.AccountID,
 		"email":       profile.Email,
 		"displayName": profile.DisplayName,
 		"createdAt":   profile.CreatedAt.Format(time.RFC3339),
+		"rights":      rights,
 	})
 }
 
