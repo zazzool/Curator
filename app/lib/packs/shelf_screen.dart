@@ -132,7 +132,15 @@ class _ShelfScreenState extends State<ShelfScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const ScreenHeader(title: 'Наборы'),
+              ScreenHeader(
+                // «Каталог», а не «Магазин» и не «Премиум»: врач приходит
+                // сюда за задачами, а не за покупкой, и большая часть
+                // наборов бесплатна. Разделом нижнего меню каталог не
+                // стал — заходят сюда раз в месяц, а место в полосе
+                // отняло бы у занятия.
+                title: 'Каталог наборов',
+                onBack: () => Navigator.of(context).pop(),
+              ),
               Expanded(child: _body(context)),
             ],
           ),

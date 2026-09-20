@@ -16,6 +16,7 @@ import 'package:flutter/material.dart';
 import 'api/client.dart';
 import 'api/token_store.dart';
 import 'cases/outbox.dart';
+import 'core/app_scope.dart';
 import 'core/design/app_theme.dart';
 import 'core/design/tokens.dart';
 import 'core/ui/surface.dart';
@@ -99,7 +100,7 @@ Future<void> main() async {
   );
 }
 
-class CuratorApp extends StatelessWidget {
+class CuratorApp extends StatefulWidget {
   const CuratorApp({
     super.key,
     required this.api,
@@ -123,24 +124,54 @@ class CuratorApp extends StatelessWidget {
   final ReferenceStore? reference;
 
   @override
+  State<CuratorApp> createState() => _CuratorAppState();
+}
+
+class _CuratorAppState extends State<CuratorApp> {
+  /// Смена учётной записи объявляется один раз на всё приложение:
+  /// доступ возвращают на подэкране настроек, а перечитать надо и ленту,
+  /// и повторение, и знаки.
+  final _accountEpoch = ValueNotifier<int>(0);
+
+  @override
+  void dispose() {
+    _accountEpoch.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Куратор',
-      // Обе темы, а выбор — за системой. Тёмную нельзя не дать: врач
-      // открывает приложение и ночью на дежурстве, и белый экран в
-      // темноте — это не «непривычно», а больно.
-      //
-      // Плоскости в обеих разделяются волосяной границей, а не тенью:
-      // тень допустима только у того, что физически висит над страницей.
-      theme: AppTheme.light(),
-      darkTheme: AppTheme.dark(),
-      home: StartScreen(
-        api: api,
-        outbox: outbox,
-        packs: packs,
-        keys: keys,
-        schedule: schedule,
-        reference: reference,
+    // Область со службами стоит НАД `MaterialApp`, а не под ним. Экраны,
+    // открытые поверх раздела, живут в навигаторе, а навигатор — внутри
+    // `MaterialApp`: заведи мы область ниже, значок настроек открывал бы
+    // экран, которому неоткуда взять ни сервер, ни наборы. Так и было, и
+    // поймала это проверка, а не глаз.
+    return AppScope(
+      api: widget.api,
+      outbox: widget.outbox,
+      packs: widget.packs,
+      keys: widget.keys,
+      schedule: widget.schedule,
+      reference: widget.reference,
+      accountEpoch: _accountEpoch,
+      child: MaterialApp(
+        title: 'Куратор',
+        // Обе темы, а выбор — за системой. Тёмную нельзя не дать: врач
+        // открывает приложение и ночью на дежурстве, и белый экран в
+        // темноте — это не «непривычно», а больно.
+        //
+        // Плоскости в обеих разделяются волосяной границей, а не тенью:
+        // тень допустима только у того, что физически висит над страницей.
+        theme: AppTheme.light(),
+        darkTheme: AppTheme.dark(),
+        home: StartScreen(
+          api: widget.api,
+          outbox: widget.outbox,
+          packs: widget.packs,
+          keys: widget.keys,
+          schedule: widget.schedule,
+          reference: widget.reference,
+        ),
       ),
     );
   }

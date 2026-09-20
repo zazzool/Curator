@@ -1,4 +1,4 @@
-/// Справочник: то, что врач открывает у постели больного.
+/// Раздел «Теория»: то, что врач открывает у постели больного.
 ///
 /// # Почему это отдельный раздел, а не подсказка внутри задачи
 ///
@@ -25,8 +25,11 @@ import '../api/client.dart';
 import '../core/design/palette.dart';
 import '../core/design/tokens.dart';
 import '../core/design/typography.dart';
+import '../core/ui/quiet_progress.dart';
+import '../core/ui/search_field.dart';
 import '../core/ui/surface.dart';
 import '../db/reference_store.dart';
+import '../settings/settings_screen.dart';
 import '../text/plural.dart';
 import '../text/prose.dart';
 import 'model.dart';
@@ -70,11 +73,33 @@ class _ReferenceScreenState extends State<ReferenceScreen> {
   /// и «скачать» на экране без базы было бы кнопкой в никуда.
   ReferenceSync? _sync;
 
+  /// Поиск по единицам ВСЕХ скачанных источников разом.
+  ///
+  /// Место поиска — там, где источники перечислены вместе. Пока он жил
+  /// только внутри источника, дорога к пункту приказа шла через раздел
+  /// про диагнозы: врач должен был сперва угадать, в каком источнике
+  /// искать, — а он приходит с кодом из карты или со словом из головы, и
+  /// не обязан знать, кто его выпустил.
+  final _query = TextEditingController();
+  List<(RefSource, RefUnit)> _hits = const [];
+
+  @override
+  void dispose() {
+    _query.dispose();
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
     final store = widget.store;
-    if (store == null) return;
+    if (store == null) {
+      // Читать нечего и не из чего: отметка «разделы обновляются» над
+      // сообщением «теория недоступна» крутилась бы вечно и обещала
+      // обновление, которого не будет.
+      _loading = false;
+      return;
+    }
     _sync = ReferenceSync(widget.api, store);
     _load();
   }
@@ -99,6 +124,29 @@ class _ReferenceScreenState extends State<ReferenceScreen> {
       _offerFailure = failure;
       _loading = false;
     });
+  }
+
+  Future<void> _search(String raw) async {
+    final query = raw.trim();
+    if (query.isEmpty) {
+      setState(() => _hits = const []);
+      return;
+    }
+    final store = widget.store!;
+    final hits = <(RefSource, RefUnit)>[];
+    // По источникам подряд, в порядке списка: у каждого своя выдача, и
+    // сводить их в один ранжированный список нечем — совпадение по началу
+    // метки в одном источнике не сравнимо с совпадением в другом.
+    for (final source in _mine) {
+      for (final unit in await store.search(source.slug, query, limit: 20)) {
+        hits.add((source, unit));
+      }
+    }
+    if (!mounted) return;
+    // Набранное могло смениться, пока шла выборка: показывать выдачу по
+    // прежнему запросу нельзя — врач читал бы ответ на чужой вопрос.
+    if (_query.text.trim() != query) return;
+    setState(() => _hits = hits);
   }
 
   Future<void> _pull(RefSource source, {bool force = false}) async {
@@ -157,7 +205,37 @@ class _ReferenceScreenState extends State<ReferenceScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const ScreenHeader(title: 'Справочник'),
+              ScreenHeader(
+                title: 'Теория',
+                // Счёт называется только тогда, когда он посчитан: «0
+                // разделов» на непрочитанном диске врач принял бы за
+                // правду.
+                subtitle: _loading && _mine.isEmpty
+                    ? null
+                    : withPlural(_mine.length, 'раздел', 'раздела', 'разделов'),
+                // Значок настроек стоит на каждом корневом экране и ведёт
+                // в одно место с одного и того же значка.
+                actions: const [SettingsHeaderAction()],
+              ),
+              // Обновление — тонкой отметкой под шапкой: список, лежащий
+              // на диске, читается всё это время как обычно.
+              UpdatingLine(updating: _loading, label: 'Разделы обновляются'),
+              // Поля нет там, где искать нечего: пустое поле обещает
+              // выдачу, которой не будет.
+              if (_mine.isNotEmpty) ...[
+                AppSearchField(
+                  controller: _query,
+                  hintText: 'Метка или название',
+                  onChanged: _search,
+                  onClear: _query.text.isEmpty
+                      ? null
+                      : () {
+                          _query.clear();
+                          _search('');
+                        },
+                ),
+                const SizedBox(height: Gap.lg),
+              ],
               Expanded(child: _body(context)),
             ],
           ),
@@ -170,13 +248,20 @@ class _ReferenceScreenState extends State<ReferenceScreen> {
     if (widget.store == null) {
       return const _Note(
         icon: Icons.sd_card_alert_outlined,
-        title: 'Справочник недоступен',
+        title: 'Теория недоступна',
         text:
-            'Он живёт на устройстве, а местная база не открылась. '
+            'Она живёт на устройстве, а местная база не открылась. '
             'Перезапустите приложение',
       );
     }
-    if (_loading) return const Center(child: CircularProgressIndicator());
+    // Пока диск читается, экран не утверждает ничего: отметка обновления
+    // стоит выше, а кружка на весь экран здесь быть не может — справочник
+    // весь про чтение без сети.
+    if (_loading && _mine.isEmpty) return const SizedBox.shrink();
+
+    // Выдача занимает место списка разделов, а не тянется под ним: два
+    // списка сразу читались бы как один.
+    if (_query.text.trim().isNotEmpty) return _found(context);
 
     final p = context.palette;
     // Предлагается только то, чего нет или чей выпуск разошёлся: строка
@@ -199,8 +284,10 @@ class _ReferenceScreenState extends State<ReferenceScreen> {
           if (_mine.isEmpty && offers.isEmpty && _offerFailure.isEmpty)
             const _Note(
               icon: Icons.menu_book_outlined,
-              title: 'Справочников пока нет',
-              text: 'Они появятся здесь, когда составитель их выпустит',
+              title: 'Разделов пока нет',
+              text:
+                  'Теория появится вместе с источниками, которые выпустит '
+                  'составитель',
             ),
 
           if (_mine.isNotEmpty) ...[
@@ -256,6 +343,39 @@ class _ReferenceScreenState extends State<ReferenceScreen> {
           ],
         ],
       ),
+    );
+  }
+
+  Widget _found(BuildContext context) {
+    if (_hits.isEmpty) {
+      return const _Note(
+        icon: Icons.search_off_outlined,
+        title: 'Ничего не нашлось',
+        text: 'Попробуйте метку целиком или слово из названия',
+      );
+    }
+
+    return ListView.separated(
+      padding: const EdgeInsets.only(bottom: Gap.xxl),
+      itemCount: _hits.length,
+      separatorBuilder: (context, _) => rowDivider(context, indent: 30),
+      itemBuilder: (context, i) {
+        final (source, unit) = _hits[i];
+        return UnitRow(
+          unit: unit,
+          statementWord: source.statementWord,
+          // Путь показывается всегда: в общей выдаче одна метка ничего не
+          // говорит о том, откуда она, — а источников на устройстве
+          // несколько.
+          showPath: true,
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  UnitScreen(store: widget.store!, source: source, unit: unit),
+            ),
+          ),
+        );
+      },
     );
   }
 
