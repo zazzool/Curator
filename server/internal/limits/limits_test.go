@@ -147,7 +147,7 @@ func TestУборкаНеСнимаетЗапертоеВедро(t *testing.T) 
 	}
 
 	// Столько соседей, чтобы уборка точно случилась.
-	for i := range уборкаОт + 1 {
+	for i := range sweepFrom + 1 {
 		b.Allow(strings.Repeat("x", i%7)+time.Duration(i).String(), now)
 	}
 
@@ -161,17 +161,17 @@ func TestУборкаСнимаетОстывшиеВёдра(t *testing.T) {
 	b := NewBucket(1, 60)
 	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 
-	for i := range уборкаОт {
+	for i := range sweepFrom {
 		b.Allow(time.Duration(i).String(), now)
 	}
-	if len(b.вёдра) != уборкаОт {
-		t.Fatalf("вёдер %d, а заводили %d", len(b.вёдра), уборкаОт)
+	if len(b.buckets) != sweepFrom {
+		t.Fatalf("вёдер %d, а заводили %d", len(b.buckets), sweepFrom)
 	}
 
 	// Минута спустя каждое из них полно, то есть не помнит ничего.
 	b.Allow("новичок", now.Add(time.Minute))
-	if len(b.вёдра) != 1 {
-		t.Fatalf("после уборки осталось %d вёдер вместо одного", len(b.вёдра))
+	if len(b.buckets) != 1 {
+		t.Fatalf("после уборки осталось %d вёдер вместо одного", len(b.buckets))
 	}
 }
 

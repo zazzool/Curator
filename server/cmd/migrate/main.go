@@ -77,7 +77,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	gate, err := dbgate.Open(ctx, dsn, 0)
+	gate, err := dbgate.Open(ctx, dsn, dbgate.Options{})
 	if err != nil {
 		log.Fatalf("база: %v", err)
 	}

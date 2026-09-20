@@ -23,6 +23,7 @@
 /// вовсе.
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -70,6 +71,21 @@ class MemoryTokenStore implements TokenStore {
   Future<void> clear() async => _token = null;
 }
 
+/// Сколько ждать, пока соединение установится.
+///
+/// Сроков не было НИ ОДНОГО, и стоило это не теории: портал гостиничного
+/// или больничного Wi-Fi принимает соединение и не отвечает ни байтом.
+/// Запрос тогда не завершается никогда и не бросает ничего, а первый
+/// запуск остаётся кружком на весь экран навсегда — ни кнопки, ни выхода,
+/// кроме убийства приложения.
+const Duration _connectTimeout = Duration(seconds: 10);
+
+/// Сколько ждать ответа целиком.
+///
+/// Больше, чем на соединение: ответ может быть большим, а связь узкой.
+/// Меньше, чем терпение врача: полминуты — уже «висит».
+const Duration _replyTimeout = Duration(seconds: 30);
+
 /// Дверь к `/v1`.
 class Api {
   Api({
@@ -77,7 +93,9 @@ class Api {
     required this.appKey,
     required this.tokens,
     HttpClient? client,
-  }) : _client = client ?? HttpClient();
+    Duration connectTimeout = _connectTimeout,
+    this.replyTimeout = _replyTimeout,
+  }) : _client = client ?? (HttpClient()..connectionTimeout = connectTimeout);
 
   /// Адрес контура. Задаётся снаружи и одним местом: адрес, вписанный
   /// литералом во второй файл, расходится молча.
@@ -89,6 +107,13 @@ class Api {
   final String appKey;
 
   final TokenStore tokens;
+
+  /// Сколько ждать ответа целиком.
+  ///
+  /// Доводом, а не числом в коде: проверке нужен срок в миллисекундах,
+  /// иначе она либо ждёт полминуты, либо не проверяет срок вовсе.
+  final Duration replyTimeout;
+
   final HttpClient _client;
 
   void close() => _client.close(force: true);
@@ -222,13 +247,22 @@ class Api {
         request.add(utf8.encode(jsonEncode(body)));
       }
 
-      response = await request.close();
-      raw = await response.fold<List<int>>(
-        [],
-        (all, chunk) => all..addAll(chunk),
-      );
+      // Срок один на закрытие запроса и на чтение тела, а не два по
+      // тридцать секунд: врач ждёт ответа, а не двух его половин, и
+      // молчащее соединение умеет тянуть обе.
+      final until = DateTime.now().add(replyTimeout);
+      response = await request.close().timeout(replyTimeout);
+      raw = await response
+          .fold<List<int>>([], (all, chunk) => all..addAll(chunk))
+          .timeout(_left(until));
     } on ApiFailure {
       rethrow;
+    } on TimeoutException {
+      // Тем же отказом, что и оборванная связь, и это не упрощение:
+      // молчащий портал и отсутствие сети для врача — одно и то же, и
+      // делать ему в обоих случаях тоже одно и то же. Отдельный текст
+      // про «истёк срок» объяснил бы наше устройство, а не его положение.
+      throw ApiFailure('Нет связи с сервером. Попробуйте позже', offline: true);
     } on SocketException {
       throw ApiFailure('Нет связи с сервером. Попробуйте позже', offline: true);
     } on HttpException {
@@ -269,4 +303,14 @@ class Api {
     }
     return parsed ?? <String, dynamic>{};
   }
+}
+
+/// Сколько осталось до срока.
+///
+/// Не ноль и не отрицательное: `timeout` с нулём срабатывает мгновенно, и
+/// ответ, пришедший ровно к сроку, пропал бы уже прочитанным. Мгновение
+/// на чтение уже полученного оставляем.
+Duration _left(DateTime until) {
+  final left = until.difference(DateTime.now());
+  return left > Duration.zero ? left : const Duration(milliseconds: 1);
 }

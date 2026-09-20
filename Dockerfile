@@ -101,7 +101,10 @@ ENV CURATOR_ADDR=:8080 \
 USER app
 EXPOSE 8080
 
+# Готовность, а не живость. Живость отвечает «жив» и при отпавшей базе:
+# контейнер оставался бы «здоровым», прокси слал бы в него обращения,
+# каждое отвечало бы пятисотым, и docker был бы доволен.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-    CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1
+    CMD wget -qO- http://127.0.0.1:8080/readyz || exit 1
 
 ENTRYPOINT ["/app/curator"]
