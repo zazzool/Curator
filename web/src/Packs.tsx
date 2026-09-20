@@ -21,10 +21,31 @@ const STATUS: Record<string, string> = {
   retired: 'снят',
 }
 
+// Линейка — чем набор открывается, и это же граница бесплатного.
+//
+// Словами, а не отсутствием цены: набор, у которого цены просто нет,
+// выглядит недооценённым, а набор с линейкой «спонсорский» — подаренным.
+// Первое составитель читает как недоделку и идёт ставить цену.
+const LINE: Record<string, string> = {
+  guest: 'гостевой — открыт всем, и до входа',
+  basic: 'базовый — открыт тому, кто привязал почту',
+  paid: 'платный — по подписке или покупке',
+  sponsored: 'спонсорский — открыт всем, за него заплатил спонсор',
+}
+
+// Короткое имя линейки — для метки в списке, где длинному пояснению не
+// место.
+const LINE_TAG: Record<string, string> = {
+  guest: 'гостевой',
+  basic: 'базовый',
+  paid: 'платный',
+  sponsored: 'спонсорский',
+}
+
 export function Packs({ me }: { me: Me }) {
   const [open, setOpen] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
-  const [draft, setDraft] = useState({ slug: '', title: '', summaryMd: '' })
+  const [draft, setDraft] = useState({ slug: '', title: '', summaryMd: '', line: 'paid' })
   const [failure, setFailure] = useState('')
 
   const canPack = me.permissions.includes('packs')
@@ -47,7 +68,7 @@ export function Packs({ me }: { me: Me }) {
       // нет».
       const { slug } = await api.createPack(draft)
       setAdding(false)
-      setDraft({ slug: '', title: '', summaryMd: '' })
+      setDraft({ slug: '', title: '', summaryMd: '', line: 'paid' })
       await reload()
       setOpen(slug)
     } catch (error) {
@@ -112,12 +133,32 @@ export function Packs({ me }: { me: Me }) {
             />
           </label>
           <label className="form-row">
+            <span className="fld-label">Кому открыт</span>
+            <select
+              className="fld-long"
+              value={draft.line}
+              onChange={(e) => setDraft({ ...draft, line: e.target.value })}
+            >
+              {Object.entries(LINE).map(([value, name]) => (
+                <option key={value} value={value}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="form-row">
             <span className="fld-label">Что внутри</span>
             <textarea
               value={draft.summaryMd}
               onChange={(e) => setDraft({ ...draft, summaryMd: e.target.value })}
             />
           </label>
+          <p className="hint">
+            Платный стоит первым умолчанием намеренно: набор, закрытый по
+            ошибке, виден сразу — врач его не получит и скажет; набор,
+            открытый по ошибке, не виден никому, и узнают о нём по
+            непришедшим деньгам.
+          </p>
           <p className="hint">
             Описание читает врач на витрине, и написано оно должно быть для
             него: «сорок задач по острому коронарному синдрому», а не
@@ -161,6 +202,10 @@ export function Packs({ me }: { me: Me }) {
                   {/* Цвет метки — от состояния: слово и цвет говорят об одном,
                       и на бегу читается цвет. */}
                   <span className={`tag ${pack.status}`}>{STATUS[pack.status] ?? pack.status}</span>
+                  {/* Кому открыт — рядом с состоянием: на список смотрят,
+                      чтобы увидеть, что и кому раздаётся, и уходить за
+                      этим в карточку каждого набора незачем. */}
+                  <span className="tag">{LINE_TAG[pack.line] ?? pack.line}</span>
                 </span>
                 <span className="muted">
                   {счётом(pack.cases, 'задача', 'задачи', 'задач')} ·{' '}
@@ -179,7 +224,9 @@ export function Packs({ me }: { me: Me }) {
 // Карточка набора: состав, правка описания и выпуск.
 function PackCard({ me, slug, onBack }: { me: Me; slug: string; onBack: () => void }) {
   const [items, setItems] = useState<PackItem[]>([])
-  const [card, setCard] = useState({ title: '', summaryMd: '', status: 'published' })
+  const [card, setCard] = useState({
+    title: '', summaryMd: '', status: 'published', line: 'paid',
+  })
   const [failure, setFailure] = useState('')
   // Опоздавшая правка — отдельное состояние, а не просто отказ: у неё
   // единственный выход, и его надо дать рядом со словами. Сам по себе
@@ -203,7 +250,12 @@ function PackCard({ me, slug, onBack }: { me: Me; slug: string; onBack: () => vo
   useEffect(() => {
     if (pack === null) return
     setItems(pack.items)
-    setCard({ title: pack.title, summaryMd: pack.summaryMd, status: pack.status })
+    setCard({
+      title: pack.title,
+      summaryMd: pack.summaryMd,
+      status: pack.status,
+      line: pack.line,
+    })
   }, [pack])
 
   // Состав на экране и состав в базе расходятся сразу, как только
@@ -453,6 +505,25 @@ function PackCard({ me, slug, onBack }: { me: Me; slug: string; onBack: () => vo
                 onChange={(e) => setCard({ ...card, summaryMd: e.target.value })}
               />
             </label>
+            <label className="form-row">
+              <span className="fld-label">Кому открыт</span>
+              <select
+                className="fld-long"
+                value={card.line}
+                onChange={(e) => setCard({ ...card, line: e.target.value })}
+              >
+                {Object.entries(LINE).map(([value, name]) => (
+                  <option key={value} value={value}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="hint">
+              Линейка решает, кому набор открыт; цена — почём он продаётся.
+              Выключенная цена платный набор не открывает: снятое с продажи
+              не то же самое, что подаренное.
+            </p>
             <label className="form-row">
               <span className="fld-label">Состояние</span>
               <select

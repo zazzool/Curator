@@ -153,6 +153,8 @@ export type Pack = {
   slug: string
   title: string
   status: string
+  /** Линейка: чем набор открывается — guest, basic, paid, sponsored. */
+  line: string
   cases: number
   /** Номер последнего выпуска; 0 — набор ещё не выпускался. */
   version: number
@@ -497,6 +499,7 @@ export const api = {
       status: string
       version: number
       revision: number
+      line: string
       cases: PackItem[]
     }>('GET', `/admin/api/packs/${encodeURIComponent(slug)}`)
     // Сервер зовёт состав «cases» — тем же словом, каким в списке наборов
@@ -506,12 +509,18 @@ export const api = {
     return { ...card, items: cases }
   },
 
-  createPack: (pack: { slug: string; title: string; summaryMd: string }) =>
+  createPack: (pack: { slug: string; title: string; summaryMd: string; line: string }) =>
     request<{ slug: string }>('POST', '/admin/api/packs', pack),
 
   savePack: (
     slug: string,
-    card: { title: string; summaryMd: string; status: string; revision: number },
+    card: {
+      title: string
+      summaryMd: string
+      status: string
+      line: string
+      revision: number
+    },
   ) =>
     request<{ status: string; revision: number }>(
       'PUT',

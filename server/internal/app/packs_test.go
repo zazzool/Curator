@@ -52,7 +52,7 @@ func TestPgОписьВыпускаСходитсяСЭталономИПодп�
 	auth := map[string]string{"Authorization": "Bearer " + token}
 
 	slug := fmt.Sprintf("nabor-%d", time.Now().UnixNano())
-	if err := store.Create(context.Background(), slug, "Набор для проверки", "Описание"); err != nil {
+	if err := store.Create(context.Background(), slug, "Набор для проверки", "Описание", packs.LineGuest); err != nil {
 		t.Fatal(err)
 	}
 	caseID, _ := задача(t, gate)
@@ -113,7 +113,7 @@ func TestPgОтпечатокИзОписиСходитсяСоСкачанно�
 	auth := map[string]string{"Authorization": "Bearer " + token}
 
 	slug := fmt.Sprintf("nabor-%d", time.Now().UnixNano())
-	if err := store.Create(context.Background(), slug, "Набор", ""); err != nil {
+	if err := store.Create(context.Background(), slug, "Набор", "", packs.LineGuest); err != nil {
 		t.Fatal(err)
 	}
 	caseID, _ := задача(t, gate)
@@ -167,7 +167,7 @@ func TestPgПлатныйНаборНеОтдаётСодержаниеБезП�
 	ctx := context.Background()
 
 	slug := fmt.Sprintf("nabor-%d", time.Now().UnixNano())
-	if err := store.Create(ctx, slug, "Платный набор", "Описание"); err != nil {
+	if err := store.Create(ctx, slug, "Платный набор", "Описание", packs.LinePaid); err != nil {
 		t.Fatal(err)
 	}
 	caseID, _ := задача(t, gate)

@@ -71,7 +71,7 @@ func задача(t *testing.T, gate *dbgate.Gate, status string) string {
 func набор(t *testing.T, store *Store) string {
 	t.Helper()
 	slug := fmt.Sprintf("nabor-%d-%d", time.Now().UnixNano(), rand.IntN(1000))
-	if err := store.Create(context.Background(), slug, "Набор «"+slug+"»", "Описание"); err != nil {
+	if err := store.Create(context.Background(), slug, "Набор «"+slug+"»", "Описание", LineGuest); err != nil {
 		t.Fatalf("набор не заведён: %v", err)
 	}
 	return slug
@@ -295,7 +295,7 @@ func TestPgМеткаНабораОтказываетВнятно(t *testing.T) 
 	store, _, _ := лавка(t)
 	ctx := context.Background()
 
-	err := store.Create(ctx, "Кириллица", "Название", "")
+	err := store.Create(ctx, "Кириллица", "Название", "", LineGuest)
 	if err == nil {
 		t.Fatal("метка кириллицей принята")
 	}
@@ -304,7 +304,7 @@ func TestPgМеткаНабораОтказываетВнятно(t *testing.T) 
 	}
 
 	slug := набор(t, store)
-	err = store.Create(ctx, slug, "Другое название", "")
+	err = store.Create(ctx, slug, "Другое название", "", LineGuest)
 	if err == nil {
 		t.Fatal("метка заведена дважды")
 	}
@@ -380,7 +380,7 @@ func TestPgСнятыйСВитриныНаборНеПоказывается(t 
 		t.Fatal("выпущенный набор не попал на витрину")
 	}
 
-	if _, err := store.Update(ctx, slug, "Набор", "", "retired", редакция); err != nil {
+	if _, err := store.Update(ctx, slug, "Набор", "", "retired", LineGuest, редакция); err != nil {
 		t.Fatalf("набор не снят: %v", err)
 	}
 	if наВитрине(t, store, slug) {
@@ -401,7 +401,7 @@ func TestPgСостоянияКоторогоНетНаборНеПринима�
 	// Словарь состояний закрыт, и отказ называет само состояние: молча
 	// принятое «удалён» не сняло бы набор ни с витрины, ни откуда-либо.
 	store, _, _ := лавка(t)
-	_, err := store.Update(context.Background(), набор(t, store), "Набор", "", "удалён", 1)
+	_, err := store.Update(context.Background(), набор(t, store), "Набор", "", "удалён", LineGuest, 1)
 	if err == nil {
 		t.Fatal("состояние не из словаря принято")
 	}
@@ -476,7 +476,7 @@ func TestPgКарточкаИСоставДелятОднуРедакцию(t *t
 		[]string{задача(t, gate, "published")}, открыт.Revision); err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.Update(ctx, slug, "Другое имя", "", "draft", открыт.Revision)
+	_, err = store.Update(ctx, slug, "Другое имя", "", "draft", LineGuest, открыт.Revision)
 	if !errors.Is(err, ErrStale) {
 		t.Fatalf("карточка сохранена поверх чужой правки состава: %v", err)
 	}

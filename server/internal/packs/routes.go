@@ -32,6 +32,7 @@ type createRequest struct {
 	Slug      string `json:"slug"`
 	Title     string `json:"title"`
 	SummaryMd string `json:"summaryMd"`
+	Line      string `json:"line"`
 }
 
 func (r *routes) create(w http.ResponseWriter, req *http.Request, _ studio.User) {
@@ -40,7 +41,7 @@ func (r *routes) create(w http.ResponseWriter, req *http.Request, _ studio.User)
 		studio.WriteError(w, http.StatusBadRequest, "Запрос не разобран: "+err.Error())
 		return
 	}
-	if err := r.store.Create(req.Context(), body.Slug, body.Title, body.SummaryMd); err != nil {
+	if err := r.store.Create(req.Context(), body.Slug, body.Title, body.SummaryMd, body.Line); err != nil {
 		studio.WriteError(w, http.StatusBadRequest, studio.Sentence(err.Error()))
 		return
 	}
@@ -95,7 +96,7 @@ func (r *routes) list(w http.ResponseWriter, req *http.Request, _ studio.User) {
 	for _, one := range list {
 		out = append(out, map[string]any{
 			"slug": one.Slug, "title": one.Title, "status": one.Status,
-			"cases": one.Cases, "version": one.Version,
+			"cases": one.Cases, "version": one.Version, "line": one.Line,
 		})
 	}
 	studio.WriteJSON(w, http.StatusOK, map[string]any{"packs": out})
@@ -117,7 +118,7 @@ func (r *routes) show(w http.ResponseWriter, req *http.Request, _ studio.User) {
 	studio.WriteJSON(w, http.StatusOK, map[string]any{
 		"slug": one.Slug, "title": one.Title, "summaryMd": one.SummaryMd,
 		"status": one.Status, "version": one.Version, "revision": one.Revision,
-		"cases": items,
+		"line": one.Line, "cases": items,
 	})
 }
 
@@ -125,6 +126,7 @@ type updateRequest struct {
 	Title     string `json:"title"`
 	SummaryMd string `json:"summaryMd"`
 	Status    string `json:"status"`
+	Line      string `json:"line"`
 	Revision  int    `json:"revision"`
 }
 
@@ -148,7 +150,7 @@ func (r *routes) update(w http.ResponseWriter, req *http.Request, _ studio.User)
 		return
 	}
 	revision, err := r.store.Update(req.Context(), req.PathValue("slug"),
-		body.Title, body.SummaryMd, body.Status, body.Revision)
+		body.Title, body.SummaryMd, body.Status, body.Line, body.Revision)
 	if err != nil {
 		studio.WriteError(w, stale(err), studio.Sentence(err.Error()))
 		return
