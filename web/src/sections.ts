@@ -30,7 +30,15 @@ export interface Group {
   sections: Section[]
 }
 
-export type SectionId = 'sources' | 'packs' | 'sales' | 'audiences' | 'reports' | 'workshop'
+export type SectionId =
+  | 'cases'
+  | 'generate'
+  | 'sources'
+  | 'packs'
+  | 'sales'
+  | 'audiences'
+  | 'reports'
+  | 'workshop'
 
 /**
  * Группы — существительные и только существительные: ни «Управления», ни
@@ -50,6 +58,21 @@ export const GROUPS: Group[] = [
   {
     label: 'Содержание',
     sections: [
+      // Задачи стоят первыми, как у донора, и по его доводу: список задач
+      // — то место, где составитель проводит рабочий день. Источники
+      // открывают, когда в них что-то меняют; задачи — всегда.
+      {
+        id: 'cases',
+        icon: 'cases',
+        title: 'Задачи',
+        hint: 'Всё написанное: черновики, выверяемое и то, что раздаётся врачам',
+      },
+      {
+        id: 'generate',
+        icon: 'generate',
+        title: 'Создать задачу',
+        hint: 'Заказать задачу модели по единице источника',
+      },
       {
         id: 'sources',
         icon: 'source',

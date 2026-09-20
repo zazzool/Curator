@@ -19,9 +19,10 @@ import type { SectionId } from './sections'
  *
  * # Почему без библиотеки
  *
- * Разделов семь, вложенности один уровень, параметр один. Нужен ровно тот
- * набор свойств, который даёт History API: рабочие «назад» и «вперёд»,
- * ссылку можно отправить, обновление страницы не выкидывает в начало.
+ * Разделов семь, вложенности один уровень, отбор списка — три довода в
+ * хвосте. Нужен ровно тот набор свойств, который даёт History API:
+ * рабочие «назад» и «вперёд», ссылку можно отправить, обновление
+ * страницы не выкидывает в начало.
  * Зависимость ради этого не заводится — у студии их три, и четвёртая
  * должна оправдываться тем, чего своими руками не написать (так объявлено
  * в корневом CLAUDE.md, и `lucide-react` — именно такой случай).
@@ -35,10 +36,38 @@ import type { SectionId } from './sections'
  * в одном месте.
  */
 
+/**
+ * Отбор списка задач — целиком в адресе.
+ *
+ * Не в состоянии экрана, и это не мелочь: «покажи, что ты видишь»
+ * решается ссылкой, а «назад» браузера возвращает к прежнему отбору, а не
+ * выкидывает из списка целиком. Список задач — то место, где проводят
+ * рабочий день, и отбор в нём составитель меняет десятки раз.
+ */
+export type CaseQuery = {
+  /** Источник. Ноль или пусто — задачи по всем источникам. */
+  source?: number
+  /** Срез по пути единицы: «всё, что под 3». */
+  path?: string
+  /** Состояние: draft, review, published, archived. Пусто — все. */
+  status?: string
+  /** Поиск по названию, метке единицы и опознавателю. */
+  q?: string
+}
+
 /** Куда открыта студия. */
 export type Route =
   | { name: 'sources' }
   | { name: 'source'; id: number }
+  | { name: 'cases'; query: CaseQuery }
+  | { name: 'case'; id: string }
+  | {
+      name: 'generate'
+      /** С каким источником открыть заказ. */
+      source?: number
+      /** С какой единицей источника. Пусто — составитель выберет сам. */
+      unit?: string
+    }
   | { name: 'packs' }
   | { name: 'sales' }
   | { name: 'audiences' }
@@ -69,6 +98,11 @@ export function sectionOf(route: Route): SectionId | null {
     case 'sources':
     case 'source':
       return 'sources'
+    case 'cases':
+    case 'case':
+      return 'cases'
+    case 'generate':
+      return 'generate'
     case 'packs':
       return 'packs'
     case 'sales':
@@ -93,10 +127,46 @@ export function sectionPath(id: SectionId): string {
 export function readRoute(path: string): Route {
   // Хвост после «?» и «#» к выбору страницы отношения не имеет: отбор
   // списка живёт в нём, и разбирает его сама страница.
-  const bare = (path.split('#')[0] ?? '').split('?')[0] ?? ''
+  const noHash = path.split('#')[0] ?? ''
+  const bare = noHash.split('?')[0] ?? ''
+  const search = new URLSearchParams(noHash.slice(bare.length))
   const parts = bare.split('/').filter((one) => one !== '')
 
-  if (parts.length === 0) return { name: 'sources' }
+  // Пустой путь — список задач: это первая строка колонки и то место,
+  // где проводят рабочий день. Так же открывается студия донора. Прежде
+  // здесь стоял список источников, и с переносом задач в свой раздел
+  // получилось бы, что первая строка меню — одно, а открывается другое.
+  if (parts.length === 0) return { name: 'cases', query: {} }
+
+  if (parts[0] === 'cases') {
+    if (parts.length === 1) {
+      // Пустые доводы в отбор не кладутся: `{ source: 0, path: '' }` и
+      // `{}` — один и тот же отбор, а сравнение адресов различило бы их,
+      // и переход «на ту же страницу» перестал бы быть переходом на ту же.
+      const query: CaseQuery = {}
+      const source = Number(search.get('source'))
+      if (Number.isInteger(source) && source > 0) query.source = source
+      for (const key of ['path', 'status', 'q'] as const) {
+        const value = search.get(key)
+        if (value) query[key] = value
+      }
+      return { name: 'cases', query }
+    }
+    // Опознаватель задачи — строка, а не число: его выдаёт сервер, и
+    // вида его студия не знает. Пустым он быть не может — пустой путь
+    // сюда не доходит.
+    if (parts.length === 2 && parts[1]) return { name: 'case', id: parts[1] }
+    return { name: 'unknown', path: bare }
+  }
+
+  if (parts.length === 1 && parts[0] === 'generate') {
+    const route: Route = { name: 'generate' }
+    const source = Number(search.get('source'))
+    if (Number.isInteger(source) && source > 0) route.source = source
+    const unit = search.get('unit')
+    if (unit) route.unit = unit
+    return route
+  }
 
   if (parts[0] === 'sources') {
     if (parts.length === 1) return { name: 'sources' }
@@ -129,11 +199,42 @@ export function routePath(route: Route): string {
       return '/sources'
     case 'source':
       return `/sources/${route.id}`
+    case 'cases':
+      return `/cases${tail({
+        source: route.query.source ? String(route.query.source) : '',
+        path: route.query.path ?? '',
+        status: route.query.status ?? '',
+        q: route.query.q ?? '',
+      })}`
+    case 'case':
+      return `/cases/${encodeURIComponent(route.id)}`
+    case 'generate':
+      return `/generate${tail({
+        source: route.source ? String(route.source) : '',
+        unit: route.unit ?? '',
+      })}`
     case 'unknown':
       return route.path
     default:
       return `/${route.name}`
   }
+}
+
+/**
+ * Хвост адреса из непустых доводов.
+ *
+ * Пустые выбрасываются: `/cases?source=&path=&status=&q=` и `/cases` —
+ * один и тот же отбор, но адреса разные, и сравнение «мы уже здесь»
+ * различило бы их. Заодно ссылка, которую посылают друг другу, остаётся
+ * читаемой.
+ */
+function tail(params: Record<string, string>): string {
+  const search = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== '') search.set(key, value)
+  }
+  const out = search.toString()
+  return out === '' ? '' : `?${out}`
 }
 
 /**

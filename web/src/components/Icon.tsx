@@ -20,16 +20,20 @@
 import {
   BookOpen,
   ChartLine,
+  ClipboardList,
   Files,
   Hammer,
   LogOut,
   Users,
   Wallet,
+  WandSparkles,
   Wrench,
   type LucideIcon,
 } from 'lucide-react'
 
 export type IconName =
+  | 'cases'
+  | 'generate'
   | 'source'
   | 'drafts'
   | 'money'
@@ -40,6 +44,12 @@ export type IconName =
   | 'logout'
 
 const GLYPHS: Record<IconName, LucideIcon> = {
+  // Планшет со строками: задача — это условие с вариантами, а не лист
+  // текста, и список задач читается строками.
+  cases: ClipboardList,
+  // Палочка с искрами: написанное моделью. Знак нарочно не такой, как у
+  // задач, — заказ и список задач путать нельзя, они по соседству.
+  generate: WandSparkles,
   // Раскрытая книга: источник — первоисточник положений, то есть книга.
   source: BookOpen,
   // Стопка листов: набор — это перечень задач, а не одна задача.
