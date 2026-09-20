@@ -71,7 +71,9 @@ export function Packs({ me }: { me: Me }) {
       <div className="page-head">
         <h2>Наборы</h2>
         {canPack && (
-          <button onClick={() => setAdding(!adding)}>
+          // Синее — у того, ради чего открыт раздел; отказ от заведения
+          // синим не отмечается (см. тот же довод в SourceList).
+          <button className={adding ? undefined : 'primary'} onClick={() => setAdding(!adding)}>
             {adding ? 'Не заводить' : 'Завести набор'}
           </button>
         )}
@@ -133,10 +135,22 @@ export function Packs({ me }: { me: Me }) {
         {packs === null ? (
           <p className="empty">Читаем список…</p>
         ) : packs.length === 0 ? (
-          <p className="empty">
-            Наборов пока нет. Пока нет ни одного выпущенного, вкладка «Наборы»
-            в приложении пуста у всех.
-          </p>
+          // Выход с пустой страницы — там же, где пустота объявлена
+          // (донорская повадка): пришедший на пустой раздел пришёл его
+          // наполнять.
+          <div className="empty stack">
+            <p>
+              Наборов пока нет. Пока нет ни одного выпущенного, вкладка «Наборы»
+              в приложении пуста у всех.
+            </p>
+            {canPack && !adding && (
+              <div className="toolbar" style={{ justifyContent: 'center' }}>
+                <button className="primary" onClick={() => setAdding(true)}>
+                  Завести набор
+                </button>
+              </div>
+            )}
+          </div>
         ) : (
           <div className="list">
             {packs.map((pack) => (
@@ -322,7 +336,7 @@ function PackCard({ me, slug, onBack }: { me: Me; slug: string; onBack: () => vo
             <button onClick={() => setPicking(!picking)}>
               {picking ? 'Не добавлять' : 'Добавить задачи'}
             </button>
-            <button className="primary" onClick={saveItems} disabled={!changed || busy}>
+            <button onClick={saveItems} disabled={!changed || busy}>
               Сохранить состав
             </button>
             {changed && <span className="hint">Состав изменён и пока не сохранён.</span>}
@@ -370,6 +384,7 @@ function PackCard({ me, slug, onBack }: { me: Me; slug: string; onBack: () => vo
             <label className="form-row">
               <span className="fld-label">Состояние</span>
               <select
+                className="fld-medium"
                 value={card.status}
                 onChange={(e) => setCard({ ...card, status: e.target.value })}
               >

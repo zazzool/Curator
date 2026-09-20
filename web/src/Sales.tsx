@@ -142,6 +142,7 @@ function Prices({ me }: { me: Me }) {
           <label className="form-row">
             <span className="fld-label">За что</span>
             <select
+              className="fld-long"
               value={draft.purpose}
               onChange={(e) => setDraft({ ...draft, purpose: e.target.value })}
             >
@@ -172,9 +173,9 @@ function Prices({ me }: { me: Me }) {
             />
           </label>
           <div className="form-actions">
-            <button className="primary" type="submit">
-              Сохранить цену
-            </button>
+            {/* Сохранение открытой формы синим не отмечается: синее —
+                у того, что заводит или двигает вперёд. */}
+            <button type="submit">Сохранить цену</button>
           </div>
         </form>
       )}
@@ -449,6 +450,7 @@ function ClientCard({ me, id, onBack }: { me: Me; id: number; onBack: () => void
             <label className="form-row">
               <span className="fld-label">За что</span>
               <select
+                className="fld-long"
                 value={income.purpose}
                 onChange={(e) => setIncome({ ...income, purpose: e.target.value })}
               >
