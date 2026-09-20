@@ -372,6 +372,87 @@ describe('слепая сверка и повтор', () => {
     expect(screen.queryByText(/НЕ сошлась/)).toBeNull()
   })
 
+  it('снятое разбором расхождение не выглядит тревогой', async () => {
+    // Слепая сверка рассудила верно, а отметила не тот вариант: два
+    // соседних пункта различаются одним сроком и стоят в списке похожими
+    // строками. Покажи мы такую задачу тревогой, составитель пошёл бы
+    // переделывать исправную — и делал бы это тем чаще, чем ближе друг к
+    // другу единицы источника.
+    serve(
+      сЧерновиком({
+        done: true,
+        verdict: { answer: '3.2', why: 'похоже на отказ', sure: true, agrees: false },
+        arbitration: { verdict: 'ordered', why: 'Срок в десять дней назван только в заказанной.' },
+      }),
+    )
+    render(<Generate me={СОСТАВИТЕЛЬ} source={1} />)
+    fireEvent.click(await screen.findByText('Открыть'))
+
+    const сказано = await screen.findByText(/разбор по положениям источника признал/i)
+    expect(сказано.textContent).toMatch(/задача исправна/)
+    // Спор при этом не спрятан: составитель обязан видеть, что он был.
+    expect(сказано.textContent).toMatch(/3\.2/)
+    // И тревоги нет — полоса объявляется диктору как состояние, а не как
+    // остановленная работа.
+    expect(сказано.closest('[role="alert"]')).toBeNull()
+    expect(screen.queryByText(/НЕ сошлась/)).toBeNull()
+  })
+
+  it('подтверждённое разбором расхождение называет соседа', async () => {
+    // Это уже не промах сверки, и сказать об этом надо иначе: составителю
+    // нужен не «спор», а единица, которой условие отвечает на деле.
+    serve(
+      сЧерновиком({
+        done: true,
+        verdict: { answer: '3.2', why: 'похоже на отказ', sure: true, agrees: false },
+        arbitration: { verdict: 'found', which: '3.2', why: 'Письменная форма названа только там.' },
+      }),
+    )
+    render(<Generate me={СОСТАВИТЕЛЬ} source={1} />)
+    fireEvent.click(await screen.findByText('Открыть'))
+
+    const тревога = await screen.findByText(/разбор по положениям источника её\s+подтвердил/i)
+    expect(тревога.textContent).toMatch(/3\.2/)
+    expect(тревога.textContent).toMatch(/Письменная форма/)
+    expect(тревога.closest('[role="alert"]')).toBeTruthy()
+  })
+
+  it('несостоявшийся разбор назван вслух, а не пропущен', async () => {
+    // Молчание составитель примет за «разобрали и подтвердили» — то есть
+    // за новость тяжелее, чем есть, и разбираться он пойдёт не с тем.
+    serve(
+      сЧерновиком({
+        done: true,
+        verdict: { answer: '3.2', why: 'похоже на отказ', sure: true, agrees: false },
+        arbitrationNote: 'у соседей нет положений: разбор свёлся бы к сличению названий',
+      }),
+    )
+    render(<Generate me={СОСТАВИТЕЛЬ} source={1} />)
+    fireEvent.click(await screen.findByText('Открыть'))
+
+    const тревога = await screen.findByText(/Слепая сверка НЕ сошлась/)
+    expect(тревога.textContent).toMatch(/Разобрать расхождение не удалось/)
+    expect(тревога.textContent).toMatch(/нет положений/)
+  })
+
+  it('неясный разбор расхождения не снимает', async () => {
+    // Считай мы «не решить» оправданием, разбор превратился бы в способ
+    // пропускать спорное — тем чаще, чем хуже написано условие.
+    serve(
+      сЧерновиком({
+        done: true,
+        verdict: { answer: '3.2', why: 'похоже на отказ', sure: true, agrees: false },
+        arbitration: { verdict: 'unclear', why: 'Решающего признака в тексте нет.' },
+      }),
+    )
+    render(<Generate me={СОСТАВИТЕЛЬ} source={1} />)
+    fireEvent.click(await screen.findByText('Открыть'))
+
+    const тревога = await screen.findByText(/Слепая сверка НЕ сошлась/)
+    expect(тревога.textContent).toMatch(/решить не смог/)
+    expect(screen.queryByText(/задача исправна/)).toBeNull()
+  })
+
   it('черновик без сверки не выдаётся за проверенный', async () => {
     // Молчание здесь читается как «всё хорошо», а значит задача, которую
     // не смотрел никто, уходит к врачу с видом проверенной.

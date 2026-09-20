@@ -124,14 +124,49 @@ type Check struct {
 	Note string `json:"note,omitempty"`
 
 	Verdict *Verdict `json:"verdict,omitempty"`
+
+	// Arbitration — разбор расхождения. Пусто — не разбирали: либо
+	// сверка сошлась и разбирать было нечего, либо черновик старше узла.
+	//
+	// Стоит РЯДОМ с вердиктом, а не заменяет его. Перепиши разбор
+	// Verdict.Agrees — и исчезла бы единственная запись о том, что
+	// слепая сверка вообще возражала; спор, о котором нельзя узнать,
+	// что он был, неотличим от отсутствия спора.
+	Arbitration *Arbitration `json:"arbitration,omitempty"`
+
+	// ArbitrationNote — почему разбора не было при расхождении. Пусто,
+	// когда разбор состоялся или когда разбирать было нечего.
+	ArbitrationNote string `json:"arbitrationNote,omitempty"`
 }
 
-// Agrees — сошлась ли состоявшаяся сверка.
+// Agrees — сошлось ли в итоге.
 //
-// Несостоявшаяся не согласна и не не согласна: она молчит. Отвечать за
-// неё «нет» значило бы звать составителя разбирать спор, которого не
-// было.
-func (c Check) Agrees() bool { return c.Done && c.Verdict != nil && c.Verdict.Agrees }
+// Несостоявшаяся сверка не согласна и не не согласна: она молчит.
+// Отвечать за неё «нет» значило бы звать составителя разбирать спор,
+// которого не было.
+//
+// Разбор расхождения учитывается ЗДЕСЬ, а не переписыванием вердикта:
+// итог у задачи один, а записей о том, как к нему пришли, две, и обе
+// нужны. Слепая сверка могла рассудить верно и отметить не тот вариант —
+// такое расхождение снимается, и снимается оно разбором, а не тем, что
+// кто-то переписал ответ сверки.
+func (c Check) Agrees() bool {
+	if !c.Done || c.Verdict == nil {
+		return false
+	}
+	if c.Verdict.Agrees {
+		return true
+	}
+	return c.Arbitration != nil && c.Arbitration.Clears()
+}
+
+// Disputed — расхождение есть и разбор его не снял.
+//
+// Отдельно от !Agrees(): несостоявшаяся сверка тоже не Agrees, но спора
+// в ней нет. Разные новости — разные слова.
+func (c Check) Disputed() bool {
+	return c.Done && c.Verdict != nil && !c.Verdict.Agrees && !c.Agrees()
+}
 
 // Verdict — ответ слепой сверки.
 type Verdict struct {
@@ -234,12 +269,38 @@ func (r *Runner) run(ctx context.Context, job Job) (Result, error) {
 	}
 	result.Check = Check{Done: true, Verdict: verdict}
 	result.Verdict = verdict
+	r.runArbitrate(ctx, job, draft, &result.Check)
 	r.keepCheck(ctx, job.ID, draftID, result.Check)
 
 	r.runSiblings(ctx, job, draftID, draft, set, &result)
 	r.runCueCheck(ctx, job, draftID, draft, &result)
 	r.runJudge(ctx, job, draftID, draft, &result)
 	return result, nil
+}
+
+// runArbitrate — второй, зрячий вопрос по расхождению.
+//
+// Зовётся ТОЛЬКО при расхождении: сошедшаяся сверка второго вопроса не
+// требует и денег не стоит. Отказ узла черновик не роняет — разбор
+// уточняет уже оплаченную проверку, — но и не молчит: причина ложится в
+// сам черновик. Молчание составитель примет за «разобрали и подтвердили».
+func (r *Runner) runArbitrate(ctx context.Context, job Job, draft Draft, check *Check) {
+	if check.Verdict == nil || check.Verdict.Agrees {
+		return
+	}
+	if err := r.jobs.Step(ctx, job.ID, NodeArbitrate); err != nil {
+		// Отметка о шаге — то, что видит составитель в ходе работы, и
+		// потерять её обидно; бросить из-за неё сам разбор глупо: он
+		// уточняет уже оплаченную проверку, а не рисует полоску.
+		log.Printf("задание %d: шаг разбора расхождения не записан: %v", job.ID, err)
+	}
+	out, err := r.arbitrate(ctx, job, draft)
+	if err != nil {
+		log.Printf("задание %d: расхождение не разобрано: %v", job.ID, err)
+		check.ArbitrationNote = err.Error()
+		return
+	}
+	check.Arbitration = out
 }
 
 // runJudge — судья: машинные проверки свода.
