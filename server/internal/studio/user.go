@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"curator/server/internal/dbgate"
 	"curator/server/internal/totp"
 )
@@ -308,8 +310,8 @@ func (u *Users) SetPermissions(ctx context.Context, login string, perms []Permis
 			keeps = true
 		}
 	}
-	return u.change(ctx, login, keeps, func(ctx context.Context, login string) error {
-		tag, err := u.gate.Exec(ctx,
+	return u.change(ctx, login, keeps, func(ctx context.Context, tx pgx.Tx, login string) error {
+		tag, err := tx.Exec(ctx,
 			`UPDATE users SET permissions = $2 WHERE login = $1`, login, permStrings(perms))
 		if err != nil {
 			return err
@@ -327,12 +329,12 @@ func (u *Users) SetPermissions(ctx context.Context, login string, perms []Permis
 // правки, подписанные его именем, и удаление порвало бы ответ на вопрос,
 // кто это сделал.
 func (u *Users) SetDisabled(ctx context.Context, login string, disabled bool) error {
-	return u.change(ctx, login, !disabled, func(ctx context.Context, login string) error {
+	return u.change(ctx, login, !disabled, func(ctx context.Context, tx pgx.Tx, login string) error {
 		var at any
 		if disabled {
 			at = time.Now()
 		}
-		tag, err := u.gate.Exec(ctx,
+		tag, err := tx.Exec(ctx,
 			`UPDATE users SET disabled_at = $2 WHERE login = $1`, login, at)
 		if err != nil {
 			return err
@@ -344,27 +346,60 @@ func (u *Users) SetDisabled(ctx context.Context, login string, disabled bool) er
 	})
 }
 
+// workshopGuardKey — замок оберега мастерской.
+//
+// Число само по себе ничего не значит и выбрано раз и навсегда; значение
+// имеет только то, что его берут все, кто снимает право мастерской, и
+// никто больше.
+const workshopGuardKey = 4716_2026
+
 // change применяет правку, если после неё в мастерскую останется кому
 // войти.
 //
 // Считается не «сам ли ты это делаешь», а сколько таких людей останется:
 // запрет снимать право с себя обходится в два хода через второго
 // пользователя, и запирается установка так же насмерть.
+//
+// # Почему замок, а не просто счёт
+//
+// Счёт и правка — два действия, и между ними помещается чужая правка.
+// Два снятия, пришедшие разом, видели друг друга живыми и проходили оба:
+// из сорока кругов тридцать девять оставляли установку без единого
+// человека с правом мастерской — то есть ровно в том положении, ради
+// предотвращения которого оберег и написан. Лечится оно руками на
+// контуре, и увидеть его заранее нельзя: каждое снятие по отдельности
+// выглядит разрешённым, и таким и было в тот миг, когда его проверяли.
+//
+// Замок взят на всю правку, а не на строки счёта: `FOR UPDATE` по
+// оставшимся мастерам развёл бы два снятия во взаимное ожидание — первое
+// держит строку второго, второе первого, — и вместо внятного отказа
+// человек получил бы «обнаружен тупик». Правка эта редкая: заводят и
+// отключают людей единицами в год, и очередь из двух здесь не стоила
+// ничего.
+//
+// Замок берут только снимающие право. Выдающие его и не трогающие
+// мастерскую правки число мастеров не уменьшают, и ждать им нечего.
 func (u *Users) change(ctx context.Context, login string, keepsWorkshop bool,
-	apply func(context.Context, string) error) error {
+	apply func(context.Context, pgx.Tx, string) error) error {
 	login = strings.TrimSpace(strings.ToLower(login))
-	if !keepsWorkshop {
-		var others int
-		err := u.gate.QueryRow(ctx, `
-			SELECT count(*) FROM users
-			 WHERE login <> $1 AND disabled_at IS NULL
-			   AND $2 = ANY (permissions)`, login, string(PermWorkshop)).Scan(&others)
-		if err != nil {
-			return err
+	return u.gate.InTx(ctx, func(tx pgx.Tx) error {
+		if !keepsWorkshop {
+			if _, err := tx.Exec(ctx,
+				`SELECT pg_advisory_xact_lock($1)`, workshopGuardKey); err != nil {
+				return fmt.Errorf("оберег мастерской не взят: %w", err)
+			}
+			var others int
+			err := tx.QueryRow(ctx, `
+				SELECT count(*) FROM users
+				 WHERE login <> $1 AND disabled_at IS NULL
+				   AND $2 = ANY (permissions)`, login, string(PermWorkshop)).Scan(&others)
+			if err != nil {
+				return err
+			}
+			if others == 0 {
+				return ErrLastWorkshop
+			}
 		}
-		if others == 0 {
-			return ErrLastWorkshop
-		}
-	}
-	return apply(ctx, login)
+		return apply(ctx, tx, login)
+	})
 }

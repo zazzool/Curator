@@ -77,7 +77,7 @@ func TestPgПлатныйНаборЗакрытПокаНеКуплен(t *testi
 	slug := набор(t, gate)
 	id := врач(t, gate)
 
-	if err := prices.Set(ctx, "pack:"+slug, 39900, true); err != nil {
+	if err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, true); err != nil {
 		t.Fatal(err)
 	}
 	ok, err := access.Allowed(ctx, id, slug, time.Now())
@@ -112,7 +112,7 @@ func TestPgПодпискаОткрываетВсеНаборы(t *testing.T) {
 	id := врач(t, gate)
 
 	for _, slug := range []string{первый, второй} {
-		if err := prices.Set(ctx, "pack:"+slug, 39900, true); err != nil {
+		if err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, true); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -140,7 +140,7 @@ func TestPgИстёкшаяПодпискаНеОткрываетНичего(t 
 	ctx := context.Background()
 	slug := набор(t, gate)
 	id := врач(t, gate)
-	if err := prices.Set(ctx, "pack:"+slug, 39900, true); err != nil {
+	if err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -209,7 +209,7 @@ func TestPgПовторНеОформляетВторойПлатёж(t *testing
 	ctx := context.Background()
 	slug := набор(t, gate)
 	id := врач(t, gate)
-	if err := prices.Set(ctx, "pack:"+slug, 39900, true); err != nil {
+	if err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -250,7 +250,7 @@ func TestPgВозвратОтзываетПравоВыданноеЭтимПл�
 	ctx := context.Background()
 	slug := набор(t, gate)
 	id := врач(t, gate)
-	if err := prices.Set(ctx, "pack:"+slug, 39900, true); err != nil {
+	if err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -292,7 +292,7 @@ func TestPgПовторныйВозвратОтказывает(t *testing.T) {
 	payments, prices := NewPayments(gate), NewPrices(gate)
 	ctx := context.Background()
 	slug := набор(t, gate)
-	if err := prices.Set(ctx, "pack:"+slug, 39900, true); err != nil {
+	if err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, true); err != nil {
 		t.Fatal(err)
 	}
 	out, err := payments.Accept(ctx, Income{
@@ -350,7 +350,7 @@ func TestPgЦенаВНольНеПринимается(t *testing.T) {
 	// Ноль выглядит ценой и таковой не является. Бесплатный набор делается
 	// выключением цены, и это видно в студии.
 	gate := testGate(t)
-	if err := NewPrices(gate).Set(context.Background(), "pack:"+набор(t, gate), 0, true); err == nil {
+	if err := NewPrices(gate).Set(context.Background(), "проверка", "pack:"+набор(t, gate), 0, true); err == nil {
 		t.Error("цена в ноль принята")
 	}
 }
@@ -362,13 +362,13 @@ func TestPgВыключеннаяЦенаДелаетНаборБесплатн�
 	slug := набор(t, gate)
 	id := врач(t, gate)
 
-	if err := prices.Set(ctx, "pack:"+slug, 39900, true); err != nil {
+	if err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, true); err != nil {
 		t.Fatal(err)
 	}
 	if ok, _ := access.Allowed(ctx, id, slug, time.Now()); ok {
 		t.Fatal("платный набор открыт без покупки")
 	}
-	if err := prices.Set(ctx, "pack:"+slug, 39900, false); err != nil {
+	if err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, false); err != nil {
 		t.Fatal(err)
 	}
 	ok, err := access.Allowed(ctx, id, slug, time.Now())
@@ -667,5 +667,93 @@ func TestPgПовторТемЖеПриходомОтдаётПрежнийПл�
 	}
 	if платежей != 1 {
 		t.Errorf("платежей %d, а деньги приходили один раз", платежей)
+	}
+}
+
+// Набор, ставший бесплатным, оставляет след в журнале.
+//
+// Выключение цены — предусмотренный способ сделать набор бесплатным, и
+// беда была не в способе, а в том, что след оставался только в самой
+// строке цены: без ответа на «кто» и «что было до». Вопрос этот задают
+// один раз и ровно тогда, когда деньги уже не пришли.
+func TestPgВыключеннаяЦенаПопадаетВЖурнал(t *testing.T) {
+	gate := testGate(t)
+	prices := NewPrices(gate)
+	ctx := context.Background()
+	slug := набор(t, gate)
+
+	if err := prices.Set(ctx, "составитель", "pack:"+slug, 39900, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := prices.Set(ctx, "составитель", "pack:"+slug, 39900, false); err != nil {
+		t.Fatal(err)
+	}
+
+	var by string
+	var details map[string]any
+	err := gate.QueryRow(ctx, `
+		SELECT user_login, details FROM admin_journal
+		 WHERE action = 'price:set' AND subject = $1
+		 ORDER BY id DESC LIMIT 1`, "pack:"+slug).Scan(&by, &details)
+	if err != nil {
+		t.Fatalf("следа в журнале нет: %v", err)
+	}
+	if by != "составитель" {
+		t.Errorf("журнал не помнит, кто выключил цену: %q", by)
+	}
+	if details["becameFree"] != true {
+		t.Errorf("журнал не называет переход в бесплатное: %v", details)
+	}
+	if details["wasKopecks"] != float64(39900) {
+		t.Errorf("журнал не помнит прежней цены: %v", details["wasKopecks"])
+	}
+}
+
+// Заведение цены переходом в бесплатное не считается.
+//
+// Иначе журнал наполнился бы строками «стал бесплатным» о наборах,
+// которые бесплатными были всегда, и настоящий переход потерялся бы среди
+// них — то есть журнал был бы, а ответа в нём не было бы.
+func TestPgЗаведениеЦеныНеСчитаетсяПереходомВБесплатное(t *testing.T) {
+	gate := testGate(t)
+	prices := NewPrices(gate)
+	ctx := context.Background()
+	slug := набор(t, gate)
+
+	if err := prices.Set(ctx, "составитель", "pack:"+slug, 19900, true); err != nil {
+		t.Fatal(err)
+	}
+	var details map[string]any
+	if err := gate.QueryRow(ctx, `
+		SELECT details FROM admin_journal
+		 WHERE action = 'price:set' AND subject = $1
+		 ORDER BY id DESC LIMIT 1`, "pack:"+slug).Scan(&details); err != nil {
+		t.Fatal(err)
+	}
+	if details["becameFree"] != false {
+		t.Errorf("первое заведение цены записано как переход в бесплатное: %v", details)
+	}
+}
+
+// Негодная цена не оставляет ни цены, ни записи в журнале.
+//
+// Запись о том, чего не случилось, хуже её отсутствия: по журналу потом
+// и восстанавливают, что было.
+func TestPgОтвергнутаяЦенаНеПишетВЖурнал(t *testing.T) {
+	gate := testGate(t)
+	prices := NewPrices(gate)
+	ctx := context.Background()
+	slug := набор(t, gate)
+
+	if err := prices.Set(ctx, "составитель", "pack:"+slug, 0, true); err == nil {
+		t.Fatal("цена в ноль принята")
+	}
+	var n int
+	if err := gate.QueryRow(ctx,
+		`SELECT count(*) FROM admin_journal WHERE subject = $1`, "pack:"+slug).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("отвергнутая цена оставила %d записей в журнале", n)
 	}
 }

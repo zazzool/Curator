@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand/v2"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -425,5 +426,60 @@ func TestНулевоеЧислоСнимковНеОзначаетСтерет�
 	}
 	if removed != 0 {
 		t.Fatalf("с незаданным числом снимков убрано %d", removed)
+	}
+}
+
+// Пароль не уезжает в доводы команды.
+//
+// `ps` на хосте виден всякому, кто на него вошёл, и строка подключения
+// доводом — это пароль от боевой базы на виду. Правило это записано в
+// docker-compose.yml нашими же словами, и здесь же нарушалось.
+func TestПарольУходитВОкружениеАНеВДоводы(t *testing.T) {
+	// Пароль записан в строке как положено — с обходом знаков, — а в
+	// окружение обязан уехать разобранным: PGPASSWORD читают как есть, и
+	// уехавшее туда `p%40ss` не подойдёт к базе, где пароль `p@ss`.
+	const secret = "p@ss:word/тайна"
+	shown, env, err := hidePassword(
+		"postgresql://curator:" + url.QueryEscape(secret) + "@db:5432/curator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(shown, secret) {
+		t.Errorf("пароль остался в доводе: %s", shown)
+	}
+	if !strings.Contains(shown, "curator@db:5432/curator") {
+		t.Errorf("вместе с паролем потерялось и остальное: %s", shown)
+	}
+	found := false
+	for _, one := range env {
+		if one == "PGPASSWORD="+secret {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("пароля нет и в окружении: подключиться будет нечем")
+	}
+}
+
+// Строка не в виде URL — отказ, а не тихая передача как есть.
+//
+// Разобрать `host=… password=…` правильно — это повторить разбор libpq, а
+// повторённый наполовину он отдаст pg_dump не ту базу. Снимок, снятый не
+// с той базы, выглядит как снимок.
+func TestСтрокаНеURLОтвергается(t *testing.T) {
+	if _, _, err := hidePassword("host=db user=curator password=тайна"); err == nil {
+		t.Fatal("строка в виде ключей принята молча")
+	}
+}
+
+// Строка без пароля проходит как есть.
+func TestБезПароляСтрокаНеМеняется(t *testing.T) {
+	const dsn = "postgres://curator@127.0.0.1:5432/curator?sslmode=disable"
+	shown, _, err := hidePassword(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shown != dsn {
+		t.Errorf("строка без пароля изменилась: %s", shown)
 	}
 }

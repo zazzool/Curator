@@ -250,7 +250,8 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 		if len(seal) == 0 {
 			log.Print("CURATOR_SECRET_KEY не задан: секреты аутентификаторов лежат в базе открытым текстом")
 		}
-		desk := studio.NewDesk(studio.NewUsers(gate, seal), studio.NewSessions(gate))
+		sessions := studio.NewSessions(gate)
+		desk := studio.NewDesk(studio.NewUsers(gate, seal), sessions)
 		studio.Routes(desk)
 		studio.UserRoutes(desk)
 		source.Routes(desk, source.NewStore(gate))
@@ -262,6 +263,7 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 		rollup := analytics.NewRollup(gate)
 		analytics.Routes(desk, rollup)
 		go sweep(ctx, rollup)
+		go housekeeping(ctx, sessions, llmusage.NewStore(gate))
 
 		// Снимки базы. Задачи, разметка и разборы существуют в одном
 		// экземпляре: разбор источника и генерация стоят денег и времени
@@ -328,6 +330,68 @@ func sweep(ctx context.Context, rollup *analytics.Rollup) {
 			if touched > 0 {
 				log.Printf("решаемость сведена: задач %d", touched)
 			}
+		}
+	}
+}
+
+// housekeeping убирает то, что копится само: истёкшие сессии студии и
+// тела обращений к моделям.
+//
+// Оба уборщика были написаны и объяснены, и оба не звались ниоткуда,
+// кроме проверок. Нашёл это аудит, а не отказ, — и не мог бы найти иначе:
+// не позванный уборщик не роняет ничего, он просто копит. Таблица сессий
+// превращалась в журнал входов, которого никто не заводил, а в llm_calls
+// вечно лежали полные тела запросов и ответов модели.
+//
+// # Почему отдельная петля, а не общая со сведением решаемости
+//
+// Та идёт раз в пять минут, потому что отчёт должен быть свежим. Убирать
+// с той же частотой — это двести восемьдесят восемь проходов в сутки
+// ради работы, которой хватает одного, и каждый из них перебирает те же
+// строки. Раз в сутки здесь не осторожность, а верный срок.
+//
+// # Почему проход делается сразу, а не через сутки
+//
+// Тикер срабатывает через свой промежуток, и служба, которую
+// перезапускают чаще раза в сутки — а выкатка это и делает, — не убрала
+// бы ни разу. Беда та же, что и у самих уборщиков: ничего не падает,
+// просто не убирается.
+//
+// Отказ не валит службу: уборка — не работа врача. Не убранное этим
+// проходом уберёт следующий.
+func housekeeping(ctx context.Context, sessions *studio.Sessions, ledger *llmusage.Store) {
+	const every = 24 * time.Hour
+
+	// Месяц: журнал нужен, пока сбой разбирают, а не вечно. Числа учёта
+	// при этом остаются навсегда — сводка расходов за всё время обязана
+	// оставаться правдой, и убираются именно тела.
+	const keepBodies = 30 * 24 * time.Hour
+
+	run := func() {
+		runCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		defer cancel()
+		now := time.Now()
+		if n, err := sessions.Sweep(runCtx, now); err != nil {
+			log.Printf("истёкшие сессии не убраны: %v", err)
+		} else if n > 0 {
+			log.Printf("истёкших сессий убрано: %d", n)
+		}
+		if n, err := ledger.Sweep(runCtx, keepBodies, now); err != nil {
+			log.Printf("старые тела обращений не убраны: %v", err)
+		} else if n > 0 {
+			log.Printf("тел обращений к моделям убрано: %d", n)
+		}
+	}
+
+	run()
+	tick := time.NewTicker(every)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			run()
 		}
 	}
 }
