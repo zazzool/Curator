@@ -7,6 +7,7 @@ import { ApiError, api } from './api'
 import { Loaded, useResource } from './useResource'
 import { confirmed } from './confirm'
 import type { Me, Prompt, StudioUser } from './api'
+import { Banner } from './components/Banner'
 
 // Мастерская: пользователи студии, задания моделям и ключи программ.
 //
@@ -130,14 +131,14 @@ function Users({ me }: { me: Me }) {
         <p className="hint">Пользователей заводит тот, кому выдано право «мастерская».</p>
       )}
 
-      {failure && <p className="banner error">{failure}</p>}
+      {failure && <Banner kind="error">{failure}</Banner>}
 
       {made && (
-        <p className="banner success">
+        <Banner kind="success">
           Вход «{made.login}» заведён. {made.note}
           <br />
           <span className="mono">{made.secret}</span>
-        </p>
+        </Banner>
       )}
 
       <div className="page-section">
@@ -376,8 +377,8 @@ function Prompts({ me }: { me: Me }) {
       </p>
       {!canEdit && <p className="hint">Задания правит тот, кому выдано право «задания».</p>}
 
-      {failure && <p className="banner error">{failure}</p>}
-      {note && <p className="banner success">{note}</p>}
+      {failure && <Banner kind="error">{failure}</Banner>}
+      {note && <Banner kind="success">{note}</Banner>}
 
       <div className="page-section">
         <Loaded from={prompts}>
@@ -428,11 +429,11 @@ function Prompts({ me }: { me: Me }) {
             />
           </label>
           {restored !== '' && (
-            <p className="banner" role="status">
+            <Banner kind="info">
               Восстановлено несохранённое от {датойИвременем(restored)}. Сохранённое
               на сервере не тронуто — нажмите «Вернуть сохранённое», если
               этот черновик не нужен.
-            </p>
+            </Banner>
           )}
           <p className="hint">
             Редакция сверяется при сохранении: двое, открывшие одно задание,
@@ -542,14 +543,14 @@ function AppKeys({ me }: { me: Me }) {
         <p className="hint">Ключи заводит тот, кому выдано право «мастерская».</p>
       )}
 
-      {failure && <p className="banner error">{failure}</p>}
+      {failure && <Banner kind="error">{failure}</Banner>}
 
       {issued && (
-        <p className="banner success">
+        <Banner kind="success">
           Ключ {issued.keyId} заведён. {issued.note}
           <br />
           <span className="mono">{issued.key}</span>
-        </p>
+        </Banner>
       )}
 
       <div className="page-section">

@@ -6,6 +6,7 @@ import { ApiError, api } from './api'
 import { Loaded, useResource } from './useResource'
 import { askReason, confirmed } from './confirm'
 import type { Client, Entitlement, Me, Pack, Payment } from './api'
+import { Banner } from './components/Banner'
 
 // Продажи: кому продано, за что и почём.
 //
@@ -108,8 +109,8 @@ function Prices({ me }: { me: Me }) {
         <p className="hint">Цены меняет тот, кому выдано право «продажи».</p>
       )}
 
-      {failure && <p className="banner error">{failure}</p>}
-      {note && <p className="banner success">{note}</p>}
+      {failure && <Banner kind="error">{failure}</Banner>}
+      {note && <Banner kind="success">{note}</Banner>}
 
       <div className="page-section">
         <Loaded from={prices} while="Читаем цены…">
@@ -411,8 +412,8 @@ function ClientCard({ me, id, onBack }: { me: Me; id: number; onBack: () => void
         {client.lastSeen ? ` · был ${датой(client.lastSeen)}` : ' · ни разу не заходил'}
       </p>
 
-      {failure && <p className="banner error">{failure}</p>}
-      {note && <p className="banner success">{note}</p>}
+      {failure && <Banner kind="error">{failure}</Banner>}
+      {note && <Banner kind="success">{note}</Banner>}
 
       <div className="page-section">
         <h3>Права</h3>

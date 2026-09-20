@@ -6,6 +6,7 @@ import { Loaded, useResource } from './useResource'
 import { confirmed } from './confirm'
 import type { Case, CaseBody, Fault, Me, Source } from './api'
 import { датойИвременем } from './words'
+import { Banner } from './components/Banner'
 
 // Задачи источника: что написано, что выверено, что раздаётся.
 //
@@ -103,7 +104,7 @@ export function Cases({ me, source, path }: { me: Me; source: Source; path: stri
         </label>
       </div>
 
-      {failure && <p className="banner error">{failure}</p>}
+      {failure && <Banner kind="error">{failure}</Banner>}
       {faults.length > 0 && (
         <ul className="units">
           {faults.map((fault, i) => (
@@ -113,7 +114,7 @@ export function Cases({ me, source, path }: { me: Me; source: Source; path: stri
           ))}
         </ul>
       )}
-      {note && <p className="banner success">{note}</p>}
+      {note && <Banner kind="success">{note}</Banner>}
 
       {!canWrite && (
         <p className="hint">
@@ -343,11 +344,11 @@ function CaseEditor({
       <p className="hint">
         {one.statusWord} · {one.unitPath} · редакция {one.revision}
       </p>
-      {failure && <p className="banner error">{failure}</p>}
+      {failure && <Banner kind="error">{failure}</Banner>}
       {restored !== '' && (
-        <p className="banner" role="status">
+        <Banner kind="info">
           Восстановлено несохранённое от {датойИвременем(restored)}.
-        </p>
+        </Banner>
       )}
 
       <label className="form-row">

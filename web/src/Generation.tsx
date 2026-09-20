@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { ApiError, api } from './api'
 import type { Draft, Job, Me, Source, Unit } from './api'
+import { Banner } from './components/Banner'
 
 // Генерация по источнику: заказать задачу, посмотреть очередь, прочитать
 // черновик.
@@ -137,7 +138,7 @@ export function Generation({
         )}
       </div>
 
-      {failure && <p className="banner error">{failure}</p>}
+      {failure && <Banner kind="error">{failure}</Banner>}
 
       {canOrder ? (
         <p className="hint">
@@ -247,8 +248,8 @@ function JobCard({ me, job, onClose }: { me: Me; job: Job; onClose: () => void }
         </h2>
         <button onClick={onClose}>Закрыть</button>
       </div>
-      {job.error && <p className="banner error">{job.error}</p>}
-      {failure && <p className="banner error">{failure}</p>}
+      {job.error && <Banner kind="error">{job.error}</Banner>}
+      {failure && <Banner kind="error">{failure}</Banner>}
       {!canAccept && drafts.length > 0 && (
         <p className="hint">
           Черновик принимает тот, кому выдано право «править задачи».
@@ -289,10 +290,10 @@ function JobCard({ me, job, onClose }: { me: Me; job: Job; onClose: () => void }
             </ul>
             <p className="hint">{draft.explanationMd}</p>
             {accepted[draft.id] ? (
-              <p className="banner success">
+              <Banner kind="success">
                 Задача заведена и лежит в черновиках. Выпустить её — в
                 разделе «Задачи».
-              </p>
+              </Banner>
             ) : (
               canAccept && (
                 <div className="form-actions">

@@ -424,63 +424,88 @@ class _OptionTile extends StatelessWidget {
       _OptionState.right => Icons.check,
       _OptionState.wrong => Icons.close,
     };
+    // Исход словами, а не одной картинкой.
+    //
+    // Довод про цвет выше был написан и наполовину не исполнен: голая
+    // `Icon` в дерево доступности не попадает вовсе, и незрячему врачу не
+    // говорилось ни «верно», ни «неверно» — вариант читался так же, как
+    // до ответа. То есть у того, кто не видит рамки, задача не
+    // разбиралась в принципе.
+    final outcome = switch (state) {
+      _OptionState.plain => null,
+      _OptionState.right => 'верно',
+      _OptionState.wrong => 'неверно',
+    };
 
     return Padding(
       padding: const EdgeInsets.only(bottom: Gap.md),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: Radii.surfaceAll,
-        splashColor: p.accent.withValues(alpha: 0.06),
-        highlightColor: p.accent.withValues(alpha: 0.04),
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(
-            horizontal: Gap.lg,
-            vertical: Gap.md,
-          ),
-          decoration: BoxDecoration(
-            color: p.surface,
-            // Волосяная граница, а не тень: тень допустима только у того,
-            // что физически висит над страницей.
-            border: Border.all(
-              color: color,
-              width: state == _OptionState.plain ? 1 : 1.5,
+      child: Semantics(
+        // Исход стоит ПЕРВЫМ: диктор читает подпись подряд, а врач ждёт
+        // ответа на «угадал или нет», а не пересказа варианта, который он
+        // только что выбрал сам.
+        label: outcome == null ? null : '$outcome.',
+        // Кнопкой вариант объявляется, только пока по нему можно
+        // ответить: после ответа это уже не кнопка, а результат, и
+        // «кнопка, недоступна» отправило бы врача её искать.
+        button: onTap != null,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: Radii.surfaceAll,
+          splashColor: p.accent.withValues(alpha: 0.06),
+          highlightColor: p.accent.withValues(alpha: 0.04),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(
+              horizontal: Gap.lg,
+              vertical: Gap.md,
             ),
-            borderRadius: Radii.surfaceAll,
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (option.label.isNotEmpty) ...[
-                // Метка в кружке постоянного размера: у меток «А» и «VIII»
-                // разная ширина, и без кружка текст вариантов начинается
-                // с разных мест.
-                Container(
-                  width: 26,
-                  height: 26,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(color: color),
-                  ),
-                  child: Text(
-                    option.label,
-                    style: AppType.label.copyWith(color: color),
-                  ),
-                ),
-                const SizedBox(width: Gap.md),
-              ],
-              Expanded(
-                child: Prose(
-                  option.text,
-                  style: AppType.body.copyWith(color: p.ink),
-                ),
+            decoration: BoxDecoration(
+              color: p.surface,
+              // Волосяная граница, а не тень: тень допустима только у того,
+              // что физически висит над страницей.
+              border: Border.all(
+                color: color,
+                width: state == _OptionState.plain ? 1 : 1.5,
               ),
-              if (mark != null) ...[
-                const SizedBox(width: Gap.md),
-                Icon(mark, size: 18, color: color),
+              borderRadius: Radii.surfaceAll,
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (option.label.isNotEmpty) ...[
+                  // Метка в кружке постоянного размера: у меток «А» и «VIII»
+                  // разная ширина, и без кружка текст вариантов начинается
+                  // с разных мест.
+                  Container(
+                    width: 26,
+                    height: 26,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: color),
+                    ),
+                    child: Text(
+                      option.label,
+                      style: AppType.label.copyWith(color: color),
+                    ),
+                  ),
+                  const SizedBox(width: Gap.md),
+                ],
+                Expanded(
+                  child: Prose(
+                    option.text,
+                    style: AppType.body.copyWith(color: p.ink),
+                  ),
+                ),
+                if (mark != null) ...[
+                  const SizedBox(width: Gap.md),
+                  // Картинка прячется от диктора намеренно: исход уже сказан
+                  // подписью выше, и второй раз он прозвучал бы как ещё
+                  // один вариант ответа.
+                  ExcludeSemantics(child: Icon(mark, size: 18, color: color)),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),

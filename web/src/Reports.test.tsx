@@ -96,7 +96,7 @@ describe('отчёты', () => {
   })
 
   it('срок переключается, и сервер спрашивается заново', async () => {
-    let asked: string[] = []
+    const asked: string[] = []
     vi.stubGlobal(
       'fetch',
       vi.fn((path: string) => {

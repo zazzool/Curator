@@ -8,7 +8,7 @@ import { Loaded, useResource } from './useResource'
 // Экран в одну строку: он и есть предмет проверки. Настоящие разделы
 // студии добавили бы к нему свои таблицы и свои отборы, и отказ читался бы
 // как отказ таблицы.
-function Экран({ read }: { read: () => Promise<string[]> }) {
+function Screen({ read }: { read: () => Promise<string[]> }) {
   const stable = useCallback(read, [read])
   const list = useResource(stable, 'Не прочитано')
   return (
@@ -26,7 +26,7 @@ function Экран({ read }: { read: () => Promise<string[]> }) {
 
 describe('чтение с сервера', () => {
   it('показывает прочитанное', async () => {
-    render(<Экран read={async () => ['первый', 'второй']} />)
+    render(<Screen read={async () => ['первый', 'второй']} />)
     expect(await screen.findByText('первый')).toBeTruthy()
     expect(screen.queryByText('Читаем список…')).toBeNull()
   })
@@ -37,7 +37,7 @@ describe('чтение с сервера', () => {
     // вечное «Читаем…» — студия говорила ему, что грузится то, чего не
     // будет никогда.
     render(
-      <Экран
+      <Screen
         read={async () => {
           throw new ApiError(403, 'Этот раздел вам не открыт', [])
         }}
@@ -49,7 +49,7 @@ describe('чтение с сервера', () => {
 
   it('отказ без слов заменяется своими словами', async () => {
     render(
-      <Экран
+      <Screen
         read={async () => {
           throw new Error('TypeError: Failed to fetch')
         }}
@@ -71,7 +71,7 @@ describe('чтение с сервера', () => {
         отпустить.push(resolve)
       })
 
-    function Дважды() {
+    function Twice() {
       const stable = useCallback(read, [])
       const list = useResource(stable, 'Не прочитано')
       return (
@@ -82,7 +82,7 @@ describe('чтение с сервера', () => {
       )
     }
 
-    render(<Дважды />)
+    render(<Twice />)
     await waitFor(() => expect(отпустить.length).toBe(1))
     fireEvent.click(screen.getByText('Ещё раз'))
     await waitFor(() => expect(отпустить.length).toBe(2))
@@ -104,7 +104,7 @@ describe('чтение с сервера', () => {
     let ответ = ['первый']
     const read = async () => ответ
 
-    function Снова() {
+    function Again() {
       const stable = useCallback(read, [])
       const list = useResource(stable, 'Не прочитано')
       return (
@@ -117,7 +117,7 @@ describe('чтение с сервера', () => {
       )
     }
 
-    render(<Снова />)
+    render(<Again />)
     expect(await screen.findByText('первый')).toBeTruthy()
     ответ = ['второй']
     fireEvent.click(screen.getByText('Ещё раз'))
@@ -134,7 +134,7 @@ describe('чтение с сервера', () => {
         отпустить.push(resolve)
       })
 
-    function Подмена() {
+    function Swap() {
       const stable = useCallback(read, [])
       const list = useResource(stable, 'Не прочитано')
       return (
@@ -145,7 +145,7 @@ describe('чтение с сервера', () => {
       )
     }
 
-    render(<Подмена />)
+    render(<Swap />)
     await waitFor(() => expect(отпустить.length).toBe(1))
     fireEvent.click(screen.getByText('Подменить'))
     expect(await screen.findByText('подменённое')).toBeTruthy()
@@ -162,7 +162,7 @@ describe('чтение без крючка', () => {
     // запросов. Признак у этого отказа никакой: страница просто «долго
     // думает», а сервер получает сотню запросов в секунду.
     const read = vi.fn(async () => ['один'])
-    render(<Экран read={read} />)
+    render(<Screen read={read} />)
     expect(await screen.findByText('один')).toBeTruthy()
     await new Promise((done) => setTimeout(done, 20))
     expect(read).toHaveBeenCalledTimes(1)

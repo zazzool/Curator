@@ -120,4 +120,75 @@ void main() {
     await tester.tap(find.text('Дальше'));
     expect(next, 1);
   });
+
+  testWidgets('исход варианта сказан словами, а не одним цветом', (
+    tester,
+  ) async {
+    // Довод в коде про цвет («цвет различают не все») был исполнен
+    // наполовину: рядом с вариантом рисовалась галочка или крестик, но
+    // голая Icon в дерево доступности не попадает вовсе. Незрячему врачу
+    // не говорилось ни «верно», ни «неверно» — после ответа вариант
+    // читался так же, как до него, и задача не разбиралась в принципе.
+
+    // Ручка дерева доступности гасится в теле проверки, а не через
+    // addTearDown: Flutter сверяет погашенные ручки раньше, чем зовёт
+    // уборку за проверкой, и отложенное гашение роняет проверку уже
+    // после того, как все сверки прошли.
+    final handle = tester.ensureSemantics();
+
+    final one = CaseItem.tryParse({
+      'id': 'c-2',
+      'unitLabel': 'F20.0',
+      'body': {
+        'title': 'Задача',
+        'kind': 'recognise',
+        'answer': 'Б',
+        'explanationMd': 'Потому что так',
+        'segments': [
+          {'text': 'Больной жалуется на…'},
+        ],
+        'options': [
+          {'label': 'А', 'text': 'Первый'},
+          {'label': 'Б', 'text': 'Второй'},
+        ],
+      },
+    })!;
+
+    // До ответа исхода нет ни у кого: сказанный заранее, он и есть ответ.
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: CaseView(
+            one: one,
+            chosen: null,
+            onChoose: (_) {},
+            onNext: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.bySemanticsLabel(RegExp('верно')), findsNothing);
+
+    // Ответили первым — он неверный, второй верный. Сказать надо про оба:
+    // врач, ответивший неверно, узнаёт правильный ответ здесь же.
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: CaseView(
+            one: one,
+            chosen: one.options.first,
+            onChoose: (_) {},
+            onNext: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.bySemanticsLabel(RegExp(r'^неверно\.')), findsOneWidget);
+    expect(find.bySemanticsLabel(RegExp(r'^верно\.')), findsOneWidget);
+
+    handle.dispose();
+  });
 }

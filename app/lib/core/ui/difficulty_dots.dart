@@ -8,6 +8,13 @@ import '../design/palette.dart';
 /// шкалы и подпись к точкам даёт вызывающий — иначе оформление потянуло
 /// бы за собой игровую механику. Открывать точкам нечего: трудность —
 /// свойство задачи и признак отбора, но не запрет.
+///
+/// # Уровень словами, а не только геометрией
+///
+/// До 20.09.2026 точки были чистой геометрией: читающему с экрана
+/// доставалось слово «трудность» из подписи рядом и НИКОГДА сам уровень.
+/// Четыре кружка по шесть пикселей в дерево доступности не попадают, и
+/// разницы между «лёгкая» и «на пределе» у него не было вовсе.
 class DifficultyDots extends StatelessWidget {
   // Точек четыре: шкала видна целиком, и «три из четырёх» отличимо от
   // «потолка».
@@ -19,23 +26,35 @@ class DifficultyDots extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = context.palette;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        for (var i = 1; i <= max; i++) ...[
-          // Зазор только между точками: хвостовой отступ сдвигал бы всю
-          // группу влево там, где её ставят к правому краю.
-          if (i > 1) const SizedBox(width: 3),
-          Container(
-            width: 6,
-            height: 6,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: i <= level ? p.inkMuted : p.hairline,
+    return Semantics(
+      // Одной подписью на всю группу: четыре узла подряд диктор прочтёт
+      // как четыре отдельных, и врач услышит «точка, точка, точка,
+      // точка» вместо «3 из 4».
+      //
+      // Слова «трудность» здесь нет намеренно, и это то же правило, что
+      // строкой выше: подпись к точкам даёт вызывающий. У него она уже
+      // стоит рядом видимым текстом, и сказанная ещё и тут прозвучала бы
+      // дважды подряд.
+      label: '$level из $max',
+      excludeSemantics: true,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var i = 1; i <= max; i++) ...[
+            // Зазор только между точками: хвостовой отступ сдвигал бы всю
+            // группу влево там, где её ставят к правому краю.
+            if (i > 1) const SizedBox(width: 3),
+            Container(
+              width: 6,
+              height: 6,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: i <= level ? p.inkMuted : p.hairline,
+              ),
             ),
-          ),
+          ],
         ],
-      ],
+      ),
     );
   }
 }
