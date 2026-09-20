@@ -436,6 +436,12 @@ CREATE TABLE IF NOT EXISTS rulebook (
     -- источник: источник здесь любой.
     scope         JSONB       NOT NULL DEFAULT '{}'::jsonb
                   CHECK (jsonb_typeof(scope) = 'object'),
+    -- Машинная проверка правила: предикат из закрытого каталога и его
+    -- параметры. NULL — правило проверяется только заданием модели.
+    -- Каталог живёт в коде (internal/rules/check.go), а не в схеме:
+    -- предикат без кода, который его исполняет, молча не срабатывает.
+    check_json    JSONB       NULL
+                  CHECK (check_json IS NULL OR jsonb_typeof(check_json) = 'object'),
     confirmations INTEGER     NOT NULL DEFAULT 0,
     -- Задания, уже подтвердившие правило. Отдельно от примеров: примеры
     -- обрезаются, и обрезка стирала бы память о подтвердивших заданиях —
@@ -607,6 +613,14 @@ CREATE TABLE IF NOT EXISTS case_drafts (
     cue_check      JSONB   NULL
                    CHECK (cue_check IS NULL
                           OR jsonb_typeof(cue_check) = 'object'),
+
+    -- Итог судьи: машинные проверки свода по готовому черновику.
+    -- NULL — судья не ходил; done: false — ходил и судить не смог
+    -- (свод не прочитан). Разница та же, что у детектора: задача,
+    -- которую никто не судил, не есть задача без нарушений.
+    rule_check     JSONB   NULL
+                   CHECK (rule_check IS NULL
+                          OR jsonb_typeof(rule_check) = 'object'),
 
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

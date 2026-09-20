@@ -32,7 +32,7 @@ func NewStore(gate *dbgate.Gate) *Store {
 func (s *Store) All(ctx context.Context) ([]Rule, error) {
 	rows, err := s.gate.Query(ctx,
 		`SELECT id, title, text, why, kind, source, status, pinned, scope,
-		        confirmations, seen_jobs, valid_from, valid_to,
+		        check_json, confirmations, seen_jobs, valid_from, valid_to,
 		        last_seen_at, created_at, updated_at
 		   FROM rulebook
 		  ORDER BY id`)
@@ -44,12 +44,15 @@ func (s *Store) All(ctx context.Context) ([]Rule, error) {
 	out := []Rule{}
 	for rows.Next() {
 		var r Rule
-		var scope []byte
+		var scope, check []byte
 		var lastSeen *time.Time
 		if err := rows.Scan(&r.ID, &r.Title, &r.Text, &r.Why, &r.Kind, &r.Source,
-			&r.Status, &r.Pinned, &scope, &r.Confirmations, &r.SeenJobs,
+			&r.Status, &r.Pinned, &scope, &check, &r.Confirmations, &r.SeenJobs,
 			&r.ValidFrom, &r.ValidTo, &lastSeen, &r.CreatedAt, &r.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("правило не прочитано: %w", err)
+		}
+		if err := readCheck(&r, check); err != nil {
+			return nil, err
 		}
 		if len(scope) > 0 {
 			// Непонятое не применяется: правило с испорченной областью
@@ -111,21 +114,26 @@ func (s *Store) Save(ctx context.Context, r Rule) (Rule, error) {
 	if !r.LastSeenAt.IsZero() {
 		lastSeen = &r.LastSeenAt
 	}
+	check, err := writeCheck(r)
+	if err != nil {
+		return Rule{}, err
+	}
 
 	_, err = s.gate.Exec(ctx,
 		`INSERT INTO rulebook (id, title, text, why, kind, source, status, pinned,
-		                    scope, confirmations, seen_jobs, valid_from, valid_to,
-		                    last_seen_at, updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+		                    scope, check_json, confirmations, seen_jobs, valid_from,
+		                    valid_to, last_seen_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 		 ON CONFLICT (id) DO UPDATE SET
 		     title = EXCLUDED.title, text = EXCLUDED.text, why = EXCLUDED.why,
 		     kind = EXCLUDED.kind, source = EXCLUDED.source,
 		     status = EXCLUDED.status, pinned = EXCLUDED.pinned,
-		     scope = EXCLUDED.scope, confirmations = EXCLUDED.confirmations,
+		     scope = EXCLUDED.scope, check_json = EXCLUDED.check_json,
+		     confirmations = EXCLUDED.confirmations,
 		     seen_jobs = EXCLUDED.seen_jobs, valid_to = EXCLUDED.valid_to,
 		     last_seen_at = EXCLUDED.last_seen_at, updated_at = EXCLUDED.updated_at`,
 		r.ID, r.Title, r.Text, r.Why, r.Kind, r.Source, r.Status, r.Pinned,
-		scope, r.Confirmations, seen, r.ValidFrom, r.ValidTo, lastSeen, r.UpdatedAt)
+		scope, check, r.Confirmations, seen, r.ValidFrom, r.ValidTo, lastSeen, r.UpdatedAt)
 	if err != nil {
 		return Rule{}, fmt.Errorf("правило %q не записано: %w", r.ID, err)
 	}
@@ -153,12 +161,16 @@ func (s *Store) Seed(ctx context.Context) error {
 			if err != nil {
 				return fmt.Errorf("область встроенного правила %q не записана: %w", r.ID, err)
 			}
+			check, err := writeCheck(r)
+			if err != nil {
+				return err
+			}
 			_, err = tx.Exec(ctx,
 				`INSERT INTO rulebook (id, title, text, why, kind, source, status,
-				                    scope, valid_from, created_at, updated_at)
-				 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,$9)
+				                    scope, check_json, valid_from, created_at, updated_at)
+				 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10,$10)
 				 ON CONFLICT (id) DO NOTHING`,
-				r.ID, r.Title, r.Text, r.Why, r.Kind, r.Source, r.Status, scope, now)
+				r.ID, r.Title, r.Text, r.Why, r.Kind, r.Source, r.Status, scope, check, now)
 			if err != nil {
 				return fmt.Errorf("встроенное правило %q не положено: %w", r.ID, err)
 			}
@@ -192,15 +204,15 @@ func (s *Store) Confirm(ctx context.Context, id string, jobID int64) (Rule, bool
 
 	err := s.gate.InTx(ctx, func(tx pgx.Tx) error {
 		var r Rule
-		var scope []byte
+		var scope, check []byte
 		var lastSeen *time.Time
 		err := tx.QueryRow(ctx,
-			`SELECT id, title, text, why, kind, source, status, pinned, scope,
+			`SELECT id, title, text, why, kind, source, status, pinned, scope, check_json,
 			        confirmations, seen_jobs, valid_from, valid_to,
 			        last_seen_at, created_at, updated_at
 			   FROM rulebook WHERE id = $1 FOR UPDATE`, id).
 			Scan(&r.ID, &r.Title, &r.Text, &r.Why, &r.Kind, &r.Source, &r.Status,
-				&r.Pinned, &scope, &r.Confirmations, &r.SeenJobs, &r.ValidFrom,
+				&r.Pinned, &scope, &check, &r.Confirmations, &r.SeenJobs, &r.ValidFrom,
 				&r.ValidTo, &lastSeen, &r.CreatedAt, &r.UpdatedAt)
 		if err != nil {
 			return fmt.Errorf("правило %q не прочитано для подтверждения: %w", id, err)
@@ -209,6 +221,9 @@ func (s *Store) Confirm(ctx context.Context, id string, jobID int64) (Rule, bool
 			if err := json.Unmarshal(scope, &r.Scope); err != nil {
 				return fmt.Errorf("область правила %q не разобрана: %w", id, err)
 			}
+		}
+		if err := readCheck(&r, check); err != nil {
+			return err
 		}
 		if lastSeen != nil {
 			r.LastSeenAt = *lastSeen
@@ -276,4 +291,37 @@ func (s *Store) Propose(ctx context.Context, r Rule, jobID int64) (Rule, bool, e
 		return Rule{}, false, fmt.Errorf("правило %q не заведено: %w", r.ID, err)
 	}
 	return s.Confirm(ctx, r.ID, jobID)
+}
+
+// readCheck разбирает записанную проверку.
+//
+// Непонятое не применяется: правило с испорченной проверкой отбрасывается
+// целиком, а не считается непроверяемым. Проверка, молча ставшая пустой,
+// хуже отсутствующей — на неё полагаются, а она не срабатывает никогда.
+func readCheck(r *Rule, raw []byte) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	var check Check
+	if err := json.Unmarshal(raw, &check); err != nil {
+		return fmt.Errorf("проверка правила %q не разобрана: %w", r.ID, err)
+	}
+	r.Check = &check
+	return nil
+}
+
+// writeCheck готовит проверку к записи.
+//
+// Отсутствие проверки уезжает в базу как NULL, а не как «{}»: пустой
+// объект прочитался бы обратно предикатом без рода, то есть проверкой,
+// которая есть и ничего не делает.
+func writeCheck(r Rule) ([]byte, error) {
+	if r.Check == nil {
+		return nil, nil
+	}
+	raw, err := json.Marshal(r.Check)
+	if err != nil {
+		return nil, fmt.Errorf("проверка правила %q не записана: %w", r.ID, err)
+	}
+	return raw, nil
 }

@@ -3,7 +3,18 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError, api } from './api'
 import { Loaded, useResource } from './useResource'
 import { go } from './router'
-import type { Check, CueCheck, Draft, Job, Me, Proofread, SiblingCheck, Source, Unit } from './api'
+import type {
+  Check,
+  CueCheck,
+  Draft,
+  Job,
+  Me,
+  Proofread,
+  RuleCheckResult,
+  SiblingCheck,
+  Source,
+  Unit,
+} from './api'
 import { Banner } from './components/Banner'
 
 /**
@@ -416,6 +427,7 @@ function JobCard({ me, job, onClose }: { me: Me; job: Job; onClose: () => void }
             <SiblingNote siblings={draft.siblings} />
             <ProofreadNote proofread={draft.proofread} />
             <CueNote cues={draft.cues} />
+            <RuleNote rules={draft.rules} />
             {accepted[draft.id] ? (
               // Выход к заведённой задаче даётся здесь же: принявший
               // черновик пришёл её выпускать, и искать её в списке
@@ -626,6 +638,49 @@ function CueNote({ cues }: { cues?: CueCheck }) {
       <ul className="cue-list">
         {найдено.map((c, i) => (
           <li key={i}>{c.message}</li>
+        ))}
+      </ul>
+    </>
+  )
+}
+
+/**
+ * Итог судьи — машинных проверок свода.
+ *
+ * Четыре исхода, и три из них легко слить в один по невнимательности.
+ * «Ни одно правило не проверяется машинно» — не чистота: свод может быть
+ * полон правил, у которых предиката нет, и тогда судья честно прошёл, не
+ * проверив ничего. Покажи мы на это «нарушений нет» — составитель решил
+ * бы, что свод стоит на страже, а он в этой задаче не стоял.
+ *
+ * Слова замечаний берутся из ответа сервера: напиши их здесь второй раз,
+ * и две записи одних слов разойдутся молча.
+ */
+function RuleNote({ rules }: { rules?: RuleCheckResult }) {
+  if (!rules) {
+    return <p className="hint">Свод по этому черновику не прогоняли: судья до него не дошёл.</p>
+  }
+  if (!rules.done) {
+    return (
+      <Banner kind="warning">
+        {rules.remark || 'Проверки свода не прогонялись: причина не записана.'}
+      </Banner>
+    )
+  }
+  const найдено = rules.findings ?? []
+  if (найдено.length === 0) {
+    return <p className="hint">{rules.remark || `Нарушений свода нет: прогнано правил — ${rules.checked}.`}</p>
+  }
+  // Полоса и список рядом, а не список внутри полосы: `Banner` — это
+  // абзац, и вложенный в абзац список браузер выносит наружу сам.
+  return (
+    <>
+      <Banner kind="error">{rules.remark}</Banner>
+      <ul className="cue-list">
+        {найдено.map((f, i) => (
+          <li key={i}>
+            {f.message} <span className="muted">— «{f.title}»</span>
+          </li>
         ))}
       </ul>
     </>

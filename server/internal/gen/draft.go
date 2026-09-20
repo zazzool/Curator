@@ -122,6 +122,10 @@ type Stored struct {
 	// Cues — итог детектора подсказок. Пусто — детектор не дошёл; внутри
 	// с done: false — дошёл и судить не смог, и причина названа.
 	Cues *CueCheck `json:"cues,omitempty"`
+
+	// Rules — итог судьи: машинные проверки свода. Пусто — судья не
+	// ходил; внутри с done: false — ходил и судить не смог.
+	Rules *RuleCheckResult `json:"rules,omitempty"`
 }
 
 // Condition — условие задачи целиком: склейка фрагментов.

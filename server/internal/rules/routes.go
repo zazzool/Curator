@@ -152,16 +152,22 @@ func ruleJSON(r Rule) map[string]any {
 		jobs = []int64{}
 	}
 	out := map[string]any{
-		"id":            r.ID,
-		"title":         r.Title,
-		"text":          r.Text,
-		"why":           r.Why,
-		"kind":          string(r.Kind),
-		"kindWord":      KindWord(r.Kind),
-		"source":        string(r.Source),
-		"status":        string(r.Status),
-		"pinned":        r.Pinned,
-		"scope":         r.Scope,
+		"id":       r.ID,
+		"title":    r.Title,
+		"text":     r.Text,
+		"why":      r.Why,
+		"kind":     string(r.Kind),
+		"kindWord": KindWord(r.Kind),
+		"source":   string(r.Source),
+		"status":   string(r.Status),
+		"pinned":   r.Pinned,
+		"scope":    r.Scope,
+		// Проверка отдаётся и записью, и фразой. Фраза считается ЗДЕСЬ,
+		// а не в студии: собери её там — и составитель читал бы в списке
+		// одно, а в журнале другое, разойдясь на первой же правке
+		// формулировки.
+		"check":         r.Check,
+		"checkWords":    Describe(r.Check),
 		"confirmations": r.Confirmations,
 		"seenJobs":      jobs,
 		"quorum":        Quorum,
