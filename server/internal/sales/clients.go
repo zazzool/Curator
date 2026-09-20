@@ -60,9 +60,19 @@ func (c *Clients) Find(ctx context.Context, query string, limit int) ([]Client, 
 	}
 	query = strings.TrimSpace(query)
 
-	// Номер разбирается отдельно и ищется точным равенством. Поиск номера
-	// подстрокой нашёл бы на «7» ещё и 17-го, и 70-го, — а оператор,
-	// которому врач назвал свой номер, ждёт одну строку.
+	// Запрос из одних цифр — это номер, и ищется он ТОЛЬКО точным
+	// равенством. Поиск номера подстрокой нашёл бы на «7» ещё и 17-го, и
+	// 70-го, а оператор, которому врач назвал свой номер, ждёт одну
+	// строку.
+	//
+	// Подстрока при этом не добавляется вторым доводом, и это не мелочь:
+	// цифры живут и в почте (ivanov1985@…), и в имени, так что «найти по
+	// номеру ИЛИ по подстроке» возвращает номер плюс всех, у кого эти
+	// цифры где-нибудь встретились. Сторож поймал это ровно так: поиск по
+	// номеру нашёл две записи вместо одной. Цену размена называем вслух:
+	// по куску почты, состоящему из одних цифр, искать теперь нельзя —
+	// оператор назовёт хоть одну букву или собаку, и поиск снова станет
+	// подстрочным.
 	var byID int64
 	if n, err := strconv.ParseInt(query, 10, 64); err == nil && n > 0 {
 		byID = n
@@ -76,9 +86,10 @@ func (c *Clients) Find(ctx context.Context, query string, limit int) ([]Client, 
 		         WHERE e.account_id = a.id AND e.revoked_at IS NULL
 		           AND (e.expires_at IS NULL OR e.expires_at > NOW()))
 		  FROM accounts a
-		 WHERE $1 = '' OR a.id = $2
-		       OR coalesce(a.email, '') ILIKE '%' || $1 || '%'
-		       OR a.display_name ILIKE '%' || $1 || '%'
+		 WHERE $1 = ''
+		    OR ($2 > 0 AND a.id = $2)
+		    OR ($2 = 0 AND (coalesce(a.email, '') ILIKE '%' || $1 || '%'
+		                 OR a.display_name ILIKE '%' || $1 || '%'))
 		 ORDER BY a.id DESC
 		 LIMIT $3`, query, byID, limit)
 	if err != nil {

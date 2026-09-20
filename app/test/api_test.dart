@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:curator/account/account.dart';
 import 'package:curator/api/client.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -37,6 +38,61 @@ void main() {
     expect(taken.headers['authorization'], '');
     expect(jsonDecode(taken.body)['platform'], 'android');
   });
+
+  test('возврат доступа идёт с ключом сборки и без токена', () async {
+    // Врач приходит сюда ровно тогда, когда токена у него уже нет: телефон
+    // сменился, приложение поставлено заново. Уйди запрос с заголовком
+    // входа — сервер отказал бы «устройство не опознано», и врач пошёл бы
+    // переустанавливать исправное приложение.
+    await tokens.write('старый-токен');
+    server.replies.add(Reply(202, {'sent': true}));
+
+    await api.startRecovery('  VN@Example.COM  ');
+
+    final taken = server.taken.single;
+    expect(taken.path, '/v1/recovery');
+    expect(taken.headers['x-app-key'], 'app-key-1');
+    expect(taken.headers['authorization'], '');
+    // Пробелы срезаются здесь: уехавший на сервер пробел вернулся бы
+    // адресом с пробелом, и врач вспоминал бы не тот адрес.
+    expect(jsonDecode(taken.body)['email'], 'VN@Example.COM');
+  });
+
+  test('вернувшийся доступ перезаписывает токен устройства', () async {
+    await tokens.write('старый-токен');
+    server.replies.add(
+      Reply(201, {'token': 'т-новый', 'accountId': 7, 'deviceId': 11}),
+    );
+
+    await api.confirmRecovery(
+      'vn@example.com',
+      ' 123456 ',
+      platform: 'android',
+    );
+
+    expect(await tokens.read(), 'т-новый');
+    final body = jsonDecode(server.taken.single.body);
+    expect(body['code'], '123456');
+    expect(body['email'], 'vn@example.com');
+  });
+
+  test(
+    'возврат доступа без токена в ответе отказывает и НЕ трогает прежний',
+    () async {
+      // Пустой токен, принятый за правду, стёр бы вход, который работал:
+      // врач остался бы и без прежней записи, и без вернувшейся.
+      await tokens.write('старый-токен');
+      server.replies.add(Reply(201, {'accountId': 7}));
+
+      await expectLater(
+        api.confirmRecovery('vn@example.com', '123456'),
+        throwsA(
+          isA<ApiFailure>().having((e) => e.message, 'текст', isNotEmpty),
+        ),
+      );
+      expect(await tokens.read(), 'старый-токен');
+    },
+  );
 
   test('заведение без токена в ответе отказывает словами', () async {
     // Пустой токен, принятый за правду, оставил бы приложение навсегда
@@ -161,5 +217,38 @@ void main() {
     );
     // Чтобы tearDown не снимал снятое дважды.
     server = await FakeServer.start();
+  });
+
+  group('запись врача', () {
+    // Обрезка живёт здесь, а не на экране: экран отдаёт набранное как
+    // есть, и проверка экрана на подменённой записи проверила бы саму
+    // подмену, а не код. Пробел, уехавший на сервер, вернулся бы оттуда
+    // именем — и адресом — с пробелом.
+    test('имя и адрес уходят обрезанными', () async {
+      await tokens.write('t-1');
+      final account = Account(api);
+
+      server.replies.add(Reply(200, {}));
+      await account.rename('  Пётр Петрович  ');
+      expect(
+        jsonDecode(server.taken.last.body)['displayName'],
+        'Пётр Петрович',
+      );
+
+      server.replies.add(Reply(202, {'sent': true}));
+      await account.startBind('  vn@example.com  ');
+      expect(jsonDecode(server.taken.last.body)['email'], 'vn@example.com');
+    });
+
+    test('привязанный адрес берётся из ответа, а не из набранного', () async {
+      // Сервер сводит адрес к одному виду — снимает регистр и пробелы.
+      // Покажи мы набранное, врач запомнил бы не тот адрес, по которому
+      // потом будет возвращать доступ.
+      await tokens.write('t-1');
+      server.replies.add(Reply(200, {'email': 'vn@example.com'}));
+
+      expect(await Account(api).confirmBind(' 123456 '), 'vn@example.com');
+      expect(jsonDecode(server.taken.last.body)['code'], '123456');
+    });
   });
 }
