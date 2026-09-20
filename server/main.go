@@ -437,6 +437,7 @@ func generation(ctx context.Context, gate *dbgate.Gate, desk *studio.Desk, sourc
 	if err := rulebook.Seed(seedCtx); err != nil {
 		log.Printf("встроенные правила не положены: %v", err)
 	}
+	rules.Routes(desk, rulebook)
 
 	providers := llmProviders()
 	if len(providers) == 0 {

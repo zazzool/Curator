@@ -65,21 +65,66 @@ const КЛЮЧИ = {
   ],
 }
 
-// Мастерская ходит за тремя списками сразу, и подставлять их надо все
-// три: экран, которому не ответили, остаётся в «Читаем…» и молча уводит
-// проверку от того, что она проверяет.
-function ответ(path: string, prompts: unknown, keys: unknown, users: unknown) {
+const СВОД = {
+  rules: [
+    {
+      id: 'builtin:no-label',
+      title: 'Метки единицы в условии не бывает',
+      text: 'Не пиши в условии метку единицы источника.',
+      why: 'Метка снимает задачу целиком, а выглядит добросовестной ссылкой.',
+      kind: 'structure',
+      kindWord: 'устройство',
+      source: 'builtin',
+      status: 'active',
+      pinned: false,
+      scope: { nodes: ['compose'] },
+      confirmations: 5,
+      seenJobs: [1, 2, 3, 4, 5],
+      quorum: 3,
+      validFrom: '2026-09-01T10:00:00Z',
+      updatedAt: '2026-09-20T10:00:00Z',
+    },
+    {
+      id: 'lint:term:7:риту',
+      title: 'Слово «ритуально» в условии',
+      text: 'Не пиши в условии слово «ритуально» и однокоренные.',
+      why: 'Слово протекало в условия по источнику «Приказ № 1130н».',
+      kind: 'substance',
+      kindWord: 'существо',
+      source: 'lint',
+      status: 'candidate',
+      pinned: false,
+      scope: { sources: [7], nodes: ['compose'] },
+      confirmations: 2,
+      seenJobs: [11, 12],
+      quorum: 3,
+      validFrom: '2026-09-19T10:00:00Z',
+      updatedAt: '2026-09-20T10:00:00Z',
+    },
+  ],
+}
+
+// Мастерская ходит за четырьмя списками сразу, и подставлять их надо все
+// четыре: экран, которому не ответили, остаётся в «Читаем…» и молча
+// уводит проверку от того, что она проверяет.
+function ответ(path: string, prompts: unknown, keys: unknown, users: unknown, rules: unknown) {
   if (path.startsWith('/admin/api/prompts')) return prompts
   if (path.startsWith('/admin/api/users')) return users
+  if (path.startsWith('/admin/api/rules')) return rules
   return keys
 }
 
-function serve(prompts: unknown, keys: unknown, users: unknown = ПОЛЬЗОВАТЕЛИ) {
+function serve(
+  prompts: unknown,
+  keys: unknown,
+  users: unknown = ПОЛЬЗОВАТЕЛИ,
+  rules: unknown = СВОД,
+) {
   vi.stubGlobal(
     'fetch',
     vi.fn((path: string) =>
       Promise.resolve(
-        new Response(JSON.stringify(ответ(path, prompts, keys, users)), { status: 200 }),
+        new Response(JSON.stringify(ответ(path, prompts, keys, users, rules)), { status: 200 }),
       ),
     ),
   )
@@ -192,7 +237,7 @@ describe('мастерская', () => {
           return Promise.resolve(new Response(JSON.stringify({ revision: 5 }), { status: 200 }))
         }
         return Promise.resolve(
-          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ)), {
+          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ, СВОД)), {
             status: 200,
           }),
         )
@@ -228,7 +273,7 @@ describe('мастерская', () => {
           )
         }
         return Promise.resolve(
-          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ)), {
+          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ, СВОД)), {
             status: 200,
           }),
         )
@@ -255,7 +300,7 @@ describe('мастерская', () => {
           )
         }
         return Promise.resolve(
-          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ)), {
+          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ, СВОД)), {
             status: 200,
           }),
         )
@@ -282,7 +327,9 @@ describe('мастерская', () => {
     await screen.findByText('Черновик задачи')
     expect(screen.queryByText('Завести ключ')).toBeNull()
     expect(screen.queryByText('Завести вход')).toBeNull()
-    expect(screen.getByText(/кому выдано право «задания»/)).toBeTruthy()
+    // Право «задания» держит и задания моделям, и свод правил: оба
+    // раздела говорят об этом своими словами.
+    expect(screen.getAllByText(/кому выдано право «задания»/)).toHaveLength(2)
     // Оба раздела мастерской говорят, кто держит право: скрытое действие
     // без объяснения выглядит поломкой, а не запретом.
     expect(screen.getAllByText(/кому выдано право «мастерская»/)).toHaveLength(2)
@@ -321,7 +368,7 @@ describe('мастерская', () => {
           )
         }
         return Promise.resolve(
-          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ)), {
+          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ, СВОД)), {
             status: 200,
           }),
         )
@@ -355,7 +402,7 @@ describe('мастерская', () => {
           )
         }
         return Promise.resolve(
-          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ)), {
+          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ, СВОД)), {
             status: 200,
           }),
         )
@@ -365,5 +412,80 @@ describe('мастерская', () => {
     await screen.findByText('Бывший составитель')
     fireEvent.click(screen.getAllByRole('button', { name: 'Закрыть вход' })[0]!)
     expect(await screen.findByText(/последний человек с правом мастерской/)).toBeTruthy()
+  })
+
+  it('копящееся правило показано числом, а не одним словом', async () => {
+    // «Кандидат» без числа читается как «сломалось»: составитель идёт
+    // чинить то, что работает. «2 из 3» читается как «копится», и делать
+    // при этом не надо ничего.
+    render(<Workshop me={МАСТЕР} />)
+    expect(await screen.findByText('копится: 2 из 3')).toBeTruthy()
+    expect(screen.getByText('действует')).toBeTruthy()
+  })
+
+  it('видно, откуда правило взялось', async () => {
+    // Правило, выведенное из замечаний, и правило, написанное человеком,
+    // — разной силы при споре, и составитель обязан различать их
+    // взглядом: гасить чужое накопленное и своё собственное это разные
+    // решения.
+    render(<Workshop me={МАСТЕР} />)
+    expect(await screen.findByText('из замечаний')).toBeTruthy()
+    expect(screen.getByText('встроенное')).toBeTruthy()
+  })
+
+  it('правило открывается на правку со своим текстом', async () => {
+    render(<Workshop me={МАСТЕР} />)
+    fireEvent.click(await screen.findByText('Слово «ритуально» в условии'))
+    expect(
+      await screen.findByDisplayValue('Не пиши в условии слово «ритуально» и однокоренные.'),
+    ).toBeTruthy()
+  })
+
+  it('погашение шлёт состояние, а не только текст', async () => {
+    // Погасить правило — единственный способ остановить накопленное, не
+    // стирая его. Уйди состояние мимо запроса, кнопка «сохранить»
+    // работала бы на вид, а правило продолжало бы уходить в задание.
+    const calls: Array<{ path: string; body: unknown }> = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if (init?.method === 'PUT' && path.startsWith('/admin/api/rules')) {
+          calls.push({ path, body: JSON.parse(String(init.body)) })
+          return Promise.resolve(new Response(JSON.stringify(СВОД.rules[1]), { status: 200 }))
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ, СВОД)), {
+            status: 200,
+          }),
+        )
+      }),
+    )
+    render(<Workshop me={МАСТЕР} />)
+    fireEvent.click(await screen.findByText('Слово «ритуально» в условии'))
+    // Выбор показывает СЛОВО состояния, а не его код: составитель
+    // читает список глазами, и «candidate» ему ничего не говорит.
+    fireEvent.change(await screen.findByDisplayValue('копится'), {
+      target: { value: 'muted' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить правило' }))
+
+    await waitFor(() => expect(calls.length).toBe(1))
+    expect(calls[0]!.path).toContain(encodeURIComponent('lint:term:7:риту'))
+    expect((calls[0]!.body as { status?: string }).status).toBe('muted')
+  })
+
+  it('без права «задания» свод читается, но не правится', async () => {
+    // Раздел не прячется: спрятанная вкладка при открытой ручке — это
+    // подсказка, где искать, а не запрет. Прячется действие, и рядом
+    // сказано, почему его нет.
+    const смотрящий: Me = {
+      login: 'смотрящий',
+      displayName: 'Смотрящий',
+      permissions: ['workshop'],
+    }
+    render(<Workshop me={смотрящий} />)
+    expect(await screen.findByText('Слово «ритуально» в условии')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Написать правило' })).toBeNull()
+    expect(screen.getByText(/Свод правит тот, кому выдано право/)).toBeTruthy()
   })
 })

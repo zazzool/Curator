@@ -6,7 +6,7 @@ import { ПРАВА, правоСловами, праваСловами } from '
 import { ApiError, api } from './api'
 import { Loaded, useResource } from './useResource'
 import { confirmed } from './confirm'
-import type { Me, Prompt, StudioUser } from './api'
+import type { Me, Prompt, Rule, RuleEdit, StudioUser } from './api'
 import { Banner } from './components/Banner'
 
 // Мастерская: пользователи студии, задания моделям и ключи программ.
@@ -21,6 +21,7 @@ export function Workshop({ me }: { me: Me }) {
     <div className="stack">
       <Users me={me} />
       <Prompts me={me} />
+      <Rules me={me} />
       <AppKeys me={me} />
     </div>
   )
@@ -478,6 +479,257 @@ function Prompts({ me }: { me: Me }) {
       )}
     </div>
   )
+}
+
+// Свод правил: чему конвейер научился и чего от него требуют.
+//
+// Это единственное место, где видно самообучение. Правило, выведенное из
+// замечаний детектора, копится молча и до кворума в задание не уходит —
+// без этого экрана составитель узнал бы о нём только по тому, что задачи
+// однажды изменились.
+//
+// Подтверждения показаны числом рядом с кворумом намеренно. «Кандидат»
+// без числа читается как «сломалось»; «2 из 3» читается как «копится», и
+// это разные новости.
+function Rules({ me }: { me: Me }) {
+  const [open, setOpen] = useState<string | null>(null)
+  const [draft, setDraft] = useState<RuleEdit>(пустоеПравило())
+  const [failure, setFailure] = useState('')
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const canEdit = me.permissions.includes('prompts')
+
+  const read = useCallback(async () => (await api.rules())?.rules ?? [], [])
+  const rules = useResource(read, 'Свод правил не прочитан')
+  const reload = rules.reload
+
+  function edit(rule: Rule) {
+    setOpen(rule.id)
+    setNote('')
+    setFailure('')
+    setDraft({
+      title: rule.title,
+      text: rule.text,
+      why: rule.why,
+      kind: rule.kind,
+      status: rule.status,
+      scope: rule.scope ?? {},
+    })
+  }
+
+  async function save(event: FormEvent) {
+    event.preventDefault()
+    setFailure('')
+    setNote('')
+    setBusy(true)
+    try {
+      if (open === 'новое') {
+        const made = await api.createRule(draft)
+        setNote(`Правило «${made.title}» записано и действует.`)
+      } else if (open !== null) {
+        await api.saveRule(open, draft)
+        setNote('Правило сохранено.')
+      }
+      await reload()
+      setOpen(null)
+    } catch (error) {
+      // Текст отказа берётся у сервера: выверка правила живёт там, и
+      // своё «не удалось сохранить» отправило бы человека нажимать ту же
+      // кнопку снова, не сказав, что именно не так.
+      setFailure(error instanceof ApiError ? error.message : 'Правило не сохранено')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="page-section">
+      <div className="page-head">
+        <h2>Свод правил</h2>
+        {canEdit && (
+          <button
+            type="button"
+            onClick={() => {
+              setOpen('новое')
+              setDraft(пустоеПравило())
+              setNote('')
+              setFailure('')
+            }}
+          >
+            Написать правило
+          </button>
+        )}
+      </div>
+      <p className="hint">
+        Правила уходят в задание модели вместе с заказом. Написанное здесь
+        действует сразу; выведенное из замечаний проверок ждёт трёх разных
+        задач — одна ошибка случайность, две совпадение.
+      </p>
+      {!canEdit && <p className="hint">Свод правит тот, кому выдано право «задания».</p>}
+
+      {failure && <Banner kind="error">{failure}</Banner>}
+      {note && <Banner kind="success">{note}</Banner>}
+
+      <div className="page-section">
+        <Loaded from={rules}>
+          {(list) =>
+            list.length === 0 ? (
+              <p className="empty">Свод пуст: конвейер пишет задачи без накопленных правил.</p>
+            ) : (
+              <div className="list">
+                {list.map((rule) => (
+                  <button
+                    key={rule.id}
+                    className="list-row"
+                    onClick={() => (open === rule.id ? setOpen(null) : edit(rule))}
+                  >
+                    <span>
+                      {rule.title}
+                      <span className="tag">{rule.kindWord}</span>
+                      <span className="tag">{откуда(rule.source)}</span>
+                    </span>
+                    <span className="muted">{состояниеСловами(rule)}</span>
+                  </button>
+                ))}
+              </div>
+            )
+          }
+        </Loaded>
+      </div>
+
+      {open !== null && canEdit && (
+        <form className="page-section form-grid" onSubmit={save}>
+          <label className="form-row">
+            <span className="fld-label">Как зовётся</span>
+            <input
+              className="fld-long"
+              value={draft.title}
+              onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+            />
+          </label>
+          <label>
+            <span className="fld-label">Что требуется от модели</span>
+            <textarea
+              value={draft.text}
+              onChange={(e) => setDraft({ ...draft, text: e.target.value })}
+            />
+          </label>
+          <label>
+            <span className="fld-label">Почему это правило есть</span>
+            <textarea
+              value={draft.why}
+              onChange={(e) => setDraft({ ...draft, why: e.target.value })}
+            />
+          </label>
+          <label className="form-row">
+            <span className="fld-label">О чём правило</span>
+            <select value={draft.kind} onChange={(e) => setDraft({ ...draft, kind: e.target.value })}>
+              {РОДА.map((one) => (
+                <option key={one.code} value={one.code}>
+                  {one.word}
+                </option>
+              ))}
+            </select>
+          </label>
+          {open !== 'новое' && (
+            <label className="form-row">
+              <span className="fld-label">Что с ним делать</span>
+              <select
+                value={draft.status ?? ''}
+                onChange={(e) => setDraft({ ...draft, status: e.target.value })}
+              >
+                {/*
+                  Нынешнее состояние стоит в списке своим пунктом, когда
+                  выбрать его рукой нельзя. Без этого список показывал бы
+                  «действует» у правила, которое копится: пустой выбор
+                  браузер рисует первым пунктом, и составитель читал бы
+                  чужое состояние как своё.
+                */}
+                {draft.status !== 'active' && draft.status !== 'muted' && (
+                  <option value={draft.status}>{словоСостояния(draft.status ?? '')}</option>
+                )}
+                <option value="active">действует</option>
+                <option value="muted">погашено</option>
+              </select>
+            </label>
+          )}
+          <p className="hint">
+            Погашенное правило не удаляется и не возвращается само: подтверждения
+            проверок его больше не воскресят. Свод дрейфует, и вопрос «чего мы
+            требовали в марте» должен иметь ответ.
+          </p>
+          <div className="form-actions">
+            <button type="submit" disabled={busy}>
+              {open === 'новое' ? 'Записать правило' : 'Сохранить правило'}
+            </button>
+            <button type="button" onClick={() => setOpen(null)}>
+              Закрыть
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  )
+}
+
+/** Рода правил. Порядок — по весу в задании: существо впереди слога. */
+const РОДА = [
+  { code: 'substance', word: 'существо' },
+  { code: 'consistency', word: 'согласованность' },
+  { code: 'marking', word: 'разметка' },
+  { code: 'structure', word: 'устройство' },
+  { code: 'language', word: 'слог' },
+]
+
+function пустоеПравило(): RuleEdit {
+  return { title: '', text: '', why: '', kind: 'substance', scope: {} }
+}
+
+function откуда(source: string): string {
+  switch (source) {
+    case 'curator':
+      return 'написано вами'
+    case 'builtin':
+      return 'встроенное'
+    case 'edit':
+      return 'из правки'
+    case 'lint':
+      return 'из замечаний'
+    default:
+      return source
+  }
+}
+
+/**
+ * Состояние правила словами и числом.
+ *
+ * «Кандидат» без числа читается как «сломалось». Число подтверждений
+ * рядом с кворумом читается как «копится», и это разные новости: во
+ * втором случае делать ничего не надо.
+ */
+function состояниеСловами(rule: Rule): string {
+  if (rule.status === 'candidate') {
+    return `копится: ${rule.confirmations} из ${rule.quorum}`
+  }
+  return словоСостояния(rule.status)
+}
+
+function словоСостояния(status: string): string {
+  switch (status) {
+    case 'active':
+      return 'действует'
+    case 'candidate':
+      return 'копится'
+    case 'muted':
+      return 'погашено'
+    case 'draft':
+      return 'черновик'
+    case 'deprecated':
+      return 'закрыто'
+    default:
+      return status
+  }
 }
 
 // Ключи программ.
