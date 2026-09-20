@@ -314,11 +314,27 @@ type Filter struct {
 	Limit    int
 }
 
+// CasesShown приводит спрошенный предел к тому, сколько задач ручка
+// отдаст на самом деле.
+//
+// Отдельной функцией по той же причине, что и у клиентов: ручке нужно
+// знать тот же предел, чтобы спросить на одну больше и отличить «их
+// ровно столько» от «их больше». Приводить его второй раз внутри Cases
+// нельзя — предел в самый потолок с прибавленной единицей приводился бы
+// обратно к пятидесяти.
+func CasesShown(asked int) int {
+	const byDefault, most = 50, 200
+	if asked <= 0 || asked > most {
+		return byDefault
+	}
+	return asked
+}
+
 // Cases отдаёт задачи по отбору.
 func (s *Store) Cases(ctx context.Context, f Filter) ([]Case, error) {
 	limit := f.Limit
-	if limit <= 0 || limit > 200 {
-		limit = 50
+	if limit <= 0 {
+		limit = CasesShown(0)
 	}
 	rows, err := s.gate.Query(ctx, selectCase+`
 		 WHERE ($1 = 0 OR source_id = $1)

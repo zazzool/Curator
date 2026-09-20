@@ -1,11 +1,11 @@
-import { useCallback, useState, type ChangeEvent } from 'react'
+import { useCallback, useEffect, useState, type ChangeEvent } from 'react'
 
 import { Cases } from './Cases'
 import { Generation } from './Generation'
 import { ApiError, api } from './api'
 import { Loaded, useResource } from './useResource'
 import { confirmed } from './confirm'
-import type { Document, Me, Unit } from './api'
+import type { Cut, Document, Me, Unit } from './api'
 import { Banner } from './components/Banner'
 
 // Экран источника: путь первого этапа целиком и в том же порядке, в каком
@@ -18,8 +18,33 @@ import { Banner } from './components/Banner'
 // сказано, почему его нет.
 export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: () => void }) {
   const [units, setUnits] = useState<Unit[]>([])
+  /** Показаны ли все подошедшие единицы, и сколько их показывается за раз. */
+  const [unitsCut, setUnitsCut] = useState<Cut>({})
   const [documents, setDocuments] = useState<Document[]>([])
   const [path, setPath] = useState('')
+
+  /**
+   * Отбор, дошедший до сервера, отстаёт от набранного на треть секунды.
+   *
+   * Отбор висел прямо на `onChange`, и каждое нажатие клавиши слало
+   * четыре обращения: три отсюда и одно из списка задач. «F31.2» —
+   * двадцать обращений за секунду, и все, кроме последнего, заказаны за
+   * то, чего составитель уже не ищет.
+   *
+   * Ответы при этом друг друга не обгоняют: `useResource` считает походы
+   * и отбрасывает ответ на отменённый. Задержка — про НЕ ПОСЫЛАТЬ, а не
+   * про порядок ответов, и одно другого не заменяет: без счётчика
+   * отставший ответ затрёт свежий и на задержке, без задержки девятнадцать
+   * запросов из двадцати уйдут и на счётчике.
+   *
+   * Треть секунды: пауза между нажатиями у печатающего человека короче,
+   * а осознанная остановка длиннее.
+   */
+  const [applied, setApplied] = useState('')
+  useEffect(() => {
+    const timer = setTimeout(() => setApplied(path), 300)
+    return () => clearTimeout(timer)
+  }, [path])
   const [failure, setFailure] = useState('')
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
@@ -31,13 +56,14 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
   const read = useCallback(async () => {
     const [loaded, sliced, docs] = await Promise.all([
       api.source(id),
-      api.units(id, path),
+      api.units(id, applied),
       api.documents(id),
     ])
     setUnits(sliced.units)
+    setUnitsCut({ limit: sliced.limit, more: sliced.more })
     setDocuments(docs.documents)
     return loaded
-  }, [id, path])
+  }, [id, applied])
   const opened = useResource(read, 'Источник не прочитан')
   const source = opened.state === 'ready' ? opened.value : null
 
@@ -291,11 +317,21 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
             ))}
           </ul>
         )}
+        {unitsCut.more && (
+          // Сказано ПОД списком, а не полосой наверху: полоса наверху —
+          // про действие целиком, а это про то, что видно прямо здесь.
+          // И сказано числом: «показаны не все» без числа не даёт понять,
+          // насколько не все.
+          <p className="hint">
+            Показаны первые {unitsCut.limit}. Подошло больше — сузьте срез по
+            пути, чтобы увидеть остальные.
+          </p>
+        )}
       </section>
 
       <Generation me={me} source={source} units={units} />
 
-      <Cases me={me} source={source} path={path} />
+      <Cases me={me} source={source} path={applied} />
     </div>
   )
 }

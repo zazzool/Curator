@@ -387,11 +387,7 @@ func (s *Store) AcceptDraft(ctx context.Context, sourceID, docID int64, decidedB
 
 // Units — все единицы источника по порядку.
 func (s *Store) Units(ctx context.Context, sourceID int64) ([]Unit, error) {
-	return s.units(ctx,
-		`SELECT label, parent_label, title, kind, path, depth, answerable, ord
-		   FROM source_units
-		  WHERE source_id = $1
-		  ORDER BY ord, label`, sourceID)
+	return s.SliceUnits(ctx, sourceID, "", 0)
 }
 
 // SliceUnits — единицы под указанным путём, вместе с самой единицей этого
@@ -406,17 +402,24 @@ func (s *Store) Units(ctx context.Context, sourceID int64) ([]Unit, error) {
 // Метка экранируется, потому что в пути встречается точка — для LIKE это
 // обычный знак, но подчёркивание и процент в метке приказа вполне возможны,
 // а они для LIKE значимы.
-func (s *Store) SliceUnits(ctx context.Context, sourceID int64, path string) ([]Unit, error) {
-	if path == "" {
-		return s.Units(ctx, sourceID)
+// Предел — это `limit`, и ноль означает «без предела». Сам предел не
+// свойство хранилища, а решение ручки: сколько единиц имеет смысл
+// показать человеку, знает она, а разбору источника нужны все.
+func (s *Store) SliceUnits(ctx context.Context, sourceID int64, path string, limit int) ([]Unit, error) {
+	where, args := `source_id = $1`, []any{sourceID}
+	if path != "" {
+		where = `source_id = $1 AND (path = $2 OR path LIKE $3 ESCAPE '\')`
+		args = append(args, path, escapeLike(path)+PathSeparator+"%")
 	}
-	return s.units(ctx,
-		`SELECT label, parent_label, title, kind, path, depth, answerable, ord
-		   FROM source_units
-		  WHERE source_id = $1
-		    AND (path = $2 OR path LIKE $3 ESCAPE '\')
-		  ORDER BY ord, label`,
-		sourceID, path, escapeLike(path)+PathSeparator+"%")
+	sql := `SELECT label, parent_label, title, kind, path, depth, answerable, ord
+		      FROM source_units
+		     WHERE ` + where + `
+		     ORDER BY ord, label`
+	if limit > 0 {
+		args = append(args, limit)
+		sql += fmt.Sprintf(" LIMIT $%d", len(args))
+	}
+	return s.units(ctx, sql, args...)
 }
 
 func (s *Store) units(ctx context.Context, sql string, args ...any) ([]Unit, error) {

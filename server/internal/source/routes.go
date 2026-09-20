@@ -198,23 +198,56 @@ func (r *routes) showSource(w http.ResponseWriter, req *http.Request, _ studio.U
 	studio.WriteJSON(w, http.StatusOK, toSourceJSON(src))
 }
 
+// MaxUnitsShown — сколько единиц ручка отдаёт за один раз.
+//
+// Предела не было вовсе, при том что пояснение этой же ручки говорило
+// «у классификации единиц тысячи». МКБ-10 — около четырнадцати тысяч
+// единиц: они приезжали целиком и разворачивались в студии в четырнадцать
+// тысяч узлов списка и в выпадающий список из четырнадцати тысяч строк
+// без поиска, перерисовываясь на каждое нажатие клавиши в отборе.
+//
+// Пятьсот: столько человек не просматривает, но столько оставляет отбор
+// вроде «F3» у крупного класса, и обрезать его на ста значило бы прятать
+// работу. Кому нужно точнее — сужает путь, и ручка сама об этом говорит.
+const MaxUnitsShown = 500
+
 // listUnits отдаёт единицы источника, целиком или срезом по пути.
 //
 // Срез берётся запросом, а не подъёмом всего источника в память: у
 // классификации единиц тысячи, и «всё, что под F3» — самый частый вопрос
 // подбора. Правило среза написано дважды, на Go и на SQL, и сверяет их
 // проверка на живой базе, поле за полем.
+//
+// # Обрезанное называется числом, а не пропадает молча
+//
+// Отбор, показавший пятьсот единиц из четырнадцати тысяч, и отбор,
+// показавший все пятьсот, какие есть, выглядят одинаково — а решения по
+// ним принимаются разные: по первому составитель заказывает генерацию,
+// думая, что видит весь класс. Поэтому рядом со списком едет, сколько
+// единиц подошло всего.
 func (r *routes) listUnits(w http.ResponseWriter, req *http.Request, _ studio.User) {
 	id, ok := pathID(w, req)
 	if !ok {
 		return
 	}
-	units, err := r.store.SliceUnits(req.Context(), id, req.URL.Query().Get("path"))
+	path := req.URL.Query().Get("path")
+
+	// Спрашивается на одну больше предела: так «их ровно пятьсот» и «их
+	// больше пятисот» различаются без второго запроса со счётом.
+	units, err := r.store.SliceUnits(req.Context(), id, path, MaxUnitsShown+1)
 	if err != nil {
 		studio.WriteError(w, http.StatusInternalServerError, "Единицы источника не прочитаны")
 		return
 	}
-	studio.WriteJSON(w, http.StatusOK, map[string]any{"units": toUnitsJSON(units)})
+	more := len(units) > MaxUnitsShown
+	if more {
+		units = units[:MaxUnitsShown]
+	}
+	studio.WriteJSON(w, http.StatusOK, map[string]any{
+		"units": toUnitsJSON(units),
+		"limit": MaxUnitsShown,
+		"more":  more,
+	})
 }
 
 // listStatements отдаёт положения, принятые в источник: все или одной

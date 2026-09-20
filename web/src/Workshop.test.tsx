@@ -124,6 +124,29 @@ describe('мастерская', () => {
     expect(screen.getByDisplayValue('Напиши задачу по {{unit}}.')).toBeTruthy()
   })
 
+  it('сохранение задания шлёт нынешнюю редакцию', async () => {
+    // Прежняя проверка сверяла только то, что поля открылись на правку:
+    // убери `revision` из запроса — и она осталась бы зелёной, а
+    // взаимная перезапись вернулась бы молча. Сверка редакции — то
+    // единственное, что стоит между двумя методистами и потерянной
+    // работой одного из них.
+    render(<Workshop me={МАСТЕР} />)
+    fireEvent.click(await screen.findByText('Черновик задачи'))
+    await screen.findByDisplayValue('Ты врач-методист.')
+    fireEvent.click(screen.getByText('Сохранить задание'))
+
+    await waitFor(() => {
+      const sent = (globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.find(
+        (call) =>
+          String(call[0]).includes('/admin/api/prompts/draft') &&
+          (call[1] as { method?: string })?.method === 'PUT',
+      )
+      expect(sent).toBeTruthy()
+      const body = JSON.parse(String((sent![1] as { body?: string }).body))
+      expect(body.revision).toBe(4)
+    })
+  })
+
   it('набранное переживает закрытие вкладки', async () => {
     // Токен студии живёт только в памяти страницы, поэтому F5 по
     // привычке, уснувший ноутбук и истёкшая сессия — одно и то же
