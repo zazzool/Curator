@@ -22,7 +22,29 @@ import (
 // Права называются поимённо в каждой проверке: «маршрута без права не
 // бывает» проверяется не тем, что маршрут отвечает, а тем, что он
 // отказывает человеку без права.
+// каталогМоделей — прайс проверочной установки.
+//
+// Две строки, а не пустой список: пустой прошёл бы и на ручке, которая
+// список теряет, и отличить «моделей нет» от «список потерян» было бы
+// нечем.
+func каталогМоделей(context.Context) ([]ModelChoice, error) {
+	return []ModelChoice{
+		{Provider: "openrouter", Model: "дорогая/рассуждающая", PromptNanoUSD: 3000, CompletionNanoUSD: 15000},
+		{Provider: "openrouter", Model: "дешёвая/быстрая", PromptNanoUSD: 100, CompletionNanoUSD: 400},
+	}, nil
+}
+
 func newDesk(t *testing.T, perms ...studio.Permission) (*httptest.Server, string) {
+	t.Helper()
+	return newDeskModels(t, каталогМоделей, perms...)
+}
+
+// newDeskModels — та же студия, но со своим списком моделей.
+//
+// Нужна там, где предмет проверки — САМ список: пустой и потерянный
+// выглядят одинаково у ручки, которая вместо списка отдаёт пустое
+// значение, и отличить их можно только прогнав оба.
+func newDeskModels(t *testing.T, models ModelLister, perms ...studio.Permission) (*httptest.Server, string) {
 	t.Helper()
 	gate := testGate(t)
 	users, sessions := studio.NewUsers(gate, nil), studio.NewSessions(gate)
@@ -33,7 +55,7 @@ func newDesk(t *testing.T, perms ...studio.Permission) (*httptest.Server, string
 	if err := prompts.Seed(context.Background()); err != nil {
 		t.Fatalf("затравки заданий не положены: %v", err)
 	}
-	Routes(desk, NewJobs(gate), NewResolver(gate), prompts)
+	Routes(desk, NewJobs(gate), NewResolver(gate), prompts, models)
 
 	ctx := context.Background()
 	login := fmt.Sprintf("проверка-%d-%d", time.Now().UnixNano(), rand.Intn(1000))

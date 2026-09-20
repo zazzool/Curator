@@ -206,7 +206,7 @@ func (r *Runner) runProofread(ctx context.Context, job Job, draft Draft) (Draft,
 	user = strings.ReplaceAll(user, "{заголовок}", draft.Title)
 	user = strings.ReplaceAll(user, "{фрагменты}", segmentsForProofread(draft))
 
-	answer, err := r.ask(ctx, job, NodeProofread, llm.Prompt{
+	answer, err := r.ask(ctx, job, prompt, llm.Prompt{
 		System: Render(prompt.SystemMd, blind),
 		// Корректору нужна повторяемость: тот же текст — те же правки.
 		Temperature: 0.2,

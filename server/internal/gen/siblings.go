@@ -188,7 +188,7 @@ func (r *Runner) checkSiblings(ctx context.Context, job Job, draft Draft, set An
 		case statements == "":
 			one.Check = Check{Note: "у единицы нет положений — сверить не с чем"}
 		default:
-			one.Check = r.askSibling(ctx, job, system, prompt.UserMd, blind, text, statements)
+			one.Check = r.askSibling(ctx, job, prompt, system, blind, text, statements)
 		}
 		// Второй верный ответ — это ПОДТВЕРЖДЕНИЕ соседа, и только оно.
 		// «Недостаточно сказано» у неверного варианта — замысел задачи на
@@ -208,9 +208,9 @@ const (
 )
 
 func (r *Runner) askSibling(
-	ctx context.Context, job Job, system, userMd string, blind Plan, text, statements string,
+	ctx context.Context, job Job, node Prompt, system string, blind Plan, text, statements string,
 ) Check {
-	user := Render(userMd, blind)
+	user := Render(node.UserMd, blind)
 	// Условие и сверяемое подставляются здесь, а не в Render, по той же
 	// причине, что у слепой сверки: это не свойства заказа, а то, что
 	// написала модель на прошлом узле. Попади они в общий список
@@ -220,7 +220,7 @@ func (r *Runner) askSibling(
 	user = strings.ReplaceAll(user, "{сверяемое}", statements)
 	user = strings.ReplaceAll(user, "{Положение}", titleWord(blind.StatementWord))
 
-	answer, err := r.ask(ctx, job, NodeSiblings, llm.Prompt{
+	answer, err := r.ask(ctx, job, node, llm.Prompt{
 		System: system,
 		User:   user,
 		// Жар тот же низкий, что у слепой сверки, и по той же причине:

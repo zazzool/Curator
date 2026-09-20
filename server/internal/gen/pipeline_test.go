@@ -16,11 +16,21 @@ import (
 type подставнаяМодель struct {
 	ответы   []string
 	спрошено []llm.Prompt
-	отказ    error
+
+	// модели — чем спросили на каждом узле, в том же порядке.
+	//
+	// Запоминается вместе с заданием, а не выбрасывается: выбор модели на
+	// узел проверяется только так. Отбрось мы имя модели здесь, проверка
+	// на «узлы спрашиваются разными моделями» мерила бы одно содержимое
+	// задания и зеленела бы на конвейере, ходящем всюду одной моделью.
+	модели []string
+
+	отказ error
 }
 
-func (m *подставнаяМодель) Generate(_ context.Context, p llm.Prompt, _ string) (string, llm.Usage, error) {
+func (m *подставнаяМодель) Generate(_ context.Context, p llm.Prompt, model string) (string, llm.Usage, error) {
 	m.спрошено = append(m.спрошено, p)
+	m.модели = append(m.модели, model)
 	if m.отказ != nil {
 		return "", llm.Usage{}, m.отказ
 	}

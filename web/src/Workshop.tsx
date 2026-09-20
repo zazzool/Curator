@@ -284,7 +284,7 @@ function Users({ me }: { me: Me }) {
 // Задания моделям.
 function Prompts({ me }: { me: Me }) {
   const [open, setOpen] = useState<string | null>(null)
-  const [draft, setDraft] = useState({ name: '', systemMd: '', userMd: '', revision: 0 })
+  const [draft, setDraft] = useState({ name: '', systemMd: '', userMd: '', model: '', revision: 0 })
   /** Когда был записан восстановленный черновик; пустая строка — своего нет. */
   const [restored, setRestored] = useState('')
   const [failure, setFailure] = useState('')
@@ -297,7 +297,24 @@ function Prompts({ me }: { me: Me }) {
   const prompts = useResource(read, 'Задания моделей не прочитаны')
   const reload = prompts.reload
 
-  type Набранное = { name: string; systemMd: string; userMd: string; revision: number }
+  // Список моделей — ПОДСКАЗКА, а не словарь. Новая модель появляется у
+  // поставщика раньше, чем в нашем прайсе, и список выбора отказывал бы
+  // ровно в тот день, когда её понадобилось попробовать. Поэтому поле
+  // остаётся вводом, а список висит на нём datalist'ом.
+  //
+  // Отказ чтения списка не прячет поле и ничего не говорит: без подсказки
+  // модель вписывается руками, а полоса отказа рядом с работающим полем
+  // отправила бы составителя чинить то, что не сломано.
+  const readModels = useCallback(async () => (await api.models())?.models ?? [], [])
+  const models = useResource(readModels, '')
+
+  type Набранное = {
+    name: string
+    systemMd: string
+    userMd: string
+    model: string
+    revision: number
+  }
 
   function edit(prompt: Prompt) {
     setOpen(prompt.id)
@@ -307,6 +324,7 @@ function Prompts({ me }: { me: Me }) {
       name: prompt.name,
       systemMd: prompt.systemMd,
       userMd: prompt.userMd,
+      model: prompt.model,
       revision: prompt.revision,
     }
 
@@ -397,7 +415,15 @@ function Prompts({ me }: { me: Me }) {
                   {prompt.name}
                   <span className="tag">{prompt.nodeWord || prompt.node}</span>
                 </span>
-                <span className="muted">редакция {prompt.revision}</span>
+                <span className="muted">
+                  {/*
+                    Модель названа в самой строке, а не только в открытой
+                    форме: узлов больше пяти, и «какой узел какой моделью»
+                    — это вопрос обо ВСЁМ конвейере сразу. Открывая их по
+                    одному, ответить на него нельзя.
+                  */}
+                  {prompt.model || 'модель поставщика'} · редакция {prompt.revision}
+                </span>
               </button>
             ))}
           </div>
@@ -415,6 +441,28 @@ function Prompts({ me }: { me: Me }) {
               onChange={(e) => правим({ ...draft, name: e.target.value })}
             />
           </label>
+          <label className="form-row">
+            <span className="fld-label">Какой моделью</span>
+            <input
+              className="fld-medium"
+              list="модели-прайса"
+              placeholder="моделью поставщика"
+              value={draft.model}
+              onChange={(e) => правим({ ...draft, model: e.target.value })}
+            />
+          </label>
+          <datalist id="модели-прайса">
+            {(models.state === 'ready' ? models.value : []).map((one) => (
+              <option key={`${one.provider}/${one.model}`} value={one.model}>
+                {one.provider}
+              </option>
+            ))}
+          </datalist>
+          <p className="hint fld-across">
+            Пусто — моделью поставщика. Узлы стоят разных денег и требуют
+            разного: написание условия — самая дорогая работа конвейера, а
+            слепая сверка отвечает одним словом из списка.
+          </p>
           <label>
             <span className="fld-label">Что модель знает о себе</span>
             <textarea
@@ -462,6 +510,7 @@ function Prompts({ me }: { me: Me }) {
                       name: было.name,
                       systemMd: было.systemMd,
                       userMd: было.userMd,
+                      model: было.model,
                       revision: было.revision,
                     })
                     setRestored('')

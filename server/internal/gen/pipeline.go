@@ -418,7 +418,7 @@ func (r *Runner) compose(ctx context.Context, job Job, set AnswerSet) (Draft, er
 	// самом задании. Переменную составитель может стереть, правя задание
 	// в студии, — и свод перестал бы уходить молча, а задачи стали бы
 	// хуже без единого следа в журнале.
-	answer, err := r.ask(ctx, job, NodeCompose, llm.Prompt{
+	answer, err := r.ask(ctx, job, prompt, llm.Prompt{
 		System:     RenderSet(prompt.SystemMd, plan, set) + block,
 		User:       RenderSet(prompt.UserMd, plan, set),
 		Schema:     ComposedSchema(plan),
@@ -524,7 +524,7 @@ func (r *Runner) verify(ctx context.Context, job Job, draft Draft) (*Verdict, er
 	user = strings.ReplaceAll(user, "{условие}", draft.Condition())
 	user = strings.ReplaceAll(user, "{варианты}", list.String())
 
-	answer, err := r.ask(ctx, job, NodeVerify, llm.Prompt{
+	answer, err := r.ask(ctx, job, prompt, llm.Prompt{
 		System: system,
 		User:   user,
 		// Жар выборки ниже обычного: сверке нужна повторяемость — один и
@@ -574,26 +574,49 @@ func agrees(plan Plan, draft Draft, answer string) bool {
 }
 
 // ask — одно обращение к модели с записью в учёт.
-func (r *Runner) ask(ctx context.Context, job Job, node string, prompt llm.Prompt) (string, error) {
+//
+// Узел приходит СВОИМ ЗАДАНИЕМ, а не одним именем, и это не удобство
+// записи. Имя узла и модель узла — два свойства одной строки базы, и
+// передай мы их порознь, ничто не помешало бы спросить моделью одного
+// узла, записав в учёт имя другого: расход по узлам — то, по чему
+// решают, где менять модель, и разойдись он с правдой, менять стали бы
+// не там. Здесь спутать их попросту нечем.
+func (r *Runner) ask(ctx context.Context, job Job, node Prompt, prompt llm.Prompt) (string, error) {
+	model := modelFor(node, job.Plan.Model)
 	started := time.Now()
-	answer, usage, err := r.talker.Generate(ctx, prompt, job.Plan.Model)
-	r.account(ctx, job, node, prompt, answer, usage, time.Since(started), err)
+	answer, usage, err := r.talker.Generate(ctx, prompt, model)
+	// В учёт уходит ТА модель, которой спросили, а не та, которую
+	// заказали: расход считается по моделям, и записанная не та превращает
+	// счёт поставщика в загадку — сумма сходится, а по строкам не сходится
+	// ничего.
+	record(ctx, r.ledger, r.prices, job.ID, node.Node, model,
+		prompt, answer, usage, time.Since(started), err)
 	if err != nil {
 		if errors.Is(err, llm.ErrTruncated) {
 			// Обрыв лечится потолком ответа, а не повтором: сказать об
 			// этом прямо полезнее, чем показать «ошибку разбора».
-			return "", fmt.Errorf("узел «%s»: модель не уложилась в потолок ответа", NodeWord(node))
+			return "", fmt.Errorf("узел «%s»: модель не уложилась в потолок ответа", NodeWord(node.Node))
 		}
-		return "", fmt.Errorf("узел «%s»: %w", NodeWord(node), err)
+		return "", fmt.Errorf("узел «%s»: %w", NodeWord(node.Node), err)
 	}
 	return answer, nil
 }
 
-func (r *Runner) account(ctx context.Context, job Job, node string, prompt llm.Prompt,
-	answer string, usage llm.Usage, took time.Duration, err error) {
-
-	record(ctx, r.ledger, r.prices, job.ID, node, job.Plan.Model,
-		prompt, answer, usage, took, err)
+// modelFor — какой моделью спрашивать этот узел.
+//
+// Порядок старшинства: названная в заказе, потом модель узла, потом
+// модель поставщика. Заказ старше узла потому, что называют его руками и
+// на один раз: составитель, выбравший модель этой задаче, просит сравнить
+// — и настройка конвейера, молча переспорившая его выбор, сделала бы
+// сравнение невозможным, оставаясь на вид работающей.
+//
+// Модель поставщика последняя и именем сюда не переносится: записанное у
+// нас имя устареет молча, когда поставщик сменит своё умолчание.
+func modelFor(node Prompt, ordered string) string {
+	if ordered = strings.TrimSpace(ordered); ordered != "" {
+		return ordered
+	}
+	return strings.TrimSpace(node.Model)
 }
 
 // record — одна запись в учёт, общая на все узлы конвейера.
