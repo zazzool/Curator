@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -450,5 +451,67 @@ func TestPgОберегМастерскойОтказываетВнятно(t *t
 	}
 	if !has {
 		t.Error("право мастерской снято, хотя оберег отказал")
+	}
+}
+
+func TestPgПеченьеПускаетПослеПерезагрузкиСтраницы(t *testing.T) {
+	// Токен студии живёт в памяти страницы, и до печенья F5, закрытая
+	// вкладка и уснувший ноутбук выбрасывали на вход при какой угодно
+	// сессии на сервере. Перезагрузка изображена здесь честно: обращение
+	// без заголовка Authorization, с одним печеньем.
+	ctx := context.Background()
+	gate := testGate(t)
+	users := NewUsers(gate, nil)
+	desk := NewDesk(users, NewSessions(gate))
+	Routes(desk)
+
+	login := newLogin()
+	if _, _, err := users.Create(ctx, login, "Составитель", nil); err != nil {
+		t.Fatal(err)
+	}
+	_, secret, err := users.ByLogin(ctx, login)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := totp.Code(secret, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body := strings.NewReader(fmt.Sprintf(`{"login":%q,"code":%q}`, login, code))
+	rec := httptest.NewRecorder()
+	desk.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/admin/api/login", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("вход по годному коду ответил %d", rec.Code)
+	}
+	jar := onlyCookie(t, rec)
+
+	rec = httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/me", nil)
+	req.AddCookie(jar)
+	desk.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("после перезагрузки страницы студия ответила %d: вход не пережил её", rec.Code)
+	}
+
+	// Выход закрывает сессию и гасит печенье. Второе без первого оставило
+	// бы живой токен в браузере до конца месяца.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/admin/api/logout", nil)
+	req.AddCookie(jar)
+	desk.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("выход ответил %d", rec.Code)
+	}
+	if onlyCookie(t, rec).MaxAge >= 0 {
+		t.Error("выход не велел браузеру забыть печенье")
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/admin/api/me", nil)
+	req.AddCookie(jar)
+	desk.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("после выхода печенье всё ещё пускает: ответ %d", rec.Code)
 	}
 }
