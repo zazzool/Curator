@@ -174,7 +174,16 @@ class _Chip extends StatelessWidget {
         children: [
           Icon(icon, size: 15, color: theme.colorScheme.onSurfaceVariant),
           const SizedBox(width: 6),
-          Text(text, style: theme.textTheme.labelMedium),
+          // Полоска компактна по замыслу, и длинное название рода в ней
+          // обрезается, а не растягивает её за край экрана. Целиком род
+          // назван заголовком ниже — здесь он только счётчик.
+          Flexible(
+            child: Text(
+              text,
+              style: theme.textTheme.labelMedium,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
         ],
       ),
     );
@@ -233,15 +242,22 @@ class CriteriaList extends StatelessWidget {
                     color: theme.colorScheme.primary,
                   ),
                   const SizedBox(width: 8),
-                  Text(
-                    // Безымянный род зовётся словом самого источника —
-                    // «критерии» у МКБ-10, «пункты» у приказа. Заголовок
-                    // «» посреди названных родов читался бы как пропуск.
-                    groups[g].key.isEmpty
-                        ? pluralWord(statementWord)
-                        : groups[g].key,
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      color: theme.colorScheme.primary,
+                  // Занимает остаток строки и переносится: род зовётся
+                  // словом источника, а источник любой — «дифференциальный
+                  // диагноз» уже длиннее узкого экрана при крупном шрифте.
+                  // Без этого заголовок не переносился, а упирался в край,
+                  // и хвост названия пропадал вместе с полосой отказа.
+                  Expanded(
+                    child: Text(
+                      // Безымянный род зовётся словом самого источника —
+                      // «критерии» у МКБ-10, «пункты» у приказа. Заголовок
+                      // «» посреди названных родов читался бы как пропуск.
+                      groups[g].key.isEmpty
+                          ? pluralWord(statementWord)
+                          : groups[g].key,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        color: theme.colorScheme.primary,
+                      ),
                     ),
                   ),
                 ],
