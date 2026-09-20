@@ -114,6 +114,16 @@ type UnitRef struct {
 	// заданиях, и объяснить это было бы нечем.
 	Path string `json:"path,omitempty"`
 
+	// Confusable — источник сам назвал эту единицу путаемой с заказанной
+	// (пара «путают с»). Круг вариантов обрезается потолком, и обрезать
+	// его по порядку документа значило бы выбросить первой ровно ту
+	// единицу, про которую источник сказал прямо, что её путают.
+	//
+	// Поле необязательное: у заданий, заказанных до его появления, оно
+	// пусто, и круг у них собирается порядком документа — как и
+	// собирался.
+	Confusable bool `json:"confusable,omitempty"`
+
 	// StatementsMd — положения соседа. Заполняются только у кандидатов
 	// неверных вариантов и только ради различающей сверки: условие готовой
 	// задачи прогоняется и против положений каждого неверного варианта,
@@ -277,6 +287,16 @@ func (r *Resolver) Resolve(ctx context.Context, order Order) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
+
+	// Круг вариантов собирается здесь же, и собирается ради отказа: если
+	// источник круга не даёт, узнать об этом надо составителю при заказе,
+	// а не работе после того, как за задачу заплачено. Сам круг тут не
+	// сохраняется — его пересоберёт исполнитель из этого же плана, и
+	// положить его в план значило бы завести второе место для одного и
+	// того же.
+	if _, err := plan.AnswerSet(); err != nil {
+		return Plan{}, err
+	}
 	return plan, nil
 }
 
@@ -335,6 +355,8 @@ func pickTarget(statements []StatementRef, designation, statementWord string) (S
 func (r *Resolver) siblings(ctx context.Context, sourceID int64, label, parentLabel string) ([]UnitRef, error) {
 	rows, err := r.gate.Query(ctx,
 		`SELECT u.label, u.title,
+		        u.label IN (SELECT counterpart FROM source_unit_differentials
+		                     WHERE source_id = $1 AND unit_label = $2) AS confusable,
 		        COALESCE(string_agg(s.body_md, E'\n' ORDER BY s.ord, s.id), '')
 		   FROM source_units u
 		   LEFT JOIN source_unit_statements s
@@ -362,7 +384,7 @@ func (r *Resolver) siblings(ctx context.Context, sourceID int64, label, parentLa
 	out := []UnitRef{}
 	for rows.Next() {
 		var u UnitRef
-		if err := rows.Scan(&u.Label, &u.Title, &u.StatementsMd); err != nil {
+		if err := rows.Scan(&u.Label, &u.Title, &u.Confusable, &u.StatementsMd); err != nil {
 			return nil, fmt.Errorf("строка соседа не разобрана: %w", err)
 		}
 		out = append(out, u)

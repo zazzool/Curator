@@ -142,11 +142,21 @@ func (p *Prompts) Seed(ctx context.Context) error {
 
 // Render подставляет в задание переменные заказа.
 //
+// Круга вариантов у него нет: {круг} и {откуда} подставляются из пустого
+// набора. Так рендерятся слепые задания — сверки, которым круг знать
+// нельзя, — и слепота эта держится здесь, а не уговором на местах: чтобы
+// показать сверке варианты, пришлось бы позвать другую функцию.
+func Render(text string, plan Plan) string {
+	return RenderSet(text, plan, AnswerSet{})
+}
+
+// RenderSet — то же, но с кругом вариантов, собранным сервером.
+//
 // Переменные названы по-русски и в фигурных скобках: задание правит
 // составитель, а не программист, и {единица} он прочтёт, а {{.UnitWord}}
 // — нет. Незнакомая переменная остаётся в тексте как есть: молча
 // вычищенная, она превратила бы опечатку в задании в тихую потерю смысла.
-func Render(text string, plan Plan) string {
+func RenderSet(text string, plan Plan, set AnswerSet) string {
 	vars := map[string]string{
 		"источник":    plan.Title,
 		"единица":     plan.UnitWord,
@@ -155,7 +165,8 @@ func Render(text string, plan Plan) string {
 		"название":    plan.Unit.Title,
 		"положения":   plan.StatementsMd,
 		"вложенность": hierarchyWord(plan.Hierarchy),
-		"круг":        siblingsList(plan),
+		"круг":        set.Listing(),
+		"откуда":      set.Origins(),
 		"обозначения": strings.Join(plan.Designations(), ", "),
 		"вид":         KindWord(plan.TaskKind),
 	}
@@ -201,26 +212,6 @@ func hierarchyWord(hierarchy string) string {
 	default:
 		return "вложенные просто сгруппированы под вышестоящим"
 	}
-}
-
-// siblingsList — круг различения строками «метка — название».
-func siblingsList(plan Plan) string {
-	if len(plan.Siblings) == 0 {
-		return "(соседей у этой единицы нет)"
-	}
-	var b strings.Builder
-	for i, s := range plan.Siblings {
-		if i > 0 {
-			b.WriteString("\n")
-		}
-		b.WriteString("- ")
-		b.WriteString(s.Label)
-		if s.Title != "" {
-			b.WriteString(" — ")
-			b.WriteString(s.Title)
-		}
-	}
-	return b.String()
 }
 
 // seeds — затравки заданий.
@@ -287,6 +278,11 @@ func seeds() []Prompt {
 положение, пометьте его обозначением. Фрагменты фона оставляйте без
 пометок — без фона условие не читается.
 
+Варианты ответа уже собраны, и составлять их не нужно: они даны ниже и
+уйдут обучающемуся как есть. Ваше дело — написать условие так, чтобы
+верным оказался ровно один из них, и разобрать в конце каждый неверный:
+чем именно он не подходит. Списка вариантов в ответе не возвращайте.
+
 Ответ — JSON без пояснений вокруг.`,
 		UserMd: `Вид задачи: {вид}.
 
@@ -297,8 +293,13 @@ func seeds() []Prompt {
 
 Ссылаться в разметке можно только на эти обозначения: {обозначения}.
 
-Круг различения (из него берите неверные варианты, других не придумывайте):
-{круг}`,
+Верный ответ: {эталон}
+
+Неверные варианты (их ровно столько, и меняться они не будут):
+{круг}
+
+Откуда взят каждый неверный вариант:
+{откуда}`,
 	}, {
 		ID:   "proofread-default",
 		Name: "Вычитка — затравка",

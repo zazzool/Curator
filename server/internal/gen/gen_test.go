@@ -57,10 +57,11 @@ func источник(t *testing.T, gate *dbgate.Gate) int64 {
 		answerable           bool
 		ord                  int
 	}{
-		{"3", "", "Порядок", false, 0}, // группа: к ответу не пригодна
-		{"3.1", "3", "Сроки", true, 1}, // эталон
-		{"3.2", "3", "Отказ", true, 2}, // сосед
-		{"4", "", "Прочее", true, 3},   // не сосед: другой родитель
+		{"3", "", "Порядок", false, 0},    // группа: к ответу не пригодна
+		{"3.1", "3", "Сроки", true, 1},    // эталон
+		{"3.2", "3", "Отказ", true, 2},    // сосед
+		{"3.3", "3", "Передача", true, 3}, // сосед: круг не бывает из двух вариантов
+		{"4", "", "Прочее", true, 4},      // не сосед: другой родитель
 	}
 	for _, u := range units {
 		path := u.label
@@ -81,6 +82,7 @@ func источник(t *testing.T, gate *dbgate.Gate) int64 {
 		{"3.1", "абз. 1", "Срок рассмотрения — десять рабочих дней.", "с. 4"},
 		{"3.1", "абз. 2", "Срок продлевается однократно.", "с. 4"},
 		{"3.2", "абз. 1", "Отказ оформляется письменно.", "с. 5"},
+		{"3.3", "абз. 1", "Заявление передаётся по подведомственности.", "с. 6"},
 	}
 	for i, st := range statements {
 		_, err := gate.Exec(ctx,
@@ -134,7 +136,7 @@ func TestPgСоседБерётсяПоРодителю_АНеПоФормеМе
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Siblings) != 1 || plan.Siblings[0].Label != "3.2" {
+	if len(plan.Siblings) != 2 || plan.Siblings[0].Label != "3.2" || plan.Siblings[1].Label != "3.3" {
 		t.Fatalf("круг различения собран не тот: %+v", plan.Siblings)
 	}
 	// У кандидата неверного варианта едут его положения: условие готовой
@@ -166,8 +168,26 @@ func TestPgПараПутаютСДобавляетсяВКругРазличе�
 	for _, s := range plan.Siblings {
 		labels = append(labels, s.Label)
 	}
-	if len(labels) != 2 {
+	// Соседей по родителю двое (3.2 и 3.3), названная пара — третья.
+	нашлась := false
+	for _, one := range labels {
+		if one == "4" {
+			нашлась = true
+		}
+	}
+	if !нашлась || len(labels) != 3 {
 		t.Fatalf("круг различения без названной пары: %v", labels)
+	}
+
+	// И она же встаёт первой в круге вариантов: круг обрезается потолком,
+	// и обрежь его порядок документа — вылетела бы ровно та единица, про
+	// которую источник сказал прямо, что её путают.
+	set, err := plan.AnswerSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := set.Rivals[0].Option.Label; got != "4" {
+		t.Fatalf("названная пара стоит в круге не первой, а после %q", got)
 	}
 }
 
@@ -489,7 +509,7 @@ func TestPgПланДоезжаетДоИсполнителяЦеликом(t *t
 		if job.Plan.Target == nil || job.Plan.Target.Designation != "абз. 1" {
 			t.Fatalf("эталонное положение не доехало: %+v", job.Plan.Target)
 		}
-		if len(job.Plan.Statements) != 2 || len(job.Plan.Siblings) != 1 {
+		if len(job.Plan.Statements) != 2 || len(job.Plan.Siblings) != 2 {
 			t.Fatalf("план доехал неполным: %+v", job.Plan)
 		}
 		if job.Plan.StatementWord != "указание" {

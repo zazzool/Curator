@@ -8,8 +8,16 @@ import (
 	"strings"
 )
 
-// Черновик задачи: то, что модель обязана вернуть, и то, что мы у неё
-// принимаем.
+// Черновик задачи: проза от модели, круг вариантов от сервера.
+//
+// # Что пишет модель, а что нет
+//
+// Модель пишет ПРОЗУ — заголовок, условие фрагментами, разметку и разбор
+// (Composed). Круга вариантов она не пишет и не возвращает: его собрал
+// сервер из данных источника ещё до обращения к ней (answers.go), и в
+// задание он ушёл готовым. Прежде круг писала она, а разбор отбивал
+// черновик, если вариант оказывался со стороны, — то есть мы платили за
+// заход, чтобы узнать то, что и так знали.
 //
 // # Разбор отказывает, а не чинит
 //
@@ -47,14 +55,32 @@ type Option struct {
 	Text  string `json:"text"`
 }
 
-// Draft — черновик задачи, как его пишет модель.
+// Composed — то, что модель возвращает: проза задачи и её разметка.
+//
+// Круга вариантов здесь нет намеренно, и его отсутствие держит схема
+// ответа (ComposedSchema) вместе с DisallowUnknownFields при разборе:
+// модель, приславшая варианты по привычке, получает отказ, а не тихо
+// выброшенное поле. Тихо выброшенное, оно значило бы, что задание и
+// схема разошлись, а узнали бы мы об этом по счёту за лишние заходы.
+type Composed struct {
+	Title         string    `json:"title"`
+	Segments      []Segment `json:"segments"`
+	ExplanationMd string    `json:"explanationMd"`
+
+	// Difficulty — сложность, с которой задачу писали: 1 просто, 5 трудно.
+	Difficulty int `json:"difficulty"`
+}
+
+// Draft — черновик задачи целиком: проза модели и круг сервера.
 type Draft struct {
 	Title    string    `json:"title"`
 	Segments []Segment `json:"segments"`
 	Options  []Option  `json:"options"`
 
 	// Answer — верный вариант: метка единицы у узнавания, текст действия
-	// у задачи-действия.
+	// у задачи-действия. Ставит его сервер по заказу, а не модель:
+	// эталон выбирал составитель, и выбор этот не предмет переписки с
+	// моделью.
 	Answer string `json:"answer"`
 
 	ExplanationMd string `json:"explanationMd"`
@@ -98,53 +124,6 @@ type Stored struct {
 	Cues *CueCheck `json:"cues,omitempty"`
 }
 
-// Rivals — неверные варианты черновика вместе с положениями их единиц.
-//
-// Берутся от ЧЕРНОВИКА, а не от плана: сверять надо то, что реально уйдёт
-// обучающемуся. Круг плана — это кандидаты, и модель выбрала из них не
-// обязательно всех; сверив кандидатов, мы проверили бы задачу, которой
-// никто не увидит.
-//
-// Эталон отсеивается по метке у узнавания и по тексту у действия — то же
-// различие, по которому мерится сам черновик. Вариант, которому в плане
-// единицы не нашлось, возвращается БЕЗ положений, а не выбрасывается:
-// несверенный вариант обязан назвать себя, иначе он неотличим от
-// сверенного и чистого.
-func (d Draft) Rivals(plan Plan) []UnitRef {
-	answer := strings.TrimSpace(d.Answer)
-	byLabel := make(map[string]UnitRef, len(plan.Siblings)+1)
-	for _, s := range plan.Siblings {
-		byLabel[strings.ToLower(s.Label)] = s
-	}
-
-	out := []UnitRef{}
-	seen := map[string]bool{}
-	for _, o := range d.Options {
-		label := strings.TrimSpace(o.Label)
-		text := strings.TrimSpace(o.Text)
-		if plan.TaskKind == KindAction {
-			// У действия вариант — это текст, и единицы за ним нет:
-			// сверять его против положений соседа нечем. Такой круг
-			// различающая сверка пропускает целиком, и это не пробел, а
-			// разные предметы.
-			continue
-		}
-		if label == "" || strings.EqualFold(label, answer) || strings.EqualFold(label, plan.Unit.Label) {
-			continue
-		}
-		if seen[strings.ToLower(label)] {
-			continue
-		}
-		seen[strings.ToLower(label)] = true
-		ref, known := byLabel[strings.ToLower(label)]
-		if !known {
-			ref = UnitRef{Label: label, Title: text}
-		}
-		out = append(out, ref)
-	}
-	return out
-}
-
 // Condition — условие задачи целиком: склейка фрагментов.
 //
 // Отдельного поля с условием нет намеренно. Два места для одного текста
@@ -161,30 +140,46 @@ func (d Draft) Condition() string {
 	return strings.Join(parts, " ")
 }
 
-// ParseDraft разбирает ответ модели.
+// ParseComposed разбирает ответ модели.
 //
 // Ответ бывает обёрнут в ```json: модели делают это даже там, где схема
 // запрещает, и ронять из-за обёртки готовую задачу незачем. Всё
 // остальное — отказ.
-func ParseDraft(answer string) (Draft, error) {
+func ParseComposed(answer string) (Composed, error) {
 	text := strings.TrimSpace(answer)
 	if text == "" {
-		return Draft{}, errors.New("модель вернула пустой ответ")
+		return Composed{}, errors.New("модель вернула пустой ответ")
 	}
 	if fenced := unfence(text); fenced != "" {
 		text = fenced
 	}
 
-	var draft Draft
+	var composed Composed
 	dec := json.NewDecoder(strings.NewReader(text))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&draft); err != nil {
+	if err := dec.Decode(&composed); err != nil {
 		// Текст ответа в отказ не подклеивается: он уезжает в журнал
 		// обращений целиком, а здесь мешал бы читать причину. Разбирают
 		// такое по журналу, а не по строке отказа.
-		return Draft{}, fmt.Errorf("ответ модели не разобран: %w", err)
+		return Composed{}, fmt.Errorf("ответ модели не разобран: %w", err)
 	}
-	return draft, nil
+	return composed, nil
+}
+
+// Draft собирает черновик из написанного моделью и собранного сервером.
+//
+// Единственное место, где эти две половины сходятся. Второе такое место
+// завело бы задачу, у которой варианты не те, что уехали в задание, и
+// разошлись бы они молча.
+func (c Composed) Draft(set AnswerSet) Draft {
+	return Draft{
+		Title:         c.Title,
+		Segments:      c.Segments,
+		Options:       set.Options(),
+		Answer:        set.Answer,
+		ExplanationMd: c.ExplanationMd,
+		Difficulty:    c.Difficulty,
+	}
 }
 
 // unfence снимает ограду ```json, если она есть.
@@ -206,29 +201,28 @@ func unfence(text string) string {
 // Мерило здесь — план, а не источник: план собран при заказе и уехал в
 // задание, а второе чтение источника разошлось бы с первым молча (см.
 // шапку order.go). Всё, чего нет в плане, — выдумка модели.
-func (d Draft) Validate(plan Plan) error {
+func (c Composed) Validate(plan Plan) error {
 	var faults []string
 	add := func(format string, args ...any) { faults = append(faults, fmt.Sprintf(format, args...)) }
 
-	if strings.TrimSpace(d.Title) == "" {
+	if strings.TrimSpace(c.Title) == "" {
 		add("у задачи нет заголовка")
 	}
-	if d.Difficulty < 1 || d.Difficulty > 5 {
+	if c.Difficulty < 1 || c.Difficulty > 5 {
 		// Сложность вне шкалы — признак того, что модель заполняла поле
 		// наугад, и доверять соседним полям того же ответа нет причин.
-		add("сложность %d вне шкалы от 1 до 5", d.Difficulty)
+		add("сложность %d вне шкалы от 1 до 5", c.Difficulty)
 	}
-	if len(d.Segments) == 0 {
+	if len(c.Segments) == 0 {
 		add("условие не разбито на фрагменты")
 	}
-	if strings.TrimSpace(d.ExplanationMd) == "" {
+	if strings.TrimSpace(c.ExplanationMd) == "" {
 		// Разбор — то, ради чего задача решается второй раз. Задача без
 		// него учит угадывать, а не рассуждать.
 		add("у задачи нет разбора")
 	}
 
-	faults = append(faults, d.checkStatements(plan)...)
-	faults = append(faults, d.checkOptions(plan)...)
+	faults = append(faults, c.checkStatements(plan)...)
 
 	if len(faults) == 0 {
 		return nil
@@ -240,7 +234,7 @@ func (d Draft) Validate(plan Plan) error {
 }
 
 // checkStatements — ссылки разметки.
-func (d Draft) checkStatements(plan Plan) []string {
+func (c Composed) checkStatements(plan Plan) []string {
 	known := map[string]bool{}
 	for _, designation := range plan.Designations() {
 		known[strings.ToLower(designation)] = true
@@ -249,7 +243,7 @@ func (d Draft) checkStatements(plan Plan) []string {
 	var faults []string
 	marked := 0
 	seen := map[string]bool{}
-	for i, s := range d.Segments {
+	for i, s := range c.Segments {
 		if strings.TrimSpace(s.Text) == "" {
 			faults = append(faults, fmt.Sprintf("фрагмент %d пуст", i+1))
 		}
@@ -277,140 +271,24 @@ func (d Draft) checkStatements(plan Plan) []string {
 	return faults
 }
 
-// checkOptions — варианты ответа.
-func (d Draft) checkOptions(plan Plan) []string {
-	var faults []string
-	if len(d.Options) < 3 {
-		// Меньше трёх вариантов — это не выбор, а подсказка: угадать
-		// верный можно, не читая условия.
-		faults = append(faults, fmt.Sprintf("вариантов %d: меньше трёх — это не выбор", len(d.Options)))
-	}
-
-	texts := map[string]bool{}
-	for i, o := range d.Options {
-		text := strings.TrimSpace(o.Text)
-		if text == "" {
-			faults = append(faults, fmt.Sprintf("вариант %d пуст", i+1))
-			continue
-		}
-		if texts[strings.ToLower(text)] {
-			// Два одинаковых варианта сокращают выбор молча: обучающийся
-			// видит четыре строки, а выбирает из трёх.
-			faults = append(faults, fmt.Sprintf("вариант %q повторяется", text))
-		}
-		texts[strings.ToLower(text)] = true
-	}
-
-	answer := strings.TrimSpace(d.Answer)
-	if answer == "" {
-		return append(faults, "у задачи нет верного ответа")
-	}
-
-	if plan.TaskKind == KindAction {
-		return append(faults, d.checkActionAnswer(plan, answer)...)
-	}
-	return append(faults, d.checkRecogniseAnswer(plan, answer)...)
-}
-
-// checkRecogniseAnswer — у задачи-узнавания эталон и варианты суть единицы
-// источника.
-func (d Draft) checkRecogniseAnswer(plan Plan, answer string) []string {
-	var faults []string
-	allowed := map[string]bool{strings.ToLower(plan.Unit.Label): true}
-	for _, s := range plan.Siblings {
-		allowed[strings.ToLower(s.Label)] = true
-	}
-
-	if !strings.EqualFold(answer, plan.Unit.Label) {
-		// Эталон выбирает заказ, а не модель: задача, ответившая другой
-		// единицей, отвечает не на тот вопрос, который заказывали.
-		faults = append(faults, fmt.Sprintf(
-			"верным назван %s %q, а заказан был %q", plan.UnitWord, answer, plan.Unit.Label))
-	}
-
-	answerAmong := false
-	for i, o := range d.Options {
-		label := strings.TrimSpace(o.Label)
-		if label == "" {
-			faults = append(faults, fmt.Sprintf("у варианта %d нет метки единицы", i+1))
-			continue
-		}
-		if !allowed[strings.ToLower(label)] {
-			// Круг различения собран при заказе из данных источника.
-			// Единица со стороны — это либо выдумка, либо сосед, которого
-			// источник соседом не считает.
-			faults = append(faults, fmt.Sprintf(
-				"вариант %q не из круга различения этого заказа", label))
-		}
-		if strings.EqualFold(label, answer) {
-			answerAmong = true
-		}
-	}
-	if !answerAmong {
-		faults = append(faults, "верного ответа нет среди вариантов")
-	}
-	return faults
-}
-
-// checkActionAnswer — у задачи-действия эталон это текст действия.
-func (d Draft) checkActionAnswer(plan Plan, answer string) []string {
-	var faults []string
-	for i, o := range d.Options {
-		if strings.TrimSpace(o.Label) != "" {
-			// Метка единицы у варианта-действия — признак того, что
-			// модель написала задачу другого вида: варианты должны быть
-			// действиями, а не единицами источника.
-			faults = append(faults, fmt.Sprintf(
-				"у варианта %d стоит метка единицы, а заказан был %s", i+1, KindWord(KindAction)))
-		}
-	}
-	among := false
-	for _, o := range d.Options {
-		if strings.EqualFold(strings.TrimSpace(o.Text), answer) {
-			among = true
-		}
-	}
-	if !among {
-		faults = append(faults, "верного ответа нет среди вариантов")
-	}
-	return faults
-}
-
-// DraftSchema — схема ответа модели для этого заказа.
+// ComposedSchema — схема ответа модели для этого заказа.
 //
-// Схема строится под заказ, а не берётся общей: круг различения и
-// обозначения положений у каждого заказа свои, и перечисленные в схеме
-// значения не дают модели выдумать ни единицу со стороны, ни ссылку на
-// несуществующее положение. Разбор всё равно проверяет то же самое:
-// схему понимают не все шлюзы, и там, где её сняли, мерилом остаётся
-// Validate.
-func DraftSchema(plan Plan) json.RawMessage {
+// Схема строится под заказ, а не берётся общей: обозначения положений у
+// каждого заказа свои, и перечисленные в схеме значения не дают модели
+// сослаться на несуществующее положение. Разбор всё равно проверяет то же
+// самое: схему понимают не все шлюзы, и там, где её сняли, мерилом
+// остаётся Validate.
+//
+// Вариантов ответа в схеме нет, и это главное её изменение: круг собрал
+// сервер и прислал модели готовым. Оставь мы поле — модель заполняла бы
+// его старательно, мы бы его выбрасывали, и платили бы за выброшенное.
+func ComposedSchema(plan Plan) json.RawMessage {
 	statements := plan.Designations()
 	sort.Strings(statements)
 
-	option := map[string]any{
-		"type":     "object",
-		"required": []string{"text"},
-		"properties": map[string]any{
-			"text":  map[string]any{"type": "string"},
-			"label": map[string]any{"type": "string"},
-		},
-		"additionalProperties": false,
-	}
-	if plan.TaskKind != KindAction {
-		labels := []string{plan.Unit.Label}
-		for _, s := range plan.Siblings {
-			labels = append(labels, s.Label)
-		}
-		option["required"] = []string{"text", "label"}
-		option["properties"].(map[string]any)["label"] = map[string]any{
-			"type": "string", "enum": labels,
-		}
-	}
-
 	schema := map[string]any{
 		"type":     "object",
-		"required": []string{"title", "segments", "options", "answer", "explanationMd", "difficulty"},
+		"required": []string{"title", "segments", "explanationMd", "difficulty"},
 		"properties": map[string]any{
 			"title": map[string]any{"type": "string"},
 			"segments": map[string]any{
@@ -429,8 +307,6 @@ func DraftSchema(plan Plan) json.RawMessage {
 					"additionalProperties": false,
 				},
 			},
-			"options":       map[string]any{"type": "array", "minItems": 3, "items": option},
-			"answer":        map[string]any{"type": "string"},
 			"explanationMd": map[string]any{"type": "string"},
 			"difficulty":    map[string]any{"type": "integer", "minimum": 1, "maximum": 5},
 		},

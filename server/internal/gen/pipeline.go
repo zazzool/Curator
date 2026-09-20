@@ -168,10 +168,23 @@ func (r *Runner) RunNext(ctx context.Context) (Result, bool, error) {
 }
 
 func (r *Runner) run(ctx context.Context, job Job) (Result, error) {
+	// Круг вариантов собирается ОДИН раз на задание и читается всеми:
+	// заданием написания, телом черновика и различающей сверкой. Собери
+	// его каждый заново — и задача спрашивала бы одно, а сверка мерила
+	// другое; расходились бы они молча, потому что обе части выглядели бы
+	// исправными.
+	//
+	// И собирается он ДО обращения к модели: источник, из которого круга
+	// не набирается, отказывает бесплатно.
+	set, err := job.Plan.AnswerSet()
+	if err != nil {
+		return Result{}, err
+	}
+
 	if err := r.jobs.Step(ctx, job.ID, NodeCompose); err != nil {
 		return Result{}, err
 	}
-	draft, err := r.compose(ctx, job)
+	draft, err := r.compose(ctx, job, set)
 	if err != nil {
 		return Result{}, err
 	}
@@ -220,7 +233,7 @@ func (r *Runner) run(ctx context.Context, job Job) (Result, error) {
 	result.Verdict = verdict
 	r.keepCheck(ctx, job.ID, draftID, result.Check)
 
-	r.runSiblings(ctx, job, draftID, draft, &result)
+	r.runSiblings(ctx, job, draftID, draft, set, &result)
 	r.runCueCheck(ctx, job, draftID, draft, &result)
 	return result, nil
 }
@@ -264,12 +277,12 @@ func (r *Runner) runCueCheck(ctx context.Context, job Job, draftID int64, draft 
 //
 // Отказ узла задание не роняет: задача написана и сверена, а не
 // состоявшаяся различающая сверка — это пометка, а не брак.
-func (r *Runner) runSiblings(ctx context.Context, job Job, draftID int64, draft Draft, result *Result) {
+func (r *Runner) runSiblings(ctx context.Context, job Job, draftID int64, draft Draft, set AnswerSet, result *Result) {
 	if err := r.jobs.Step(ctx, job.ID, NodeSiblings); err != nil {
 		log.Printf("задание %d: шаг различающей сверки не записан: %v", job.ID, err)
 		return
 	}
-	checks := r.checkSiblings(ctx, job, draft)
+	checks := r.checkSiblings(ctx, job, draft, set)
 	result.Siblings = checks
 	if err := r.jobs.SaveSiblingChecks(ctx, draftID, checks); err != nil {
 		log.Printf("задание %d: итоги различающей сверки не записаны в черновик %d: %v",
@@ -291,7 +304,12 @@ func (r *Runner) keepCheck(ctx context.Context, jobID, draftID int64, check Chec
 }
 
 // compose — узел написания.
-func (r *Runner) compose(ctx context.Context, job Job) (Draft, error) {
+//
+// Круг приходит готовым: модель пишет прозу, а варианты в черновик
+// ставит сборка (Composed.Draft). Выбрать вариант со стороны она больше
+// не может — не потому, что мы это ловим, а потому, что её об этом не
+// спрашивают.
+func (r *Runner) compose(ctx context.Context, job Job, set AnswerSet) (Draft, error) {
 	prompt, err := r.prompts.ForNode(ctx, NodeCompose)
 	if err != nil {
 		return Draft{}, err
@@ -308,23 +326,23 @@ func (r *Runner) compose(ctx context.Context, job Job) (Draft, error) {
 	// в студии, — и свод перестал бы уходить молча, а задачи стали бы
 	// хуже без единого следа в журнале.
 	answer, err := r.ask(ctx, job, NodeCompose, llm.Prompt{
-		System:     Render(prompt.SystemMd, plan) + block,
-		User:       Render(prompt.UserMd, plan),
-		Schema:     DraftSchema(plan),
+		System:     RenderSet(prompt.SystemMd, plan, set) + block,
+		User:       RenderSet(prompt.UserMd, plan, set),
+		Schema:     ComposedSchema(plan),
 		SchemaName: "case_draft",
 	})
 	if err != nil {
 		return Draft{}, err
 	}
 
-	draft, err := ParseDraft(answer)
+	composed, err := ParseComposed(answer)
 	if err != nil {
 		return Draft{}, err
 	}
-	if err := draft.Validate(plan); err != nil {
+	if err := composed.Validate(plan); err != nil {
 		return Draft{}, err
 	}
-	return draft, nil
+	return composed.Draft(set), nil
 }
 
 // ruleBlock — блок свода для узла, готовый к дописыванию в задание.
