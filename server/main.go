@@ -53,7 +53,10 @@ func main() {
 
 	var gate *dbgate.Gate
 	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
-		g, err := dbgate.Open(ctx, dsn, slowThreshold())
+		g, err := dbgate.Open(ctx, dsn, dbgate.Options{
+			Slow:    slowThreshold(),
+			Timeout: queryTimeout(),
+		})
 		if err != nil {
 			// Отказ, а не работа без базы: поднявшийся сервер без базы
 			// выглядит исправным и отвечает пустотой, а пустоту работа
@@ -100,16 +103,45 @@ func main() {
 func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		// Живость отвечает и без базы: её спрашивает docker, и ответ
-		// «жив» про процесс, а не про хранилище. Готовность базы — другой
-		// вопрос и другая ручка, она появится вместе с тем, что от базы
-		// зависит.
+		// Живость отвечает и без базы: её спрашивает тот, кто решает,
+		// перезапускать ли процесс, и ответ «жив» про процесс, а не про
+		// хранилище. Перезапуск процесса отпавшую базу не вернёт.
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		if gate == nil {
 			_, _ = w.Write([]byte("жив, без базы\n"))
 			return
 		}
 		_, _ = w.Write([]byte("жив\n"))
+	})
+
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		// Готовность — это «могу работать», и от базы здесь зависит всё.
+		// Раньше её не спрашивал никто, и HEALTHCHECK смотрел на живость:
+		// база, отпавшая после подъёма, оставляла контейнер «здоровым»,
+		// прокси слал в него обращения, каждое отвечало пятисотым, и
+		// docker был доволен. Тихий отказ стоит дороже громкого.
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		if gate == nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("не готов: базы нет\n"))
+			return
+		}
+		// Срок короткий и свой: у двери он общий на все запросы и для
+		// опроса готовности велик. Опрос, ждущий полминуты, узнаёт об
+		// отказе позже прокси, который к тому времени уже отдал ответ
+		// врачу.
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+		if err := gate.Ping(ctx); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			// Отказ базы пишется в журнал, а не в ответ: ответ читает
+			// docker, а строку подключения из отказа pgx — всякий, кому
+			// ручка открыта.
+			log.Printf("/readyz: база не отвечает: %v", err)
+			_, _ = w.Write([]byte("не готов: база не отвечает\n"))
+			return
+		}
+		_, _ = w.Write([]byte("готов\n"))
 	})
 
 	// Дверь приложения. За ней стоит не сотрудник, а установленная
@@ -363,6 +395,24 @@ func addr() string {
 //
 // Ноль выключает журнал. Умолчание выбрано так, чтобы в него не попадали
 // обычные запросы: журнал, куда пишется всё, не читают вовсе.
+// queryTimeout — срок на один запрос к базе.
+//
+// Тридцать секунд: столько не идёт ни один запрос, который ждёт человек,
+// и столько не жалко подождать самому тяжёлому отчёту. Ноль снимает срок
+// совсем — на случай, когда запрос идёт дольше и это известно заранее.
+func queryTimeout() time.Duration {
+	raw := os.Getenv("CURATOR_QUERY_TIMEOUT_MS")
+	if raw == "" {
+		return 30 * time.Second
+	}
+	ms, err := strconv.Atoi(raw)
+	if err != nil || ms < 0 {
+		log.Printf("CURATOR_QUERY_TIMEOUT_MS=%q не понято, беру умолчание", raw)
+		return 30 * time.Second
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
 func slowThreshold() time.Duration {
 	raw := os.Getenv("CURATOR_SLOW_MS")
 	if raw == "" {

@@ -86,13 +86,13 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	defer cancel()
 
-	old, err := dbgate.Open(ctx, oldDSN, 0)
+	old, err := dbgate.Open(ctx, oldDSN, dbgate.Options{})
 	if err != nil {
 		log.Fatalf("прежняя база недоступна: %v", err)
 	}
 	defer old.Close()
 
-	fresh, err := dbgate.Open(ctx, newDSN, 0)
+	fresh, err := dbgate.Open(ctx, newDSN, dbgate.Options{})
 	if err != nil {
 		log.Fatalf("новая база недоступна: %v", err)
 	}

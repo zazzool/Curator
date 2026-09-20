@@ -42,7 +42,9 @@ die() {
     exit 1
 }
 
-# Ждёт, пока контур ответит снаружи. Последний ответ кладёт в READY_STATUS.
+# Ждёт, пока контур будет ГОТОВ снаружи. Последний ответ кладёт в
+# READY_STATUS. Именно готов, а не жив: живость отвечает и при отпавшей
+# базе, и выкатка объявляла бы удачей контур, отвечающий пятисотым.
 #
 # Подпрограммой, потому что этим опросом кончаются оба пути — и выкатка
 # вперёд, и возврат назад; два места для одного окна ожидания разошлись бы
@@ -52,9 +54,21 @@ wait_ready() {
     local attempt
     for attempt in $(seq 1 20); do
         READY_STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
-            --connect-timeout 5 --max-time 15 "$ORIGIN/healthz" || true)
+            --connect-timeout 5 --max-time 15 "$ORIGIN/readyz" || true)
         if [ "$READY_STATUS" = "200" ]; then
             return 0
+        fi
+        # Четыреста четвёртый — это возврат на образ старше, чем сама
+        # ручка готовности. Спрашивать у него готовность бессмысленно, и
+        # объявить возврат неудавшимся из-за этого было бы враньём:
+        # возврат как раз удался.
+        if [ "$READY_STATUS" = "404" ]; then
+            echo "  /readyz нет — образ старше ручки, спрашиваю /healthz" >&2
+            READY_STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
+                --connect-timeout 5 --max-time 15 "$ORIGIN/healthz" || true)
+            if [ "$READY_STATUS" = "200" ]; then
+                return 0
+            fi
         fi
         sleep 2
     done
@@ -104,7 +118,7 @@ if [ "$ROLLBACK" = 1 ]; then
     ssh "$HOST" "cd $DIR && docker tag curator:previous curator:latest && \
         docker compose up -d --no-build curator"
     if wait_ready; then
-        echo "Контур вернулся: $ORIGIN/healthz отвечает $READY_STATUS"
+        echo "Контур вернулся: $ORIGIN/readyz отвечает $READY_STATUS"
         exit 0
     fi
     die "Контур не ответил после возврата (последний ответ: ${READY_STATUS:-нет}). " \
@@ -195,7 +209,7 @@ ssh "$HOST" "cd $DIR && docker compose up -d --no-build curator"
 
 echo "== Жду ответа контура =="
 if wait_ready; then
-    echo "Готово: $ORIGIN/healthz отвечает $READY_STATUS"
+    echo "Готово: $ORIGIN/readyz отвечает $READY_STATUS"
 else
     echo "Контур не ответил (последний ответ: ${READY_STATUS:-нет})." >&2
     echo "Журнал: ssh $HOST 'cd $DIR && docker compose logs --tail=100 curator'" >&2

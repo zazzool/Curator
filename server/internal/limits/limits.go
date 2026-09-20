@@ -56,9 +56,9 @@ func Body(max int64, next http.Handler) http.Handler {
 }
 
 // Ведро жетонов на один ключ.
-type ведро struct {
-	жетонов   float64
-	последний time.Time
+type bucket struct {
+	tokens float64
+	last   time.Time
 }
 
 // Bucket — ведро с жетонами по ключу: сколько обращений и как быстро
@@ -69,22 +69,22 @@ type ведро struct {
 // разрешает всплеск ровно на свою ёмкость и дальше пропускает со
 // скоростью пополнения.
 type Bucket struct {
-	ёмкость  float64
-	вСекунду float64
+	capacity  float64
+	perSecond float64
 
-	mu    sync.Mutex
-	вёдра map[string]*ведро
+	mu      sync.Mutex
+	buckets map[string]*bucket
 }
 
 // Сколько вёдер должно накопиться, чтобы уборка стала оправданной.
-const уборкаОт = 1024
+const sweepFrom = 1024
 
 // NewBucket заводит ведро: burst обращений сразу, затем perMinute в минуту.
 func NewBucket(burst int, perMinute float64) *Bucket {
 	return &Bucket{
-		ёмкость:  float64(burst),
-		вСекунду: perMinute / 60,
-		вёдра:    map[string]*ведро{},
+		capacity:  float64(burst),
+		perSecond: perMinute / 60,
+		buckets:   map[string]*bucket{},
 	}
 }
 
@@ -93,25 +93,25 @@ func (b *Bucket) Allow(key string, now time.Time) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	one, есть := b.вёдра[key]
-	if !есть {
+	one, ok := b.buckets[key]
+	if !ok {
 		// Уборка перед заведением нового и только когда вёдер уже много:
 		// на каждом обращении обход карты стоил бы дороже самой защиты.
-		if len(b.вёдра) >= уборкаОт {
+		if len(b.buckets) >= sweepFrom {
 			b.sweep(now)
 		}
-		b.вёдра[key] = &ведро{жетонов: b.ёмкость - 1, последний: now}
+		b.buckets[key] = &bucket{tokens: b.capacity - 1, last: now}
 		return true
 	}
-	one.жетонов += now.Sub(one.последний).Seconds() * b.вСекунду
-	if one.жетонов > b.ёмкость {
-		one.жетонов = b.ёмкость
+	one.tokens += now.Sub(one.last).Seconds() * b.perSecond
+	if one.tokens > b.capacity {
+		one.tokens = b.capacity
 	}
-	one.последний = now
-	if one.жетонов < 1 {
+	one.last = now
+	if one.tokens < 1 {
 		return false
 	}
-	one.жетонов--
+	one.tokens--
 	return true
 }
 
@@ -126,11 +126,11 @@ func (b *Bucket) Allow(key string, now time.Time) bool {
 // в проекте уже есть два написанных и ни разу не позванных, и нашёл их
 // аудит, а не отказ. Здесь забыть нечего: уборка — часть работы ведра.
 func (b *Bucket) sweep(now time.Time) {
-	for key, one := range b.вёдра {
+	for key, one := range b.buckets {
 		// Ведро, дожившее до полного, не помнит ничего: пустить такой
 		// адрес заново и завести ему свежее ведро — одно и то же.
-		if now.Sub(one.последний).Seconds()*b.вСекунду >= b.ёмкость {
-			delete(b.вёдра, key)
+		if now.Sub(one.last).Seconds()*b.perSecond >= b.capacity {
+			delete(b.buckets, key)
 		}
 	}
 }

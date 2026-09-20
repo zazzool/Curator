@@ -23,7 +23,7 @@ func gate(t *testing.T) *dbgate.Gate {
 	if dsn == "" {
 		t.Fatal("CURATOR_TEST_DSN не задан: показывать дефекты не на чем")
 	}
-	g, err := dbgate.Open(context.Background(), dsn, 0)
+	g, err := dbgate.Open(context.Background(), dsn, dbgate.Options{})
 	if err != nil {
 		t.Fatalf("база: %v", err)
 	}

@@ -22,7 +22,7 @@ func testGate(t *testing.T) *dbgate.Gate {
 		t.Fatal("CURATOR_TEST_DSN не задан: проверки на живой базе не идут. " +
 			"Это отказ, а не пропуск — см. server/.env.example")
 	}
-	gate, err := dbgate.Open(context.Background(), dsn, 0)
+	gate, err := dbgate.Open(context.Background(), dsn, dbgate.Options{})
 	if err != nil {
 		t.Fatalf("проверочная база недоступна: %v", err)
 	}
