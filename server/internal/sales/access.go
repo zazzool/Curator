@@ -24,6 +24,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"curator/server/internal/audience"
 	"curator/server/internal/dbgate"
 	"curator/server/internal/packs"
 )
@@ -31,16 +32,42 @@ import (
 // Access отвечает, открыт ли набор врачу.
 type Access struct {
 	gate *dbgate.Gate
+
+	// groups — группы врачей. Они добавляют к линейке два довода:
+	// «открыто группе» и «скрыто от группы».
+	groups *audience.Store
 }
 
-func NewAccess(gate *dbgate.Gate) *Access { return &Access{gate: gate} }
+func NewAccess(gate *dbgate.Gate) *Access {
+	return &Access{gate: gate, groups: audience.NewStore(gate)}
+}
+
+// verdicts — что группы говорят о наборах этому врачу.
+//
+// Одна работа на оба расчёта — и на витрину с корпусом (OpenPackIDs), и
+// на выгрузку (Allowed). Собирай каждый сведения по-своему, они однажды
+// разойдутся: у донора четыре таких места собирали права каждое сам, и
+// заказные наборы знали не все четыре.
+func (a *Access) verdicts(ctx context.Context, accountID int64, now time.Time) (map[int64]audience.Verdict, error) {
+	in, err := a.groups.Membership(ctx, accountID, now)
+	if err != nil {
+		return nil, err
+	}
+	if len(in) == 0 {
+		// Врач не попал ни в одну группу — связи читать незачем.
+		return nil, nil
+	}
+	bindings, err := a.groups.Bindings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return audience.Verdicts(in, bindings), nil
+}
 
 // Allowed — открыт ли набор.
 //
 // Решает не эта работа, а `packs.OpenTo`: она одна на витрину, корпус и
-// выгрузку. Здесь только собираются сведения, которых ей не хватает, — и
-// собираются одним запросом, потому что витрина зовёт Allowed на каждый
-// набор списка.
+// выгрузку. Здесь только собираются сведения, которых ей не хватает.
 //
 // # Чем это было прежде
 //
@@ -56,34 +83,100 @@ func NewAccess(gate *dbgate.Gate) *Access { return &Access{gate: gate} }
 // Бесплатным набор делается линейкой `sponsored`, и это видно в студии
 // словом, а не отсутствием числа.
 func (a *Access) Allowed(ctx context.Context, accountID int64, slug string, now time.Time) (bool, error) {
-	var line string
-	var owns, subscribed, emailBound bool
-	err := a.gate.QueryRow(ctx, `
-		SELECT p.line,
-		       EXISTS (SELECT 1 FROM entitlements e
-		                WHERE e.account_id = $1 AND e.pack_id = p.id
-		                  AND e.revoked_at IS NULL AND e.starts_at <= $3
-		                  AND (e.expires_at IS NULL OR e.expires_at > $3)),
-		       EXISTS (SELECT 1 FROM entitlements e
-		                WHERE e.account_id = $1 AND e.kind = 'subscription'
-		                  AND e.revoked_at IS NULL AND e.starts_at <= $3
-		                  AND (e.expires_at IS NULL OR e.expires_at > $3)),
-		       EXISTS (SELECT 1 FROM accounts a
-		                WHERE a.id = $1 AND a.email IS NOT NULL)
-		  FROM packs p WHERE p.slug = $2`, accountID, slug, now).
-		Scan(&line, &owns, &subscribed, &emailBound)
-	if errors.Is(err, pgx.ErrNoRows) {
-		// Набора нет — и закрыт он не потому, что за него не заплатили.
-		// Отвечать «открыт» здесь значило бы пустить выгрузку дальше, к
-		// набору, которого нет.
-		return false, nil
-	}
+	each, err := a.StateEach(ctx, accountID, []string{slug}, now)
 	if err != nil {
 		return false, err
 	}
-	return packs.OpenTo(line, packs.Rights{
-		Owns: owns, Subscribed: subscribed, EmailBound: emailBound,
-	}), nil
+	// Набора нет — и закрыт он не потому, что за него не заплатили.
+	// Отвечать «открыт» здесь значило бы пустить выгрузку дальше, к
+	// набору, которого нет.
+	return each[slug].Open, nil
+}
+
+// State — что показывать про набор этому врачу.
+type State struct {
+	// Open — набор открыт: качать можно.
+	Open bool
+
+	// Hidden — набор скрыт от врача группой.
+	//
+	// Отдельно от Open, потому что «закрыт» и «скрыт» — разные ответы
+	// витрине. Закрытый набор показывается и предлагает открыть себя
+	// покупкой или входом; скрытый не показывается вовсе, иначе
+	// «скрыть» означало бы «оставить на прилавке с ценником» — и врач
+	// купил бы то, что мы от него прячем.
+	//
+	// Скрытый и при этом открытый — не противоречие, а купивший: право
+	// сильнее скрытия, и такой набор остаётся на витрине.
+	Hidden bool
+}
+
+// StateEach отвечает про несколько наборов разом.
+//
+// # Зачем разом, а не по одному
+//
+// Витрина спрашивает про каждый набор списка, и пока ответ стоил одного
+// запроса, спрашивать по одному было незаметно. С группами ответ стоит
+// ещё и портрета врача — а портрет у давнего пользователя читает его
+// попытки. Двадцать наборов витрины превратились бы в двадцать таких
+// чтений одного и того же.
+//
+// Сведения о самом враче собираются один раз, группы — один раз, и это
+// же делает Allowed частным случаем: место сборки Rights в службе одно.
+// У донора таких мест было четыре, каждое собирало по-своему, и однажды
+// они разошлись — заказные наборы знали не все четыре.
+func (a *Access) StateEach(ctx context.Context, accountID int64, slugs []string, now time.Time) (map[string]State, error) {
+	out := map[string]State{}
+	if len(slugs) == 0 {
+		return out, nil
+	}
+
+	var subscribed, emailBound bool
+	if err := a.gate.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM entitlements e
+		                WHERE e.account_id = $1 AND e.kind = 'subscription'
+		                  AND e.revoked_at IS NULL AND e.starts_at <= $2
+		                  AND (e.expires_at IS NULL OR e.expires_at > $2)),
+		       EXISTS (SELECT 1 FROM accounts a
+		                WHERE a.id = $1 AND a.email IS NOT NULL)`,
+		accountID, now).Scan(&subscribed, &emailBound); err != nil {
+		return nil, err
+	}
+
+	verdicts, err := a.verdicts(ctx, accountID, now)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := a.gate.Query(ctx, `
+		SELECT p.id, p.slug, p.line,
+		       EXISTS (SELECT 1 FROM entitlements e
+		                WHERE e.account_id = $1 AND e.pack_id = p.id
+		                  AND e.revoked_at IS NULL AND e.starts_at <= $2
+		                  AND (e.expires_at IS NULL OR e.expires_at > $2))
+		  FROM packs p WHERE p.slug = ANY($3)`, accountID, now, slugs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id int64
+		var slug, line string
+		var owns bool
+		if err := rows.Scan(&id, &slug, &line, &owns); err != nil {
+			return nil, err
+		}
+		v := verdicts[id]
+		out[slug] = State{
+			Open: packs.OpenTo(line, packs.Rights{
+				Owns: owns, Subscribed: subscribed, EmailBound: emailBound,
+				Granted: v.Granted, Hidden: v.Hidden,
+			}),
+			Hidden: v.Hidden,
+		}
+	}
+	return out, rows.Err()
 }
 
 // OpenPackIDs — номера наборов, открытых этой учётной записи.
@@ -107,6 +200,11 @@ func (a *Access) OpenPackIDs(ctx context.Context, accountID int64, now time.Time
 		       EXISTS (SELECT 1 FROM accounts a
 		                WHERE a.id = $1 AND a.email IS NOT NULL)`,
 		accountID, now).Scan(&subscribed, &emailBound); err != nil {
+		return nil, false, err
+	}
+
+	verdicts, err := a.verdicts(ctx, accountID, now)
+	if err != nil {
 		return nil, false, err
 	}
 
@@ -139,8 +237,10 @@ func (a *Access) OpenPackIDs(ctx context.Context, accountID int64, now time.Time
 			// только тому, кто его купил.
 			continue
 		}
+		v := verdicts[id]
 		if packs.OpenTo(line, packs.Rights{
 			Owns: owns, Subscribed: subscribed, EmailBound: emailBound,
+			Granted: v.Granted, Hidden: v.Hidden,
 		}) {
 			open = append(open, id)
 		}
