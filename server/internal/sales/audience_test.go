@@ -237,3 +237,63 @@ func TestPgБезГруппКорпусТакойЖеКакБылДоНих(t *t
 		}
 	}
 }
+
+func TestPgВитринаГоворитЧемНаборОткрытАНеТолькоЧтоОткрыт(t *testing.T) {
+	// Одного «открыт» витрине мало. Купленное не отбирают никогда, а
+	// открытое группой держится на правиле, и правило смотрит на живого
+	// врача: попавший в группу «не заходил месяц» выйдет из неё, едва
+	// зайдя, и набор пропадёт у него сам. Промолчи витрина о доводе —
+	// врач прочёл бы пропажу как поломку приложения.
+	//
+	// Проверяется здесь именно связка доводов на живой базе, а не
+	// перебор: перебор проверен таблицей в packs. Здесь важно, что довод
+	// доезжает из базы до ответа не подменившись — что купившего не
+	// объявили членом группы и наоборот.
+	gate := testGate(t)
+	access := NewAccess(gate)
+	ctx := context.Background()
+	slug := наборЛинейки(t, gate, packs.LinePaid)
+	packID := номер(t, gate, slug)
+
+	группой := врач(t, gate)
+	покупкой := врач(t, gate)
+	линейкой := врач(t, gate)
+	никак := врач(t, gate)
+
+	группа := вГруппу(t, gate, slug, audience.Rule{}, audience.ModeOpen)
+	if err := audience.NewStore(gate).AddMember(ctx, группа, группой, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gate.Exec(ctx, `
+		INSERT INTO entitlements (account_id, kind, pack_id, origin)
+		VALUES ($1, 'pack', $2, 'grant')`, покупкой, packID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gate.Exec(ctx, `
+		INSERT INTO entitlements (account_id, kind, origin)
+		VALUES ($1, 'subscription', 'grant')`, линейкой); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, случай := range []struct {
+		имя     string
+		account int64
+		open    bool
+		by      string
+	}{
+		{"член группы", группой, true, packs.ByGroup},
+		{"купивший", покупкой, true, packs.ByPurchase},
+		{"подписчик", линейкой, true, packs.ByLine},
+		{"посторонний", никак, false, ""},
+	} {
+		state, err := access.StateEach(ctx, случай.account, []string{slug}, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := state[slug]
+		if got.Open != случай.open || got.By != случай.by {
+			t.Errorf("%s: витрина отвечает open=%v by=%q, ждали open=%v by=%q",
+				случай.имя, got.Open, got.By, случай.open, случай.by)
+		}
+	}
+}

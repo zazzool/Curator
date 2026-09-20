@@ -109,6 +109,13 @@ type State struct {
 	// Скрытый и при этом открытый — не противоречие, а купивший: право
 	// сильнее скрытия, и такой набор остаётся на витрине.
 	Hidden bool
+
+	// By — чем набор открыт (`packs.By…`); у закрытого пусто.
+	//
+	// Считается тем же перебором, что и Open: витрина говорит врачу, что
+	// доступ держится на группе, а не на покупке, и отдельный расчёт для
+	// этого разошёлся бы с решением молча.
+	By string
 }
 
 // StateEach отвечает про несколько наборов разом.
@@ -168,13 +175,11 @@ func (a *Access) StateEach(ctx context.Context, accountID int64, slugs []string,
 			return nil, err
 		}
 		v := verdicts[id]
-		out[slug] = State{
-			Open: packs.OpenTo(line, packs.Rights{
-				Owns: owns, Subscribed: subscribed, EmailBound: emailBound,
-				Granted: v.Granted, Hidden: v.Hidden,
-			}),
-			Hidden: v.Hidden,
-		}
+		verdict := packs.Decide(line, packs.Rights{
+			Owns: owns, Subscribed: subscribed, EmailBound: emailBound,
+			Granted: v.Granted, Hidden: v.Hidden,
+		})
+		out[slug] = State{Open: verdict.Open, Hidden: v.Hidden, By: verdict.By}
 	}
 	return out, rows.Err()
 }
