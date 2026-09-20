@@ -166,3 +166,114 @@ func (s *Store) Seed(ctx context.Context) error {
 		return nil
 	})
 }
+
+// Confirm — задание подтвердило правило: оно нарушило его или показало,
+// что оно нужно.
+//
+// Подтверждение идёт ОДНОЙ транзакцией с блокировкой строки, а не
+// чтением и записью подряд. Два исполнителя очереди подтверждают правило
+// одновременно, читают одно число, прибавляют по единице и записывают
+// одно и то же: кворум набирался бы вдвое дольше, а выглядело бы это
+// исправной работой. Повтор при конфликте тут не спасает — соперники
+// видят одно состояние и сталкиваются снова.
+//
+// Одно задание считается один раз, сколько бы замечаний оно ни принесло:
+// задача, где признак назван трижды, — всё равно одна задача, и считать
+// её за три значило бы выдать кворум в одиночку. Держит это seen_jobs, а
+// не совесть вызывающего.
+//
+// Возвращает правило после подтверждения и признак того, что оно
+// зачлось: повторное подтверждение тем же заданием — не ошибка, а
+// обычный случай.
+func (s *Store) Confirm(ctx context.Context, id string, jobID int64) (Rule, bool, error) {
+	var out Rule
+	var counted bool
+	now := s.now()
+
+	err := s.gate.InTx(ctx, func(tx pgx.Tx) error {
+		var r Rule
+		var scope []byte
+		var lastSeen *time.Time
+		err := tx.QueryRow(ctx,
+			`SELECT id, title, text, why, kind, source, status, pinned, scope,
+			        confirmations, seen_jobs, valid_from, valid_to,
+			        last_seen_at, created_at, updated_at
+			   FROM rulebook WHERE id = $1 FOR UPDATE`, id).
+			Scan(&r.ID, &r.Title, &r.Text, &r.Why, &r.Kind, &r.Source, &r.Status,
+				&r.Pinned, &scope, &r.Confirmations, &r.SeenJobs, &r.ValidFrom,
+				&r.ValidTo, &lastSeen, &r.CreatedAt, &r.UpdatedAt)
+		if err != nil {
+			return fmt.Errorf("правило %q не прочитано для подтверждения: %w", id, err)
+		}
+		if len(scope) > 0 {
+			if err := json.Unmarshal(scope, &r.Scope); err != nil {
+				return fmt.Errorf("область правила %q не разобрана: %w", id, err)
+			}
+		}
+		if lastSeen != nil {
+			r.LastSeenAt = *lastSeen
+		}
+
+		if hasInt(r.SeenJobs, jobID) {
+			// Это задание правило уже подтверждало. Ни счётчик, ни срок
+			// не трогаются: иначе повторный проход по тем же замечаниям
+			// — а он бывает при перезапуске задания — выдал бы кворум
+			// одной задачей.
+			out = r
+			return nil
+		}
+
+		r.SeenJobs = append(r.SeenJobs, jobID)
+		r.Confirmations++
+		r.LastSeenAt = now
+		// Состояние пересчитывается ТЕМ ЖЕ Normalize, что и при записи:
+		// кворум, назначенное человеком и погашенное описаны в одном
+		// месте, и второе их описание здесь разошлось бы молча.
+		if err := r.Normalize(now); err != nil {
+			return fmt.Errorf("правило %q после подтверждения негодно: %w", id, err)
+		}
+
+		_, err = tx.Exec(ctx,
+			`UPDATE rulebook
+			    SET confirmations = $2, seen_jobs = $3, last_seen_at = $4,
+			        status = $5, updated_at = $6
+			  WHERE id = $1`,
+			r.ID, r.Confirmations, r.SeenJobs, r.LastSeenAt, r.Status, r.UpdatedAt)
+		if err != nil {
+			return fmt.Errorf("подтверждение правила %q не записано: %w", id, err)
+		}
+		out, counted = r, true
+		return nil
+	})
+	return out, counted, err
+}
+
+// Propose заводит выведенное правило, если его ещё нет, и подтверждает
+// его этим заданием.
+//
+// Заводится КАНДИДАТОМ и ждёт кворума — даже когда правило очевидно.
+// Заведи его действующим, и первое же случайное замечание стало бы
+// требованием к модели на все следующие задачи.
+//
+// Существующее правило не переписывается: составитель мог поправить его
+// текст или погасить, и накат обучения затёр бы его работу.
+func (s *Store) Propose(ctx context.Context, r Rule, jobID int64) (Rule, bool, error) {
+	now := s.now()
+	if err := r.Normalize(now); err != nil {
+		return Rule{}, false, err
+	}
+	scope, err := json.Marshal(r.Scope)
+	if err != nil {
+		return Rule{}, false, fmt.Errorf("область правила %q не записана: %w", r.ID, err)
+	}
+	_, err = s.gate.Exec(ctx,
+		`INSERT INTO rulebook (id, title, text, why, kind, source, status,
+		                       scope, valid_from, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,'candidate',$7,$8,$8,$8)
+		 ON CONFLICT (id) DO NOTHING`,
+		r.ID, r.Title, r.Text, r.Why, r.Kind, r.Source, scope, now)
+	if err != nil {
+		return Rule{}, false, fmt.Errorf("правило %q не заведено: %w", r.ID, err)
+	}
+	return s.Confirm(ctx, r.ID, jobID)
+}

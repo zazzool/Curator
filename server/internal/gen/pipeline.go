@@ -248,6 +248,10 @@ func (r *Runner) runCueCheck(ctx context.Context, job Job, draftID int64, draft 
 		log.Printf("задание %d: итог детектора подсказок не записан в черновик %d: %v",
 			job.ID, draftID, err)
 	}
+
+	// Обучение идёт ПОСЛЕ записи найденного, а не вместо неё: составитель
+	// обязан увидеть замечание, даже если свод в эту минуту недоступен.
+	r.learn(ctx, job, result.Cues)
 }
 
 // runSiblings — узел различающей сверки.

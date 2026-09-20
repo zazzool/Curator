@@ -196,3 +196,112 @@ func TestPgСводЧитаетсяСнимкомИОтдаётБлок(t *testi
 		t.Fatal("свод со встроенными правилами дал пустой блок написанию")
 	}
 }
+
+func TestPgОдноЗаданиеПодтверждаетПравилоОдинРаз(t *testing.T) {
+	// Задача, где признак назван трижды, — всё равно одна задача.
+	// Считай её за три, и кворум выдавался бы в одиночку: правило
+	// уходило бы в задание с ПЕРВОГО замечания, то есть кворума не
+	// существовало бы вовсе, а выглядело бы это исправной работой.
+	ctx := context.Background()
+	store := NewStore(testGate(t))
+
+	id := свойID("кворум")
+	if _, _, err := store.Propose(ctx, Rule{
+		ID:     id,
+		Title:  "Слово «явка» в условии",
+		Text:   "Не пиши в условии слово «явка» и однокоренные.",
+		Kind:   KindSubstance,
+		Source: FromLint,
+		Scope:  Scope{Sources: []int64{4242}},
+	}, 100); err != nil {
+		t.Fatal(err)
+	}
+
+	// То же задание ещё дважды: счётчик не должен тронуться.
+	for i := 0; i < 2; i++ {
+		r, counted, err := store.Confirm(ctx, id, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if counted {
+			t.Fatal("то же задание подтвердило правило второй раз")
+		}
+		if r.Confirmations != 1 {
+			t.Fatalf("подтверждений %d после повтора одного задания", r.Confirmations)
+		}
+		if r.Status == Active {
+			t.Fatal("правило дозрело на одном задании")
+		}
+	}
+
+	// Разные задания: на третьем правило обязано дозреть.
+	for _, job := range []int64{101, 102} {
+		if _, counted, err := store.Confirm(ctx, id, job); err != nil {
+			t.Fatal(err)
+		} else if !counted {
+			t.Fatalf("задание %d не зачлось", job)
+		}
+	}
+	r, _, err := store.Confirm(ctx, id, 103)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Confirmations < Quorum || r.Status != Active {
+		t.Fatalf("правило с %d подтверждениями осталось «%s»", r.Confirmations, r.Status)
+	}
+}
+
+func TestPgЗаведениеНеПерезаписываетПравленое(t *testing.T) {
+	// Составитель мог поправить текст правила или погасить его. Накат
+	// обучения, переписывающий существующее, затёр бы его работу — и
+	// погашенное правило вернулось бы в задание само собой.
+	ctx := context.Background()
+	store := NewStore(testGate(t))
+
+	id := свойID("правленое")
+	proposal := Rule{
+		ID:     id,
+		Title:  "Слово «явка» в условии",
+		Text:   "Первоначальный текст правила.",
+		Kind:   KindSubstance,
+		Source: FromLint,
+		Scope:  Scope{Sources: []int64{4242}},
+	}
+	if _, _, err := store.Propose(ctx, proposal, 200); err != nil {
+		t.Fatal(err)
+	}
+
+	погашено := proposal
+	погашено.Status = Muted
+	погашено.Pinned = true
+	погашено.Text = "Правленный составителем текст."
+	if _, err := store.Save(ctx, погашено); err != nil {
+		t.Fatal(err)
+	}
+
+	// Обучение приносит то же правило снова — и ещё дважды, до кворума.
+	for _, job := range []int64{201, 202, 203} {
+		if _, _, err := store.Propose(ctx, proposal, job); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	list, err := store.All(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range list {
+		if r.ID != id {
+			continue
+		}
+		if r.Text != погашено.Text {
+			t.Fatalf("обучение затёрло текст составителя: %q", r.Text)
+		}
+		if r.Status != Muted {
+			t.Fatalf("погашенное правило воскресло как «%s» на %d подтверждениях",
+				r.Status, r.Confirmations)
+		}
+		return
+	}
+	t.Fatal("правило исчезло")
+}
