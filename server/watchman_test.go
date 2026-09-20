@@ -50,6 +50,23 @@ func TestСторожСобираетСтудию(t *testing.T) {
 	}
 }
 
+func TestСторожРазбираетДоступностьСтудии(t *testing.T) {
+	// Разбор типов доступности не видит: `<div onClick=…>` для него
+	// безупречен, а для читающего с экрана это не кнопка вовсе — её нет
+	// ни в обходе по клавише, ни в списке действий.
+	checks := читай(t, "../tools/checks.sh")
+	if !strings.Contains(checks, "npm run --silent lint") {
+		t.Fatal("набор не разбирает стиль студии")
+	}
+	config := читай(t, "../web/eslint.config.js")
+	if !strings.Contains(config, "jsx-a11y") {
+		t.Error("в разборе студии нет правил доступности: половина находок аудита ловится ими")
+	}
+	if !strings.Contains(config, "react-hooks/exhaustive-deps") {
+		t.Error("не проверяются зависимости крючков: чтение без них уводит экран в вечный круг запросов")
+	}
+}
+
 func TestУСторожаНазваныПраваИСрок(t *testing.T) {
 	workflow := читай(t, "../.github/workflows/checks.yml")
 

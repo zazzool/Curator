@@ -6,6 +6,7 @@ import { ApiError, api } from './api'
 import { Loaded, useResource } from './useResource'
 import { confirmed } from './confirm'
 import type { Document, Me, Unit } from './api'
+import { Banner } from './components/Banner'
 
 // Экран источника: путь первого этапа целиком и в том же порядке, в каком
 // его проходят, — принести документ, посмотреть куски, принять разбор,
@@ -144,8 +145,8 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
         единица зовётся «{source.unitWord}», положение — «{source.statementWord}»
       </p>
 
-      {failure && <p className="banner error">{failure}</p>}
-      {note && <p className="banner success">{note}</p>}
+      {failure && <Banner kind="error">{failure}</Banner>}
+      {note && <Banner kind="success">{note}</Banner>}
 
       <section className="page-section">
         <div className="page-head">
@@ -174,7 +175,11 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
         <div className="page-head">
           <h2>Документы</h2>
           {canAccept && (
-            <label>
+            // Подпись у поля есть, хоть и не видна глазом: рамка выбора
+            // файла рисуется браузером и словом «Обзор…» называет только
+            // себя. Читающему с экрана без подписи достаётся «кнопка,
+            // обзор» — и непонятно, что именно он приносит и куда.
+            <label aria-label="Принести документ в источник">
               <input type="file" onChange={upload} disabled={busy} />
             </label>
           )}

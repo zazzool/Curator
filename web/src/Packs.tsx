@@ -5,6 +5,7 @@ import { ApiError, api } from './api'
 import { Loaded, useResource } from './useResource'
 import { confirmed } from './confirm'
 import type { Case, Me, PackItem } from './api'
+import { Banner } from './components/Banner'
 
 // Наборы задач: что собрано, из чего и что уехало на устройства.
 //
@@ -125,7 +126,7 @@ export function Packs({ me }: { me: Me }) {
         </form>
       )}
 
-      {failure && <p className="banner error">{failure}</p>}
+      {failure && <Banner kind="error">{failure}</Banner>}
 
       <div className="page-section">
         <Loaded from={packs} while="Читаем список…">
@@ -318,8 +319,8 @@ function PackCard({ me, slug, onBack }: { me: Me; slug: string; onBack: () => vo
           : 'ни одного выпуска: на устройствах этого набора нет'}
       </p>
 
-      {failure && <p className="banner error">{failure}</p>}
-      {note && <p className="banner success">{note}</p>}
+      {failure && <Banner kind="error">{failure}</Banner>}
+      {note && <Banner kind="success">{note}</Banner>}
 
       <div className="page-section">
         <h3>Состав</h3>

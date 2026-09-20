@@ -3,6 +3,7 @@ import { useCallback, useState, type FormEvent } from 'react'
 import { ApiError, api } from './api'
 import { Loaded, useResource } from './useResource'
 import type { Me } from './api'
+import { Banner } from './components/Banner'
 
 // Словари закрыты на сервере, и здесь они повторены списками выбора: поле,
 // куда можно вписать что угодно, отдало бы серверу значение, которое тот
@@ -209,7 +210,7 @@ export function SourceList({
         </form>
       )}
 
-      {failure && <p className="banner error">{failure}</p>}
+      {failure && <Banner kind="error">{failure}</Banner>}
 
       <div className="page-section">
         <Loaded from={sources} while="Читаем список…">

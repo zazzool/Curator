@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 
 import { ApiError } from './api'
+import { Banner } from './components/Banner'
 
 /// Чтение с сервера: три состояния вместо двух.
 ///
@@ -103,6 +104,6 @@ export function Loaded<T>({
   children: (value: T) => ReactNode
 }) {
   if (from.state === 'loading') return <p className="empty">{whileReading}</p>
-  if (from.state === 'failed') return <p className="banner error">{from.failure}</p>
+  if (from.state === 'failed') return <Banner kind="error">{from.failure}</Banner>
   return <>{children(from.value)}</>
 }
