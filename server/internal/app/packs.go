@@ -85,8 +85,13 @@ func (r *packRoutes) shelf(w http.ResponseWriter, req *http.Request, caller Call
 			// говорил, ЧЕМ он открывается. «Закрыт» без этого — тупик:
 			// врач не знает, войти ему, купить или подписаться, и
 			// одинаково часто не делает ничего.
-			"line":    one.Line,
-			"kopecks": kopecks, "owned": owned,
+			"line": one.Line,
+			// Чем он открыт. Пусто у закрытого — там говорит линейка.
+			// Врачу это нужно затем, чтобы открытое группой не пропало
+			// однажды без причины: купленное не отбирают, а правило
+			// смотрит на живого врача и перестаёт на него сходиться.
+			"openedBy": mine.By,
+			"kopecks":  kopecks, "owned": owned,
 		})
 	}
 	WriteJSON(w, http.StatusOK, map[string]any{"packs": out})
