@@ -15,62 +15,87 @@ func планЗаказа(kind string) Plan {
 	return Plan{
 		SourceID: 1, Slug: "приказ", Title: "Приказ", Kind: "decree",
 		UnitWord: "пункт", StatementWord: "указание", Hierarchy: "part-of",
-		TaskKind:     kind,
-		Unit:         UnitRef{Label: "3.1", Title: "Сроки"},
-		Siblings:     []UnitRef{{Label: "3.2", Title: "Отказ"}},
+		TaskKind: kind,
+		Unit:     UnitRef{Label: "3.1", Title: "Сроки"},
+		Siblings: []UnitRef{
+			{Label: "3.2", Title: "Отказ", StatementsMd: "Заявление возвращается без рассмотрения."},
+			{Label: "3.3", Title: "Передача", StatementsMd: "Заявление передаётся по подведомственности."},
+		},
 		Statements:   statements,
 		StatementsMd: statementsMarkdown(statements),
 	}
 }
 
-func годныйЧерновик() Draft {
-	return Draft{
+// годнаяПроза — то, что модель возвращает: круга вариантов в ней нет.
+func годнаяПроза() Composed {
+	return Composed{
 		Title: "Срок рассмотрения",
 		Segments: []Segment{
 			{Text: "Заявление поступило 1 марта.", Statements: nil},
 			{Text: "Ответ отправлен на десятый рабочий день.", Statements: []string{"абз. 1"}},
 		},
-		Options: []Option{
-			{Label: "3.1", Text: "Сроки"},
-			{Label: "3.2", Text: "Отказ"},
-			{Label: "3.1", Text: "Сроки исчисляются иначе"},
-		},
-		Answer:        "3.1",
 		ExplanationMd: "Срок считается рабочими днями.",
 		Difficulty:    3,
 	}
 }
 
+// годныйЧерновик — та же проза, собранная с кругом сервера.
+func годныйЧерновик() Draft {
+	set, err := планЗаказа(KindRecognise).AnswerSet()
+	if err != nil {
+		panic(err)
+	}
+	return годнаяПроза().Draft(set)
+}
+
 func TestЧерновикСнимаетОградуНоНеЧинитОстальное(t *testing.T) {
 	// Модели ставят ```json даже там, где схема этого не просит, и ронять
 	// из-за обёртки готовую задачу незачем. Всё прочее — отказ.
-	draft, err := ParseDraft("```json\n{\"title\":\"Срок\",\"difficulty\":3}\n```")
+	composed, err := ParseComposed("```json\n{\"title\":\"Срок\",\"difficulty\":3}\n```")
 	if err != nil {
 		t.Fatalf("ограда не снята: %v", err)
 	}
-	if draft.Title != "Срок" {
-		t.Fatalf("разобрано не то: %+v", draft)
+	if composed.Title != "Срок" {
+		t.Fatalf("разобрано не то: %+v", composed)
 	}
-	if _, err := ParseDraft(`{"title":"Срок","выдумка":1}`); err == nil {
+	if _, err := ParseComposed(`{"title":"Срок","выдумка":1}`); err == nil {
 		t.Fatal("незнакомое поле принято: непонятое не применяется")
 	}
-	if _, err := ParseDraft("  "); err == nil {
+	if _, err := ParseComposed("  "); err == nil {
 		t.Fatal("пустой ответ принят")
 	}
 }
 
+func TestКругВариантовУМоделиНеСпрашивается(t *testing.T) {
+	// Круг собрал сервер и прислал модели готовым. Ответ с вариантами —
+	// признак того, что задание и схема разошлись: молча выброшенные,
+	// эти варианты значили бы, что мы платим за сочинение выбрасываемого.
+	if _, err := ParseComposed(
+		`{"title":"Срок","difficulty":3,"options":[{"label":"3.1","text":"Сроки"}],"answer":"3.1"}`,
+	); err == nil {
+		t.Fatal("варианты от модели приняты: круг собирает сервер")
+	}
+
+	raw := ComposedSchema(планЗаказа(KindRecognise))
+	for _, gone := range []string{`"options"`, `"answer"`} {
+		if strings.Contains(string(raw), gone) {
+			t.Fatalf("схема всё ещё просит %s: %s", gone, raw)
+		}
+	}
+}
+
 func TestГодныйЧерновикПроходит(t *testing.T) {
-	if err := годныйЧерновик().Validate(планЗаказа(KindRecognise)); err != nil {
-		t.Fatalf("годный черновик отбит: %v", err)
+	if err := годнаяПроза().Validate(планЗаказа(KindRecognise)); err != nil {
+		t.Fatalf("годная проза отбита: %v", err)
 	}
 }
 
 func TestСсылкаНаНесуществующееПоложениеОтбивает(t *testing.T) {
 	// Молча выброшенная ссылка оставила бы фрагмент без разметки,
 	// выглядящий размеченным.
-	draft := годныйЧерновик()
-	draft.Segments[1].Statements = []string{"абз. 9"}
-	err := draft.Validate(планЗаказа(KindRecognise))
+	composed := годнаяПроза()
+	composed.Segments[1].Statements = []string{"абз. 9"}
+	err := composed.Validate(планЗаказа(KindRecognise))
 	if err == nil || !strings.Contains(err.Error(), "абз. 9") {
 		t.Fatalf("выдуманная ссылка принята: %v", err)
 	}
@@ -84,80 +109,17 @@ func TestСсылкаНаНесуществующееПоложениеОтби�
 func TestБезРазметкиЧерновикНеПринимается(t *testing.T) {
 	// Разметка — половина ценности задачи: без неё обучающийся видит
 	// вердикт, но не видит, чем он обоснован.
-	draft := годныйЧерновик()
-	draft.Segments[1].Statements = nil
-	if err := draft.Validate(планЗаказа(KindRecognise)); err == nil {
+	composed := годнаяПроза()
+	composed.Segments[1].Statements = nil
+	if err := composed.Validate(планЗаказа(KindRecognise)); err == nil {
 		t.Fatal("черновик без разметки принят")
-	}
-}
-
-func TestВерныйОтветОбязанБытьЗаказанным(t *testing.T) {
-	// Эталон выбирает заказ, а не модель: задача, ответившая другой
-	// единицей, отвечает не на тот вопрос, который заказывали.
-	draft := годныйЧерновик()
-	draft.Answer = "3.2"
-	err := draft.Validate(планЗаказа(KindRecognise))
-	if err == nil || !strings.Contains(err.Error(), "заказан") {
-		t.Fatalf("подмена эталона принята: %v", err)
-	}
-}
-
-func TestВариантСоСторонойНеПринимается(t *testing.T) {
-	// Круг различения собран при заказе из данных источника. Единица со
-	// стороны — либо выдумка, либо сосед, которого источник соседом не
-	// считает.
-	draft := годныйЧерновик()
-	draft.Options[1] = Option{Label: "9.9", Text: "Чужое"}
-	err := draft.Validate(планЗаказа(KindRecognise))
-	if err == nil || !strings.Contains(err.Error(), "круга различения") {
-		t.Fatalf("вариант со стороны принят: %v", err)
-	}
-}
-
-func TestПовторВариантаСокращаетВыборМолча(t *testing.T) {
-	draft := годныйЧерновик()
-	draft.Options[2] = Option{Label: "3.2", Text: "Отказ"}
-	err := draft.Validate(планЗаказа(KindRecognise))
-	if err == nil || !strings.Contains(err.Error(), "повторяется") {
-		t.Fatalf("повтор варианта принят: %v", err)
-	}
-}
-
-func TestЗадачаДействияМеряетсяИначе(t *testing.T) {
-	plan := планЗаказа(KindAction)
-	plan.Target = &plan.Statements[0]
-
-	draft := Draft{
-		Title: "Что сделать",
-		Segments: []Segment{
-			{Text: "Заявление поступило.", Statements: []string{"абз. 1"}},
-		},
-		Options: []Option{
-			{Text: "Рассмотреть в десятидневный срок"},
-			{Text: "Вернуть без рассмотрения"},
-			{Text: "Передать в другой орган"},
-		},
-		Answer:        "Рассмотреть в десятидневный срок",
-		ExplanationMd: "Срок считается рабочими днями.",
-		Difficulty:    2,
-	}
-	if err := draft.Validate(plan); err != nil {
-		t.Fatalf("годная задача-действие отбита: %v", err)
-	}
-
-	// Метка единицы у варианта-действия — признак того, что модель
-	// написала задачу другого вида.
-	draft.Options[0].Label = "3.1"
-	if err := draft.Validate(plan); err == nil {
-		t.Fatal("вариант-действие с меткой единицы принят")
 	}
 }
 
 func TestОтбиваетсяВсёРазомАНеПоОдному(t *testing.T) {
 	// Отбивать черновик по одному замечанию значит гонять модель столько
 	// раз, сколько в ответе ошибок, — и платить за каждый заход.
-	draft := Draft{}
-	err := draft.Validate(планЗаказа(KindRecognise))
+	err := Composed{}.Validate(планЗаказа(KindRecognise))
 	if err == nil {
 		t.Fatal("пустой черновик принят")
 	}
@@ -167,21 +129,21 @@ func TestОтбиваетсяВсёРазомАНеПоОдному(t *testing.T
 }
 
 func TestСхемаНеДаётВыдуматьЕдиницуИлиПоложение(t *testing.T) {
-	// Схема строится под заказ: перечисленные в ней значения — это круг
-	// различения и обозначения положений именно этого заказа.
-	raw := DraftSchema(планЗаказа(KindRecognise))
+	// Схема строится под заказ: перечисленные в ней значения — это
+	// обозначения положений именно этого заказа.
+	raw := ComposedSchema(планЗаказа(KindRecognise))
 	var schema map[string]any
 	if err := json.Unmarshal(raw, &schema); err != nil {
 		t.Fatal(err)
 	}
 	text := string(raw)
-	for _, want := range []string{`"3.1"`, `"3.2"`, `"абз. 1"`, `"абз. 2"`} {
+	for _, want := range []string{`"абз. 1"`, `"абз. 2"`} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("схема не перечисляет %s: %s", want, text)
 		}
 	}
-	if strings.Contains(text, `"3.3"`) {
-		t.Fatal("в схеме оказалась единица, которой в заказе нет")
+	if strings.Contains(text, `"абз. 9"`) {
+		t.Fatal("в схеме оказалось положение, которого в заказе нет")
 	}
 }
 

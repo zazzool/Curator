@@ -219,6 +219,7 @@ func TestPgВычиткаИдётДоСверокИПравитТоЧтоУед�
 		`{"title":"","segments":[{"id":"s2","text":"Ответ отправлен на десятый рабочий день по почте."}]}`,
 		`{"answer":"3.1","why":"срок назван прямо","sure":true}`,
 		ответСоседа,
+		ответСоседа,
 	}}
 	runner, jobs, _ := конвейер(t, model, order)
 
@@ -319,6 +320,7 @@ func TestPgНесостоявшаясяВычиткаНеРонитЗадани�
 		"редактор ответил не тем",
 		`{"answer":"3.1","why":"срок назван прямо","sure":true}`,
 		ответСоседа,
+		ответСоседа,
 	}}
 	runner, jobs, _ := конвейер(t, model, order)
 
@@ -344,9 +346,9 @@ func TestPgНесостоявшаясяВычиткаНеРонитЗадани�
 // черновикУсловия — условие из заготовленного ответа модели, чтобы
 // сравнивать с ним, не переписывая текст во второй раз.
 func черновикУсловия(answer string) string {
-	draft, err := ParseDraft(answer)
+	composed, err := ParseComposed(answer)
 	if err != nil {
 		panic(err)
 	}
-	return draft.Condition()
+	return Draft{Segments: composed.Segments}.Condition()
 }
