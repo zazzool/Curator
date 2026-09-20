@@ -157,7 +157,10 @@ void main() {
       StubAccount(
         profileOf(),
         failure: ApiFailure(
-          'Устройство не опознано',
+          // Не теми же словами, что заголовок пустого состояния: сервер
+          // пишет отказ сам, и проверка, сверяющая заголовок с ответом
+          // сервера, прошла бы и на экране, где нет ни того, ни другого.
+          'Сервер не признаёт это устройство',
           status: 401,
           lostDevice: true,
         ),
@@ -165,6 +168,7 @@ void main() {
     );
 
     expect(find.text('Устройство не опознано'), findsOneWidget);
+    expect(find.text('Сервер не признаёт это устройство'), findsOneWidget);
     expect(find.textContaining('прежней записи'), findsOneWidget);
     expect(find.text('Прислать код'), findsOneWidget);
     // Привязки здесь нет: она идёт запросом с токеном и отказала бы.
