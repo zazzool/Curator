@@ -59,6 +59,15 @@ export type CaseQuery = {
 export type Route =
   | { name: 'sources' }
   | { name: 'source'; id: number }
+  /**
+   * Ввоз документа в источник — своя страница, а не раздел карточки.
+   *
+   * Принести файл, посмотреть разобранное, поправить и принять — это
+   * работа на полчаса с чужим документом перед глазами, и делить с ней
+   * экран паспорту и списку принятого незачем: и то и другое уезжает
+   * вверх с первой прокруткой.
+   */
+  | { name: 'import'; id: number }
   | { name: 'cases'; query: CaseQuery }
   | { name: 'case'; id: string }
   | {
@@ -97,6 +106,7 @@ export function sectionOf(route: Route): SectionId | null {
   switch (route.name) {
     case 'sources':
     case 'source':
+    case 'import':
       return 'sources'
     case 'cases':
     case 'case':
@@ -175,8 +185,9 @@ export function readRoute(path: string): Route {
     // сервере, и объяснять это пришлось бы отказом сервера вместо
     // внятного «такой страницы нет».
     const id = Number(parts[1])
-    if (parts.length === 2 && Number.isInteger(id) && id > 0) {
-      return { name: 'source', id }
+    if (Number.isInteger(id) && id > 0) {
+      if (parts.length === 2) return { name: 'source', id }
+      if (parts.length === 3 && parts[2] === 'import') return { name: 'import', id }
     }
     return { name: 'unknown', path: bare }
   }
@@ -199,6 +210,8 @@ export function routePath(route: Route): string {
       return '/sources'
     case 'source':
       return `/sources/${route.id}`
+    case 'import':
+      return `/sources/${route.id}/import`
     case 'cases':
       return `/cases${tail({
         source: route.query.source ? String(route.query.source) : '',

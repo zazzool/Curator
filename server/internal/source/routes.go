@@ -28,6 +28,12 @@ func Routes(desk *studio.Desk, store *Store) {
 	desk.Handle(studio.PermSourceAccept, "POST /admin/api/sources", r.createSource)
 	desk.Handle(studio.PermSourceRead, "GET /admin/api/sources/{id}", r.showSource)
 
+	// Правка паспорта стоит под тем же правом, что и приёмка: словарь
+	// интерфейса, ось и полнота — это объявления источника о себе, и по
+	// ним считаются доли охвата и решается, складываются ли два
+	// источника в один список.
+	desk.Handle(studio.PermSourceAccept, "PUT /admin/api/sources/{id}", r.updateSource)
+
 	// Объявление источника действующим стоит под тем же правом, что и
 	// приёмка разбора: и то и другое решает, что теперь считается истиной
 	// источника, а отдавать это всякому, кто может посмотреть, незачем.
@@ -183,6 +189,58 @@ func (r *routes) createSource(w http.ResponseWriter, req *http.Request, _ studio
 		return
 	}
 	studio.WriteJSON(w, http.StatusCreated, map[string]any{"id": id})
+}
+
+// updateSource правит паспорт источника.
+//
+// # Краткое имя не правится, и это не забывчивость
+//
+// По нему приложение спрашивает справочник: `/v1/reference/sources/{slug}`.
+// На руках у врачей стоят сборки, которые скачали разделы по этому имени
+// и держат их у себя; смени его — и источник для них просто исчезнет, а
+// узнают они об этом не сообщением, а пустым справочником. Поэтому имя
+// задаётся один раз, при заведении, и здесь его нет вовсе: поле,
+// принимаемое и молча отбрасываемое, хуже отсутствующего.
+//
+// Всё остальное правится: название, словарь интерфейса, вид, ось, смысл
+// вложенности, полнота и редакция. Это объявления источника о себе, и
+// объявленное однажды по ошибке иначе остаётся навсегда — а полнота,
+// названная неверно, врёт в долях охвата ровно там, где на них смотрят.
+func (r *routes) updateSource(w http.ResponseWriter, req *http.Request, _ studio.User) {
+	id, ok := pathID(w, req)
+	if !ok {
+		return
+	}
+	var body updateSourceRequest
+	if err := studio.DecodeBody(req, &body); err != nil {
+		studio.WriteError(w, http.StatusBadRequest, "Запрос не разобран: "+err.Error())
+		return
+	}
+	src, err := r.store.UpdateSource(req.Context(), id, Source{
+		Kind: Kind(body.Kind), Title: body.Title,
+		UnitWord: body.UnitWord, StatementWord: body.StatementWord,
+		Purpose: Purpose(body.Purpose), Hierarchy: Hierarchy(body.Hierarchy),
+		Completeness: Completeness(body.Completeness), Edition: body.Edition,
+	})
+	if err != nil {
+		// Текст отказа уезжает человеку как есть: он написан по-русски и
+		// говорит, чего не хватает.
+		studio.WriteError(w, http.StatusBadRequest, studio.Sentence(err.Error()))
+		return
+	}
+	studio.WriteJSON(w, http.StatusOK, toSourceJSON(src))
+}
+
+// updateSourceRequest — паспорт без краткого имени. Довод — у updateSource.
+type updateSourceRequest struct {
+	Kind          string `json:"kind"`
+	Title         string `json:"title"`
+	UnitWord      string `json:"unitWord"`
+	StatementWord string `json:"statementWord"`
+	Purpose       string `json:"purpose"`
+	Hierarchy     string `json:"hierarchy"`
+	Completeness  string `json:"completeness"`
+	Edition       string `json:"edition"`
 }
 
 func (r *routes) showSource(w http.ResponseWriter, req *http.Request, _ studio.User) {

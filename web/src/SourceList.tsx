@@ -4,39 +4,7 @@ import { ApiError, api } from './api'
 import { Loaded, useResource } from './useResource'
 import type { Me } from './api'
 import { Banner } from './components/Banner'
-
-// Словари закрыты на сервере, и здесь они повторены списками выбора: поле,
-// куда можно вписать что угодно, отдало бы серверу значение, которое тот
-// отклонит, — и человек узнал бы об этом после заполнения всей формы.
-const KINDS: [string, string][] = [
-  ['classification', 'классификация'],
-  ['decree', 'приказ'],
-  ['guidelines', 'клинические рекомендации'],
-  ['standard', 'стандарт'],
-  ['handbook', 'руководство'],
-  ['other', 'другое'],
-]
-
-const PURPOSES: [string, string][] = [
-  ['topic', 'по темам'],
-  ['system', 'по системам органов'],
-  ['discipline', 'по дисциплинам'],
-  ['task', 'по видам задач'],
-  ['level', 'по уровню подготовки'],
-  ['legal', 'по правовым нормам'],
-  ['other', 'по-другому'],
-]
-
-const HIERARCHIES: [string, string][] = [
-  ['part-of', 'вложенное — часть целого'],
-  ['is-a', 'вложенное — разновидность'],
-  ['grouped', 'вложенное просто сгруппировано'],
-]
-
-const COMPLETENESS: [string, string][] = [
-  ['complete', 'полный справочник'],
-  ['fragment', 'разобранный кусок'],
-]
+import { COMPLETENESS, HIERARCHIES, KINDS, PURPOSES } from './sourceWords'
 
 const EMPTY = {
   slug: '',
