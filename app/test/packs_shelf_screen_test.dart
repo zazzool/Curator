@@ -225,4 +225,27 @@ void main() {
 
     expect(await store.installed(), isEmpty);
   });
+
+  testWidgets('на узком экране строки набора переносятся, а не упираются', (
+    tester,
+  ) async {
+    // Подпись рядом с кнопкой — «Скачан, работает без сети» и «на
+    // устройстве выпуск N» — стояла в строке без ограничения ширины.
+    // Flutter в таком случае не переносит: он рисует полосу отказа и
+    // съедает хвост вместе с кнопкой, которой набор убирают.
+    //
+    // Меряется именно узкий экран: проверки виджетов по умолчанию строят
+    // восемьсот точек, где переполнения нет, — и подтверждали исправность.
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    for (final one in [pack(installed: 1), pack(installed: 1, version: 2)]) {
+      await tester.pumpWidget(
+        screen(StubShelf([one]), StubDownload(), MemoryPackStore()),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    }
+  });
 }
