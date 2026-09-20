@@ -64,23 +64,25 @@ class _OneCaseFeed extends Feed {
 }
 
 /// Задача, на которой проверяется ответ.
-CaseItem theCase() => CaseItem.tryParse({
-  'id': 'c-7',
-  'unitLabel': 'F20.0',
-  'body': {
-    'title': 'Задача',
-    'kind': 'recognise',
-    'answer': 'Б',
-    'explanationMd': 'Потому что так',
-    'segments': [
-      {'text': 'Больной жалуется на…'},
-    ],
-    'options': [
-      {'label': 'А', 'text': 'Первый'},
-      {'label': 'Б', 'text': 'Второй'},
-    ],
-  },
-})!;
+CaseItem theCase() {
+  return CaseItem.tryParse({
+    'id': 'c-7',
+    'unitLabel': 'F20.0',
+    'body': {
+      'title': 'Задача',
+      'kind': 'recognise',
+      'answer': 'Б',
+      'explanationMd': 'Потому что так',
+      'segments': [
+        {'text': 'Больной жалуется на…'},
+      ],
+      'options': [
+        {'label': 'А', 'text': 'Первый'},
+        {'label': 'Б', 'text': 'Второй'},
+      ],
+    },
+  })!;
+}
 
 /// Ищет текст, показанный размеченным.
 ///
@@ -129,15 +131,12 @@ void main() {
     );
     addTearDown(api.close);
 
-    await tester.pumpWidget(
-      MaterialApp(
-        home: PracticeScreen(
-          api: api,
-          outbox: outbox,
-          feed: _OneCaseFeed(one),
-        ),
-      ),
+    final screen = PracticeScreen(
+      api: api,
+      outbox: outbox,
+      feed: _OneCaseFeed(one),
     );
+    await tester.pumpWidget(MaterialApp(home: screen));
     await tester.pumpAndSettle();
 
     await tester.tap(prose('Второй'));
@@ -165,15 +164,12 @@ void main() {
     // продолжал заниматься впустую.
     final one = theCase();
 
-    await tester.pumpWidget(
-      MaterialApp(
-        home: PracticeScreen(
-          api: _StubOutbox._noApi,
-          outbox: _FullDiskOutbox(),
-          feed: _OneCaseFeed(one),
-        ),
-      ),
+    final screen = PracticeScreen(
+      api: _StubOutbox._noApi,
+      outbox: _FullDiskOutbox(),
+      feed: _OneCaseFeed(one),
     );
+    await tester.pumpWidget(MaterialApp(home: screen));
     await tester.pumpAndSettle();
 
     await tester.tap(prose('Второй'));
