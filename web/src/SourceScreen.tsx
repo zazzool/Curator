@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useState, type ChangeEvent } from 'react'
 
-import { Cases } from './Cases'
-import { Generation } from './Generation'
 import { ApiError, api } from './api'
 import { Loaded, useResource } from './useResource'
 import { confirmed } from './confirm'
+import { go } from './router'
 import type { Cut, Document, Me, Unit } from './api'
 import { Banner } from './components/Banner'
 
@@ -77,9 +76,14 @@ export function SourceScreen({
       api.units(id, applied),
       api.documents(id),
     ])
-    setUnits(sliced.units)
+    // Список без списка — пустой список, а не падение экрана. Ловушка
+    // не выдуманная: ответ без поля documents ронял ВЕСЬ экран источника
+    // белым — вместе с принятым, к документам отношения не имеющим.
+    // Перебор отсутствующего бросает во время отрисовки, а отказ
+    // отрисовки снимает дерево целиком.
+    setUnits(sliced.units ?? [])
     setUnitsCut({ limit: sliced.limit, more: sliced.more })
-    setDocuments(docs.documents)
+    setDocuments(docs.documents ?? [])
     return loaded
   }, [id, applied])
   const opened = useResource(read, 'Источник не прочитан')
@@ -355,9 +359,32 @@ export function SourceScreen({
         )}
       </section>
 
-      <Generation me={me} source={source} units={units} />
-
-      <Cases me={me} source={source} path={applied} />
+      {/* Задачи и заказ живут своими разделами, а не разделами этой
+          страницы. Пока источник был один, читалось и так; с двумя
+          источниками ответ на вопрос «что у меня вообще написано»
+          переставал существовать — его надо было собирать, обойдя все
+          источники. Здесь остались двери туда, и обе уносят выбранный
+          источник и срез с собой: метка, переписанная руками из одного
+          списка в другой, ошибается. */}
+      <section className="page-section">
+        <div className="page-head">
+          <h2>Задачи по этому источнику</h2>
+        </div>
+        <div className="toolbar">
+          <button
+            onClick={() =>
+              go({ name: 'cases', query: { source: id, path: applied || undefined } })
+            }
+          >
+            Показать задачи
+          </button>
+          {me.permissions.includes('generate') && (
+            <button className="primary" onClick={() => go({ name: 'generate', source: id })}>
+              Создать задачу
+            </button>
+          )}
+        </div>
+      </section>
     </div>
   )
 }

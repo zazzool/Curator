@@ -5,10 +5,34 @@ import { go, readRoute, routePath, sectionOf, sectionPath, useRoute } from './ro
 import { SECTIONS } from './sections'
 
 describe('адреса студии', () => {
-  it('корень — это список источников', () => {
-    // Раздел по умолчанию: студия открывается тем, ради чего её открывают.
-    expect(readRoute('/')).toEqual({ name: 'sources' })
-    expect(readRoute('')).toEqual({ name: 'sources' })
+  it('корень — это список задач', () => {
+    // Первая строка колонки и то место, где проводят рабочий день.
+    // Открывайся студия на источниках — первая строка меню была бы одним,
+    // а открывалось бы другое.
+    expect(readRoute('/')).toEqual({ name: 'cases', query: {} })
+    expect(readRoute('')).toEqual({ name: 'cases', query: {} })
+  })
+
+  it('отбор списка задач разбирается из хвоста адреса', () => {
+    expect(readRoute('/cases?source=2&status=draft&q=сроки')).toEqual({
+      name: 'cases',
+      query: { source: 2, status: 'draft', q: 'сроки' },
+    })
+  })
+
+  it('пустые доводы отбора в адрес не пишутся', () => {
+    // `/cases?source=&status=` и `/cases` — один и тот же отбор, но
+    // адреса разные, и сравнение «мы уже здесь» различило бы их.
+    expect(routePath({ name: 'cases', query: { path: '', q: '' } })).toBe('/cases')
+    expect(readRoute('/cases?source=0')).toEqual({ name: 'cases', query: {} })
+  })
+
+  it('задача опознаётся строкой, а не числом', () => {
+    // Опознаватель выдаёт сервер, и вида его студия не знает.
+    expect(readRoute('/cases/c-abcdefgh23456789')).toEqual({
+      name: 'case',
+      id: 'c-abcdefgh23456789',
+    })
   })
 
   it('источник опознаётся номером', () => {
@@ -49,7 +73,18 @@ describe('адреса студии', () => {
   })
 
   it('адрес складывается обратно из разобранного', () => {
-    for (const path of ['/sources', '/sources/12', '/packs', '/sales', '/reports', '/workshop']) {
+    for (const path of [
+      '/sources',
+      '/sources/12',
+      '/cases',
+      '/cases/c-abcdefgh23456789',
+      '/generate',
+      '/generate?source=2&unit=3.1',
+      '/packs',
+      '/sales',
+      '/reports',
+      '/workshop',
+    ]) {
       expect(routePath(readRoute(path))).toBe(path)
     }
   })

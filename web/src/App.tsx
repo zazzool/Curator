@@ -1,5 +1,7 @@
 import { Suspense, lazy, useEffect, useState } from 'react'
 
+import { CaseList } from './CaseList'
+import { CasePage } from './CasePage'
 import { Login } from './Login'
 import { NotFound } from './NotFound'
 import { SourceList } from './SourceList'
@@ -15,7 +17,7 @@ import { api, setAuthLost, setToken } from './api'
 import type { Me } from './api'
 
 /*
- * Четыре раздела приезжают отдельными кусками, а не вместе со студией.
+ * Пять разделов приезжают отдельными кусками, а не вместе со студией.
  *
  * Собранное одним куском, оно весило под триста килобайт, и всё это
  * скачивала СТРАНИЦА ВХОДА: Продажи, Отчёты, Наборы и Мастерская — до
@@ -23,10 +25,16 @@ import type { Me } from './api'
  * них. Составитель без права продаж не открывает Продажи никогда, а
  * платит за них при каждом входе.
  *
- * Источники и экран источника остаются в общем куске намеренно: это
- * раздел по умолчанию, и подгружать его отдельно значит задержать ровно
- * тот экран, который открывается сразу после входа.
+ * Заказ задачи приехал в тот же список пятым: право на генерацию есть не
+ * у всякого вошедшего, а у того, у кого есть, страница открывается не
+ * первым действием — он сперва смотрит, что уже написано.
+ *
+ * Задачи, страница задачи, источники и экран источника остаются в общем
+ * куске намеренно: список задач — раздел по умолчанию, и подгружать его
+ * отдельно значит задержать ровно тот экран, который открывается сразу
+ * после входа. Источник открывают следом за ним, с той же частотой.
  */
+const Generate = lazy(() => import('./Generate').then((m) => ({ default: m.Generate })))
 const Packs = lazy(() => import('./Packs').then((m) => ({ default: m.Packs })))
 const Reports = lazy(() => import('./Reports').then((m) => ({ default: m.Reports })))
 const Sales = lazy(() => import('./Sales').then((m) => ({ default: m.Sales })))
@@ -168,7 +176,7 @@ export function App() {
     setToken('')
     setMe(null)
     setCrumb('')
-    go({ name: 'sources' })
+    go({ name: 'cases', query: {} })
     setLost(closed ? '' : 'Вышли на этом устройстве, но связи с сервером не было. Выйдите ещё раз.')
   }
 
@@ -212,7 +220,13 @@ export function App() {
                 приехавший по обрыву кусок раздела это отказ отрисовки,
                 и без границы он снял бы всё дерево белым экраном. */}
             <Suspense fallback={<p className="empty">Читаем…</p>}>
-              {route.name === 'packs' ? (
+              {route.name === 'cases' ? (
+                <CaseList me={me} query={route.query} />
+              ) : route.name === 'case' ? (
+                <CasePage me={me} id={route.id} />
+              ) : route.name === 'generate' ? (
+                <Generate me={me} source={route.source} unit={route.unit} />
+              ) : route.name === 'packs' ? (
                 <Packs me={me} />
               ) : route.name === 'sales' ? (
                 <Sales me={me} />

@@ -1586,6 +1586,27 @@ button.list-row:hover:not(:disabled) {
   max-width: var(--measure);
 }
 
+/* Сложность точками — та же шкала и тот же вид, что в приложении.
+   Мера точки задана здесь, а не пикселями в разметке страницы: точки
+   стоят в столбце таблицы, и разъехавшиеся по разным страницам размеры
+   читались бы как разные шкалы. */
+.dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--hairline);
+}
+
+.dot-on {
+  background: var(--ink-muted);
+}
+
 /* --- Вкладки внутри раздела --- */
 
 /*
