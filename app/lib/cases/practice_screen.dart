@@ -10,6 +10,12 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
+import '../core/design/palette.dart';
+import '../core/design/tokens.dart';
+import '../core/design/typography.dart';
+import '../core/ui/difficulty_dots.dart';
+import '../core/ui/motion.dart';
+import '../core/ui/surface.dart';
 import '../db/schedule.dart';
 import '../packs/store.dart';
 import '../progress/rules.dart';
@@ -114,6 +120,16 @@ class _PracticeScreenState extends State<PracticeScreen> {
   Future<void> _answer(CaseItem one, Option option) async {
     setState(() => _chosen = option);
 
+    // Отклик в руку раньше, чем глаз дочитает разбор: врач занимается на
+    // ходу, и в эту секунду телефон он чувствует, а не разглядывает.
+    // Отказ платформы тут проглатывается внутри Haptics — на настольной
+    // машине и в проверках канала вибрации нет вовсе.
+    if (one.isCorrect(option)) {
+      Haptics.success();
+    } else {
+      Haptics.failure();
+    }
+
     // Ключ повторности выдаёт устройство, а не сервер: придуманный
     // сервером ключ не пережил бы обрыва ровно в тот момент, ради которого
     // он заведён. Время с запасом случайности — две попытки в одну
@@ -172,25 +188,31 @@ class _PracticeScreenState extends State<PracticeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Шапка стоит в потоке содержимого, а не полосой `AppBar` сверху:
+    // она уезжает вместе с условием при прокрутке и не отнимает полосу у
+    // того, ради чего экран открыт. Заголовок при этом остаётся крупным —
+    // с него начинается чтение.
     return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          widget.source == PracticeSource.review ? 'Повторение' : 'Задачи',
-        ),
-        bottom: _waiting == 0
-            ? null
-            // Число ждущих отправки показывается, а не прячется: врач,
-            // занимавшийся весь вечер без сети, должен видеть, что его
-            // работа не потеряна.
-            : PreferredSize(
-                preferredSize: const Size.fromHeight(24),
-                child: Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: Text('Ждут отправки: $_waiting'),
-                ),
+      body: SafeArea(
+        child: Padding(
+          padding: Gap.screenH,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ScreenHeader(
+                title: widget.source == PracticeSource.review
+                    ? 'Повторение'
+                    : 'Задачи',
+                // Число ждущих отправки показывается, а не прячется: врач,
+                // занимавшийся весь вечер без сети, должен видеть, что его
+                // работа не потеряна.
+                subtitle: _waiting == 0 ? null : 'Ждут отправки: $_waiting',
               ),
+              Expanded(child: _body(context)),
+            ],
+          ),
+        ),
       ),
-      body: SafeArea(child: _body(context)),
     );
   }
 
@@ -199,19 +221,35 @@ class _PracticeScreenState extends State<PracticeScreen> {
 
     final failure = _failure;
     if (failure != null) {
-      return _Message(text: failure.message, action: 'Ещё раз', onTap: _load);
+      return _Message(
+        icon: Icons.cloud_off_outlined,
+        title: 'Задачи не загрузились',
+        text: failure.message,
+        action: 'Ещё раз',
+        onTap: _load,
+      );
     }
 
     final one = _current;
     if (one == null) {
       return _Message(
-        text: switch ((widget.source, _cases.isEmpty)) {
+        icon: widget.source == PracticeSource.review
+            ? Icons.replay_outlined
+            : Icons.school_outlined,
+        title: switch ((widget.source, _cases.isEmpty)) {
           // «Сегодня нечего повторять» — исправный случай и самый частый
           // из всех, и сказать это надо так, чтобы врач не искал поломку.
           (PracticeSource.review, true) => 'Сегодня повторять нечего',
           (PracticeSource.review, false) => 'Повторение на сегодня закончено',
-          (_, true) => 'Задач пока нет. Загляните позже',
-          (_, false) => 'На сегодня всё. Возвращайтесь завтра',
+          (_, true) => 'Задач пока нет',
+          (_, false) => 'На сегодня всё',
+        },
+        text: switch ((widget.source, _cases.isEmpty)) {
+          (PracticeSource.review, _) =>
+            'Задачи вернутся к повторению по '
+                'своим срокам — заходить раньше незачем.',
+          (_, true) => 'Загляните позже: новые задачи приходят с сервера.',
+          (_, false) => 'Возвращайтесь завтра.',
         },
         action: 'Обновить',
         onTap: _load,
@@ -258,40 +296,42 @@ class CaseView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final p = context.palette;
     final answered = chosen != null;
     final right = answered && one.isCorrect(chosen!);
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
+      padding: const EdgeInsets.only(bottom: Gap.xxl),
       children: [
         _Marks(one: one, showMarkup: answered),
         if (one.title.isNotEmpty) ...[
-          const SizedBox(height: 10),
-          Prose(one.title, style: theme.textTheme.titleLarge),
+          const SizedBox(height: Gap.md),
+          Prose(one.title, style: AppType.titleL.copyWith(color: p.ink)),
         ],
-        const SizedBox(height: 16),
+        const SizedBox(height: Gap.lg),
 
         // Условие идёт кусками, а не одним текстом: кусок — это то, что
         // подтверждает положение источника, и в разборе он подсвечивается
         // отдельно.
         for (final segment in one.segments) ...[
-          Prose(segment.text, style: theme.textTheme.bodyLarge),
+          // Увеличенный интерлиньяж: условие читают подолгу, и кегль
+          // разговорных подписей на длинном тексте утомляет.
+          Prose(segment.text, style: AppType.reading.copyWith(color: p.ink)),
           if (answered && segment.statements.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.only(top: 6),
+              padding: const EdgeInsets.only(top: Gap.sm),
               child: Wrap(
-                spacing: 6,
-                runSpacing: 6,
+                spacing: Gap.sm,
+                runSpacing: Gap.sm,
                 children: [
                   for (final mark in segment.statements) _Mark(text: mark),
                 ],
               ),
             ),
-          const SizedBox(height: 12),
+          const SizedBox(height: Gap.md),
         ],
 
-        const SizedBox(height: 6),
+        const SizedBox(height: Gap.sm),
         for (final option in one.options)
           _OptionTile(
             option: option,
@@ -300,32 +340,35 @@ class CaseView extends StatelessWidget {
           ),
 
         if (answered) ...[
-          const SizedBox(height: 20),
+          const SizedBox(height: Gap.xl),
+          // Исход назван и словом, и знаком: цвет различают не все, и
+          // «верно» одним оттенком рамки у части врачей не читается
+          // вовсе. Зелёный здесь не берётся — успех у нас оливковый, а
+          // красный занят строго неверным ответом.
           Row(
             children: [
               Icon(
                 right ? Icons.check_circle : Icons.cancel_outlined,
                 size: 22,
-                color: right
-                    ? theme.colorScheme.primary
-                    : theme.colorScheme.error,
+                color: right ? p.success : p.danger,
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: Gap.sm),
               Text(
                 right ? 'Верно' : 'Неверно',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  color: right
-                      ? theme.colorScheme.primary
-                      : theme.colorScheme.error,
+                style: AppType.titleM.copyWith(
+                  color: right ? p.success : p.danger,
                 ),
               ),
             ],
           ),
           if (one.explanationMd.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            Prose(one.explanationMd, style: theme.textTheme.bodyMedium),
+            const SizedBox(height: Gap.md),
+            Prose(
+              one.explanationMd,
+              style: AppType.reading.copyWith(color: p.inkMuted),
+            ),
           ],
-          const SizedBox(height: 20),
+          const SizedBox(height: Gap.xl),
           FilledButton(onPressed: onNext, child: const Text('Дальше')),
         ],
       ],
@@ -354,12 +397,14 @@ class _OptionTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
+    final p = context.palette;
     final color = switch (state) {
-      _OptionState.plain => scheme.outlineVariant,
-      _OptionState.right => scheme.primary,
-      _OptionState.wrong => scheme.error,
+      _OptionState.plain => p.hairline,
+      // Успех оливковый, а не зелёный «из палитры системы»: зелёный в
+      // этой гамме выглядит вставленным из чужого приложения. Красный
+      // занят строго неверным ответом и больше нигде не встречается.
+      _OptionState.right => p.success,
+      _OptionState.wrong => p.danger,
     };
     // Знак исхода вместо одного цвета рамки: цвет различают не все, и
     // задача, разобранная по цвету, у части врачей не разбирается вовсе.
@@ -370,21 +415,27 @@ class _OptionTile extends StatelessWidget {
     };
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.only(bottom: Gap.md),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: Radii.surfaceAll,
+        splashColor: p.accent.withValues(alpha: 0.06),
+        highlightColor: p.accent.withValues(alpha: 0.04),
         child: Container(
           width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          padding: const EdgeInsets.symmetric(
+            horizontal: Gap.lg,
+            vertical: Gap.md,
+          ),
           decoration: BoxDecoration(
+            color: p.surface,
             // Волосяная граница, а не тень: тень допустима только у того,
             // что физически висит над страницей.
             border: Border.all(
               color: color,
               width: state == _OptionState.plain ? 1 : 1.5,
             ),
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: Radii.surfaceAll,
           ),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -403,16 +454,19 @@ class _OptionTile extends StatelessWidget {
                   ),
                   child: Text(
                     option.label,
-                    style: theme.textTheme.labelMedium?.copyWith(color: color),
+                    style: AppType.label.copyWith(color: color),
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: Gap.md),
               ],
               Expanded(
-                child: Prose(option.text, style: theme.textTheme.bodyLarge),
+                child: Prose(
+                  option.text,
+                  style: AppType.body.copyWith(color: p.ink),
+                ),
               ),
               if (mark != null) ...[
-                const SizedBox(width: 10),
+                const SizedBox(width: Gap.md),
                 Icon(mark, size: 18, color: color),
               ],
             ],
@@ -440,50 +494,25 @@ class _Marks extends StatelessWidget {
     final marked = one.segments.where((s) => s.statements.isNotEmpty).length;
 
     return Wrap(
-      spacing: 8,
-      runSpacing: 8,
+      spacing: Gap.sm,
+      runSpacing: Gap.sm,
       children: [
-        _Fact(icon: Icons.category_outlined, text: one.kind.word),
+        Pill(label: one.kind.word, icon: const Icon(Icons.category_outlined)),
         if (one.unitLabel.isNotEmpty)
-          _Fact(icon: Icons.label_outline, text: one.unitLabel),
+          Pill(label: one.unitLabel, icon: const Icon(Icons.label_outline)),
         if (one.difficulty > 0)
-          _Fact(
-            icon: Icons.speed_outlined,
-            text: 'Трудность: ${one.difficulty}',
+          // Трудность точками, а не числом: «3» само по себе не говорит
+          // ничего — из чего эти три, видно только по шкале целиком.
+          Pill(
+            label: 'трудность',
+            icon: DifficultyDots(level: one.difficulty),
           ),
         if (showMarkup && marked > 0)
-          _Fact(
-            icon: Icons.link,
-            text: 'Подтверждают: $marked из ${one.segments.length}',
+          Pill(
+            label: 'Подтверждают: $marked из ${one.segments.length}',
+            icon: const Icon(Icons.link),
           ),
       ],
-    );
-  }
-}
-
-class _Fact extends StatelessWidget {
-  const _Fact({required this.icon, required this.text});
-
-  final IconData icon;
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        border: Border.all(color: theme.colorScheme.outlineVariant),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 14, color: theme.colorScheme.onSurfaceVariant),
-          const SizedBox(width: 6),
-          Text(text, style: theme.textTheme.labelMedium),
-        ],
-      ),
     );
   }
 }
@@ -496,57 +525,44 @@ class _Mark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        border: Border.all(
-          color: theme.colorScheme.primary.withValues(alpha: 0.4),
-        ),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.link, size: 12, color: theme.colorScheme.primary),
-          const SizedBox(width: 5),
-          Text(
-            text,
-            style: theme.textTheme.labelSmall?.copyWith(
-              color: theme.colorScheme.primary,
-            ),
-          ),
-        ],
-      ),
+    final p = context.palette;
+    // Плотная таблетка на подложке акцента: обозначений под куском
+    // условия бывает несколько подряд, и рамка у каждой рябила бы.
+    return Pill(
+      label: text,
+      icon: const Icon(Icons.link),
+      color: p.accent,
+      background: p.accentSoft,
+      dense: true,
     );
   }
 }
 
+/// Экран без задачи: отказ или «на сегодня всё».
+///
+/// Выход из положения обязателен даже там, где ничего не сломалось:
+/// пустой экран без кнопки читается как тупик, и врач уходит из
+/// приложения вместо того, чтобы обновить список.
 class _Message extends StatelessWidget {
   const _Message({
+    required this.icon,
+    required this.title,
     required this.text,
     required this.action,
     required this.onTap,
   });
 
+  final IconData icon;
+  final String title;
   final String text;
   final String action;
   final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(text, textAlign: TextAlign.center),
-            const SizedBox(height: 16),
-            OutlinedButton(onPressed: onTap, child: Text(action)),
-          ],
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => EmptyState(
+    icon: Icon(icon),
+    title: title,
+    description: text,
+    action: OutlinedButton(onPressed: onTap, child: Text(action)),
+  );
 }

@@ -19,6 +19,7 @@ library;
 import 'package:flutter/material.dart';
 
 import 'api/client.dart';
+import 'core/design/palette.dart';
 import 'cases/outbox.dart';
 import 'cases/practice_screen.dart';
 import 'db/reference_store.dart';
@@ -68,6 +69,7 @@ class _HomeState extends State<Home> {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.palette;
     // Разделы держатся живыми, а не строятся заново: врач, отошедший на
     // знаки посреди задачи, вернулся бы к её началу — и ответ, уже
     // обдуманный, пришлось бы обдумывать снова.
@@ -97,36 +99,43 @@ class _HomeState extends State<Home> {
           ProgressScreen(api: widget.api),
         ],
       ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _at,
-        onDestinationSelected: (at) => setState(() => _at = at),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.school_outlined),
-            selectedIcon: Icon(Icons.school),
-            label: 'Задачи',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.replay_outlined),
-            selectedIcon: Icon(Icons.replay),
-            label: 'Повторение',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.menu_book_outlined),
-            selectedIcon: Icon(Icons.menu_book),
-            label: 'Справочник',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.inventory_2_outlined),
-            selectedIcon: Icon(Icons.inventory_2),
-            label: 'Наборы',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.military_tech_outlined),
-            selectedIcon: Icon(Icons.military_tech),
-            label: 'Знаки',
-          ),
-        ],
+      // Волосяная граница сверху, а не тень: полоса разделов лежит в
+      // плоскости экрана, а не висит над ним. Тень здесь вернула бы
+      // «пластиковый» вид, от которого всё оформление и уходит.
+      bottomNavigationBar: DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border(top: BorderSide(color: p.hairline)),
+        ),
+        child: NavigationBar(
+          selectedIndex: _at,
+          onDestinationSelected: (at) => setState(() => _at = at),
+          // У каждого раздела один значок на оба состояния: выбранный
+          // помечен подложкой и цветом, которые задаёт тема. Второй,
+          // залитый значок — третий признак того же самого, и разглядеть
+          // в нём смену начертания труднее, чем подложку под пальцем.
+          destinations: const [
+            NavigationDestination(
+              icon: Icon(Icons.school_outlined),
+              label: 'Задачи',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.replay_outlined),
+              label: 'Повторение',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.menu_book_outlined),
+              label: 'Справочник',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.inventory_2_outlined),
+              label: 'Наборы',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.military_tech_outlined),
+              label: 'Знаки',
+            ),
+          ],
+        ),
       ),
     );
   }

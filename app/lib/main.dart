@@ -16,6 +16,9 @@ import 'package:flutter/material.dart';
 import 'api/client.dart';
 import 'api/token_store.dart';
 import 'cases/outbox.dart';
+import 'core/design/app_theme.dart';
+import 'core/design/tokens.dart';
+import 'core/ui/surface.dart';
 import 'db/database.dart';
 import 'db/outbox_store.dart';
 import 'db/reference_store.dart';
@@ -123,13 +126,14 @@ class CuratorApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Куратор',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF2F5D62)),
-        // Плоскости разделяются волосяной границей, а не тенью: тень
-        // допустима только у того, что физически висит над страницей.
-        cardTheme: const CardThemeData(elevation: 0),
-        appBarTheme: const AppBarTheme(elevation: 0, scrolledUnderElevation: 0),
-      ),
+      // Обе темы, а выбор — за системой. Тёмную нельзя не дать: врач
+      // открывает приложение и ночью на дежурстве, и белый экран в
+      // темноте — это не «непривычно», а больно.
+      //
+      // Плоскости в обеих разделяются волосяной границей, а не тенью:
+      // тень допустима только у того, что физически висит над страницей.
+      theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
       home: StartScreen(
         api: api,
         outbox: outbox,
@@ -218,10 +222,9 @@ class _StartScreenState extends State<StartScreen> {
           // говорит, что делать. «Ошибка 401» отправила бы врача
           // переустанавливать исправное приложение.
           return Scaffold(
-            appBar: AppBar(title: const Text('Куратор')),
-            body: Center(
+            body: SafeArea(
               child: Padding(
-                padding: const EdgeInsets.all(24),
+                padding: Gap.screenH,
                 child: _Failure(text: failure.message, onRetry: _again),
               ),
             ),
@@ -251,13 +254,14 @@ class _Failure extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(text, textAlign: TextAlign.center),
-        const SizedBox(height: 16),
-        OutlinedButton(onPressed: onRetry, child: const Text('Ещё раз')),
-      ],
+    // Пустое состояние, а не голый текст посреди экрана: у отказа на
+    // старте обязан быть выход, иначе врач остаётся с сообщением и
+    // кнопкой «назад», которой некуда вести.
+    return EmptyState(
+      icon: const Icon(Icons.cloud_off_outlined),
+      title: 'Не вышло начать',
+      description: text,
+      action: OutlinedButton(onPressed: onRetry, child: const Text('Ещё раз')),
     );
   }
 }

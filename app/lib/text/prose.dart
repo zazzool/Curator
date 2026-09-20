@@ -337,9 +337,16 @@ _Marked? _marked(String raw, int at) {
   return null;
 }
 
+/// Выделение внутри строки.
+///
+/// У полужирного задаётся не только `fontWeight`, но и `fontVariations`:
+/// Golos Text — вариативный шрифт, ось начертания у него одна на весь
+/// файл, и `fontWeight` её не двигает. Без этой пары выделенное в тексте
+/// набиралось бы обычным — молча, без всякого признака отказа.
 TextStyle? _styled(TextStyle? base, _Mark style) => switch (style) {
   _Mark.strong => (base ?? const TextStyle()).copyWith(
     fontWeight: FontWeight.w600,
+    fontVariations: const [FontVariation('wght', 600)],
   ),
   _Mark.emphasis => (base ?? const TextStyle()).copyWith(
     fontStyle: FontStyle.italic,
@@ -520,7 +527,12 @@ class ProseTable extends StatelessWidget {
     final theme = Theme.of(context);
     if (rows.isEmpty) return const SizedBox.shrink();
     final hairline = BorderSide(color: theme.colorScheme.outlineVariant);
-    final headStyle = base?.copyWith(fontWeight: FontWeight.w600);
+    // Полужирный шапки — парой с осью вариативного шрифта, по тому же
+    // доводу, что и у выделения в строке (см. `_styled`).
+    final headStyle = base?.copyWith(
+      fontWeight: FontWeight.w600,
+      fontVariations: const [FontVariation('wght', 600)],
+    );
 
     if (asGrid(rows)) {
       return Table(

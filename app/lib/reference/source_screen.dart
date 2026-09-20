@@ -16,6 +16,12 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../core/design/palette.dart';
+import '../core/design/tokens.dart';
+import '../core/design/typography.dart';
+import '../core/ui/leading_glyph.dart';
+import '../core/ui/search_field.dart';
+import '../core/ui/surface.dart';
 import '../db/reference_store.dart';
 import '../text/plural.dart';
 import '../text/prose.dart';
@@ -78,77 +84,76 @@ class _SourceScreenState extends State<SourceScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(title: Text(widget.source.title)),
       body: SafeArea(
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-              child: TextField(
+        child: Padding(
+          padding: Gap.screenH,
+          child: Column(
+            children: [
+              ScreenHeader(
+                title: widget.source.title,
+                subtitle: widget.source.edition.isEmpty
+                    ? null
+                    : widget.source.edition,
+                onBack: () => Navigator.of(context).pop(),
+              ),
+              AppSearchField(
                 controller: _query,
                 onChanged: _search,
-                textInputAction: TextInputAction.search,
-                decoration: InputDecoration(
-                  isDense: true,
-                  prefixIcon: const Icon(Icons.search, size: 20),
-                  suffixIcon: _query.text.isEmpty
-                      ? null
-                      : IconButton(
-                          icon: const Icon(Icons.close, size: 18),
-                          onPressed: () {
-                            _query.clear();
-                            _search('');
-                          },
-                        ),
-                  hintText:
-                      'Код или название: ${widget.source.unitWord.toLowerCase()}',
-                  border: const OutlineInputBorder(),
-                ),
+                hintText:
+                    'Код или название: '
+                    '${widget.source.unitWord.toLowerCase()}',
+                onClear: _query.text.isEmpty
+                    ? null
+                    : () {
+                        _query.clear();
+                        _search('');
+                      },
               ),
-            ),
-            if (_searching && _shown.isEmpty)
-              Expanded(
-                child: Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Text(
-                      'Ничего не нашлось. Попробуйте часть кода '
-                      'или одно слово из названия',
-                      textAlign: TextAlign.center,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
+              const SizedBox(height: Gap.md),
+              if (_searching && _shown.isEmpty)
+                const Expanded(
+                  child: EmptyState(
+                    icon: Icon(Icons.search_off_outlined),
+                    title: 'Ничего не нашлось',
+                    description:
+                        'Попробуйте часть кода или одно слово из названия',
+                  ),
+                )
+              else if (_loading)
+                const Expanded(
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              else
+                Expanded(
+                  child: ListView.separated(
+                    padding: const EdgeInsets.only(bottom: Gap.xl),
+                    itemCount: _shown.length,
+                    // Разделитель между строками, а не рамка у каждой:
+                    // список из полусотни карточек распадается на куски,
+                    // а строки с общей левой линией читаются одним
+                    // столбцом сверху вниз.
+                    separatorBuilder: (context, _) =>
+                        rowDivider(context, indent: 30),
+                    itemBuilder: (_, at) => UnitRow(
+                      unit: _shown[at],
+                      // В найденном путь показывается, а в дереве нет: в
+                      // дереве врач и так знает, где он, а в выдаче
+                      // поиска «F32.1» без «Расстройства настроения» над
+                      // ним — это код без места.
+                      showPath: _searching,
+                      statementWord: widget.source.statementWord,
+                      onTap: () => openUnit(
+                        context,
+                        widget.store,
+                        widget.source,
+                        _shown[at],
                       ),
                     ),
                   ),
                 ),
-              )
-            else if (_loading)
-              const Expanded(child: Center(child: CircularProgressIndicator()))
-            else
-              Expanded(
-                child: ListView.builder(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                  itemCount: _shown.length,
-                  itemBuilder: (_, at) => UnitRow(
-                    unit: _shown[at],
-                    // В найденном путь показывается, а в дереве нет: в
-                    // дереве врач и так знает, где он, а в выдаче поиска
-                    // «F32.1» без «Расстройства настроения» над ним — это
-                    // код без места.
-                    showPath: _searching,
-                    statementWord: widget.source.statementWord,
-                    onTap: () => openUnit(
-                      context,
-                      widget.store,
-                      widget.source,
-                      _shown[at],
-                    ),
-                  ),
-                ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -186,66 +191,61 @@ class UnitRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final p = context.palette;
     // Группа и запись отличаются знаком, и отличие взято у источника, а не
     // угадано по виду метки: «если это МКБ» — дефект.
     final group = unit.kind == 'group' || !unit.answerable;
 
-    return InkWell(
+    return AppRow(
       onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(
+      padding: const EdgeInsets.symmetric(vertical: Gap.md),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Знак выровнен по первой строке текста, а не по всему блоку:
+          // на трёхстрочном названии он уехал бы в середину.
+          LeadingGlyph(
+            lineStyle: AppType.caption,
+            child: Icon(
               group ? Icons.folder_outlined : Icons.description_outlined,
               size: 18,
-              color: theme.colorScheme.outline,
+              color: p.inkFaint,
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (showPath && unit.path.contains('/'))
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 2),
-                      child: Text(
-                        breadcrumb(unit.path),
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          color: theme.colorScheme.outline,
-                        ),
-                      ),
-                    ),
-                  Text(
-                    unit.label,
-                    style: theme.textTheme.labelLarge?.copyWith(
-                      color: theme.colorScheme.primary,
+          ),
+          const SizedBox(width: Gap.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (showPath && unit.path.contains('/'))
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: Gap.xs),
+                    child: Text(
+                      breadcrumb(unit.path),
+                      style: AppType.caption.copyWith(color: p.inkFaint),
                     ),
                   ),
-                  const SizedBox(height: 2),
-                  Prose(unit.title, style: theme.textTheme.bodyMedium),
-                  if (unit.statements > 0)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Text(
-                        counted(unit.statements, statementWord),
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
+                // Метка набрана цифровым начертанием: в нём цифры одной
+                // ширины, и столбец меток не пляшет от строки к строке.
+                Text(
+                  unit.label,
+                  style: AppType.caseNumber.copyWith(color: p.accent),
+                ),
+                const SizedBox(height: Gap.xs),
+                Prose(unit.title, style: AppType.body.copyWith(color: p.ink)),
+                if (unit.statements > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(top: Gap.xs),
+                    child: Text(
+                      counted(unit.statements, statementWord),
+                      style: AppType.caption.copyWith(color: p.inkFaint),
                     ),
-                ],
-              ),
+                  ),
+              ],
             ),
-            Icon(
-              Icons.chevron_right,
-              size: 18,
-              color: theme.colorScheme.outlineVariant,
-            ),
-          ],
-        ),
+          ),
+          Icon(Icons.chevron_right, size: 18, color: p.inkFaint),
+        ],
       ),
     );
   }
@@ -327,81 +327,84 @@ class _UnitScreenState extends State<UnitScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final p = context.palette;
     final unit = widget.unit;
     final trail = breadcrumb(unit.path);
 
     return Scaffold(
-      appBar: AppBar(title: Text(unit.label)),
       body: SafeArea(
-        child: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : ListView(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-                children: [
-                  if (trail.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: Text(
-                        trail,
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          color: theme.colorScheme.outline,
-                        ),
-                      ),
-                    ),
-                  // Название рубрики — главное на экране, и оно набрано
-                  // крупно: врач пришёл сюда за ним, а не за кодом,
-                  // который уже знает.
-                  Prose(unit.title, style: theme.textTheme.headlineSmall),
-                  const SizedBox(height: 14),
-                  KindStrip(
-                    statements: _statements,
-                    children: _children.length,
-                  ),
-                  if (_statements.isNotEmpty) ...[
-                    const SizedBox(height: 22),
-                    CriteriaList(
-                      statements: _statements,
-                      statementWord: widget.source.statementWord,
-                      links: _links,
-                      onLink: _openLink,
-                    ),
-                  ],
-                  if (_children.isNotEmpty) ...[
-                    const SizedBox(height: 26),
-                    Text(
-                      'Внутри',
-                      style: theme.textTheme.titleSmall?.copyWith(
-                        color: theme.colorScheme.primary,
-                      ),
-                    ),
-                    for (final child in _children)
-                      UnitRow(
-                        unit: child,
-                        statementWord: widget.source.statementWord,
-                        onTap: () => openUnit(
-                          context,
-                          widget.store,
-                          widget.source,
-                          child,
-                        ),
-                      ),
-                  ],
-                  if (_statements.isEmpty && _children.isEmpty)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 32),
-                      child: Text(
-                        'У этой ${widget.source.unitWord.toLowerCase()} '
-                        'в источнике нет ни вложенного, ни отдельных '
-                        '${pluralWord(widget.source.statementWord).toLowerCase()}',
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                ],
+        child: Padding(
+          padding: Gap.screenH,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Метка в шапке, название — крупно ниже: врач пришёл сюда
+              // за названием, а код он уже знает, иначе не нашёл бы
+              // рубрику. Путь — подзаголовок шапки: он отвечает «где
+              // это лежит», а это свойство места, а не рубрики.
+              ScreenHeader(
+                title: unit.label,
+                subtitle: trail.isEmpty ? null : trail,
+                onBack: () => Navigator.of(context).pop(),
               ),
+              if (_loading)
+                const Expanded(
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              else
+                Expanded(
+                  child: ListView(
+                    padding: const EdgeInsets.only(bottom: Gap.xxl),
+                    children: [
+                      Prose(
+                        unit.title,
+                        style: AppType.titleL.copyWith(color: p.ink),
+                      ),
+                      const SizedBox(height: Gap.lg),
+                      KindStrip(
+                        statements: _statements,
+                        children: _children.length,
+                      ),
+                      if (_statements.isNotEmpty) ...[
+                        const SizedBox(height: Gap.xxl),
+                        CriteriaList(
+                          statements: _statements,
+                          statementWord: widget.source.statementWord,
+                          links: _links,
+                          onLink: _openLink,
+                        ),
+                      ],
+                      if (_children.isNotEmpty) ...[
+                        const SizedBox(height: Gap.xxl),
+                        const SectionLabel('Внутри'),
+                        for (final child in _children)
+                          UnitRow(
+                            unit: child,
+                            statementWord: widget.source.statementWord,
+                            onTap: () => openUnit(
+                              context,
+                              widget.store,
+                              widget.source,
+                              child,
+                            ),
+                          ),
+                      ],
+                      if (_statements.isEmpty && _children.isEmpty)
+                        EmptyState(
+                          icon: const Icon(Icons.inbox_outlined),
+                          title: 'Здесь пусто',
+                          description:
+                              'У этой '
+                              '${widget.source.unitWord.toLowerCase()} '
+                              'в источнике нет ни вложенного, ни отдельных '
+                              '${pluralWord(widget.source.statementWord).toLowerCase()}',
+                        ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -17,6 +17,11 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../core/design/palette.dart';
+import '../core/design/tokens.dart';
+import '../core/design/typography.dart';
+import '../core/ui/leading_glyph.dart';
+import '../core/ui/surface.dart';
 import '../api/client.dart';
 import 'account.dart';
 
@@ -99,8 +104,7 @@ class _EmailCardState extends State<EmailCard> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Почта', style: theme.textTheme.titleMedium),
-        const SizedBox(height: 8),
+        const SectionLabel('Почта'),
         if (widget.email.isNotEmpty)
           _Bound(email: widget.email)
         else ...[
@@ -301,34 +305,31 @@ class _Bound extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        // Волосяная граница, а не тень: тень допустима только у того, что
-        // физически висит над страницей, а это часть страницы.
-        border: Border.all(color: theme.dividerColor),
-        borderRadius: BorderRadius.circular(8),
-      ),
+    final p = context.palette;
+    // Плоскость из общего набора: волосяная граница и радиус у неё те же,
+    // что у карточек наборов и справочников. Своя рамка здесь разъехалась
+    // бы с ними, и разъезд этот врач видит раньше нас.
+    return Surface(
+      padding: const EdgeInsets.all(Gap.md),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            Icons.mark_email_read_outlined,
-            color: theme.colorScheme.primary,
+          LeadingGlyph(
+            lineStyle: AppType.bodyStrong,
+            child: Icon(Icons.mark_email_read_outlined, color: p.accent),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: Gap.md),
           // Гибким, а не как есть: длинный адрес на узком экране упирался
           // бы в край вместо переноса.
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(email, style: theme.textTheme.bodyLarge),
-                const SizedBox(height: 4),
+                Text(email, style: AppType.bodyStrong.copyWith(color: p.ink)),
+                const SizedBox(height: Gap.xs),
                 Text(
                   'Смените телефон — доступ вернётся по этой почте.',
-                  style: theme.textTheme.bodySmall,
+                  style: AppType.caption.copyWith(color: p.inkFaint),
                 ),
               ],
             ),
