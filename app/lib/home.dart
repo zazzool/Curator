@@ -1,19 +1,22 @@
 /// Разделы приложения.
 ///
-/// Пять: задачи, повторение, справочник, наборы, знаки. Прежде их было
-/// три, и довод был тот, что раздел «на всякий случай» сделал бы нижнюю
-/// полосу местом, где надо выбирать, вместо места, где всё видно сразу.
-/// Мерка при этом одна и та же: раздел заводится, когда без него врач
-/// не может сделать то, ради чего приложение поставлено.
+/// Три: теория, практика, прогресс. Столько же и у донора, и это не
+/// подражание ради подражания: мерка одна и та же — раздел заводится,
+/// когда без него врач не может сделать то, ради чего приложение
+/// поставлено. Теория — то, что он открывает у постели больного; практика
+/// — то, ради чего ставил; прогресс — единственное место, где он смотрит
+/// на себя.
 ///
-/// Рядом с четвёртым разделом стояло «пятого по этой мерке уже не будет»,
-/// и это оказалось неверно — не потому, что мерку смягчили, а потому, что
-/// она не была применена к справочнику. Врач у постели больного открывает
-/// не задачу, а критерии рубрики, и делает это без сети. Справочник,
-/// доступный только изнутри разбора, в эту минуту не существует, а
-/// спрятанный в наборы — не находится. Оговорка исправлена, а не стёрта:
-/// шестой раздел потребует такого же довода, и «на всякий случай» им
-/// по-прежнему не является.
+/// Разделов было пять, и двое из них мерке не отвечали. «Повторение» —
+/// это режим практики, а не место: врач приходит заниматься, а не
+/// выбирать между двумя видами занятия, и теперь оно плитка на
+/// «Практике», где видно, сколько задач ждёт сегодня. «Наборы» — витрина,
+/// куда заходят раз в месяц: раздел полосы она занимала у занятия, а
+/// дорог к ней теперь две, и обе там, где о наборах думают, — строкой на
+/// «Практике» и строкой в «Настройках».
+///
+/// Оговорка «шестого раздела по этой мерке не будет» не стёрта, а
+/// исправлена: мерка та же, счёт другой.
 library;
 
 import 'package:flutter/material.dart';
@@ -21,13 +24,10 @@ import 'package:flutter/material.dart';
 import 'api/client.dart';
 import 'core/design/palette.dart';
 import 'cases/outbox.dart';
-import 'cases/practice_screen.dart';
+import 'cases/practice_hub_screen.dart';
 import 'db/reference_store.dart';
 import 'db/schedule.dart';
 import 'packs/manifest.dart';
-import 'packs/download.dart';
-import 'packs/shelf.dart';
-import 'packs/shelf_screen.dart';
 import 'packs/store.dart';
 import 'progress/progress_screen.dart';
 import 'reference/reference_screen.dart';
@@ -70,32 +70,16 @@ class _HomeState extends State<Home> {
   @override
   Widget build(BuildContext context) {
     final p = context.palette;
-    // Разделы держатся живыми, а не строятся заново: врач, отошедший на
-    // знаки посреди задачи, вернулся бы к её началу — и ответ, уже
-    // обдуманный, пришлось бы обдумывать снова.
+    // Область со службами заведена выше — над `MaterialApp`, а не здесь:
+    // экраны, открытые поверх раздела, живут в навигаторе, а навигатор
+    // стоит над нижним меню, и область отсюда им не видна вовсе. Поймала
+    // это проверка, а не глаз: экран настроек падал на первом же кадре.
     return Scaffold(
       body: IndexedStack(
         index: _at,
         children: [
-          PracticeScreen(
-            api: widget.api,
-            outbox: widget.outbox,
-            packs: widget.packs,
-            schedule: widget.schedule,
-          ),
-          PracticeScreen(
-            api: widget.api,
-            outbox: widget.outbox,
-            packs: widget.packs,
-            schedule: widget.schedule,
-            source: PracticeSource.review,
-          ),
           ReferenceScreen(api: widget.api, store: widget.reference),
-          ShelfScreen(
-            shelf: Shelf(widget.api, widget.packs),
-            download: Download(widget.api, widget.packs, widget.keys),
-            store: widget.packs,
-          ),
+          const PracticeHubScreen(),
           ProgressScreen(api: widget.api),
         ],
       ),
@@ -111,28 +95,21 @@ class _HomeState extends State<Home> {
           onDestinationSelected: (at) => setState(() => _at = at),
           // У каждого раздела один значок на оба состояния: выбранный
           // помечен подложкой и цветом, которые задаёт тема. Второй,
-          // залитый значок — третий признак того же самого, и разглядеть
-          // в нём смену начертания труднее, чем подложку под пальцем.
+          // залитый значок — третий признак того же самого, и
+          // разглядеть в нём смену начертания труднее, чем подложку
+          // под пальцем.
           destinations: const [
             NavigationDestination(
-              icon: Icon(Icons.school_outlined),
-              label: 'Задачи',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.replay_outlined),
-              label: 'Повторение',
-            ),
-            NavigationDestination(
               icon: Icon(Icons.menu_book_outlined),
-              label: 'Справочник',
+              label: 'Теория',
             ),
             NavigationDestination(
-              icon: Icon(Icons.inventory_2_outlined),
-              label: 'Наборы',
+              icon: Icon(Icons.school_outlined),
+              label: 'Практика',
             ),
             NavigationDestination(
               icon: Icon(Icons.military_tech_outlined),
-              label: 'Знаки',
+              label: 'Прогресс',
             ),
           ],
         ),

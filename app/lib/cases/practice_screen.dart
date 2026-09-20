@@ -15,6 +15,7 @@ import '../core/design/tokens.dart';
 import '../core/design/typography.dart';
 import '../core/ui/difficulty_dots.dart';
 import '../core/ui/motion.dart';
+import '../core/ui/quiet_progress.dart';
 import '../core/ui/surface.dart';
 import '../db/schedule.dart';
 import '../packs/store.dart';
@@ -200,14 +201,24 @@ class _PracticeScreenState extends State<PracticeScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               ScreenHeader(
+                // Заголовок называет режим тем же словом, что и плитка,
+                // с которой врач сюда вошёл: назовись экран иначе, он
+                // читался бы как «я попал не туда».
                 title: widget.source == PracticeSource.review
                     ? 'Повторение'
-                    : 'Задачи',
+                    : 'Новая задача',
                 // Число ждущих отправки показывается, а не прячется: врач,
                 // занимавшийся весь вечер без сети, должен видеть, что его
                 // работа не потеряна.
                 subtitle: _waiting == 0 ? null : 'Ждут отправки: $_waiting',
+                // Экран открыт поверх «Практики»: возврат обязан вернуть
+                // врача к выбору режима.
+                onBack: () => Navigator.of(context).pop(),
               ),
+              // Пока задачи читаются, экран не утверждает ничего: кружок
+              // на весь экран объявлял бы работу невозможной, пока ответит
+              // сервер, — а в метро всё нужное лежит на устройстве.
+              UpdatingLine(updating: _loading, label: 'Задачи обновляются'),
               Expanded(child: _body(context)),
             ],
           ),
@@ -217,7 +228,7 @@ class _PracticeScreenState extends State<PracticeScreen> {
   }
 
   Widget _body(BuildContext context) {
-    if (_loading) return const Center(child: CircularProgressIndicator());
+    if (_loading) return const SizedBox.shrink();
 
     final failure = _failure;
     if (failure != null) {

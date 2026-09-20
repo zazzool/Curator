@@ -111,7 +111,12 @@ class _AccountScreenState extends State<AccountScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               ScreenHeader(
-                title: 'Мой доступ',
+                // «Учётная запись», а не «Мой доступ»: подэкран
+                // настроек называется тем же словом, что и строка,
+                // которая на него ведёт, — иначе врач не уверен, что
+                // попал туда, куда шёл. Доступ, почта и имя живут здесь
+                // вместе: это всё про одну запись.
+                title: 'Учётная запись',
                 onBack: () => Navigator.of(context).pop(),
               ),
               Expanded(child: _body(context)),

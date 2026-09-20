@@ -12,15 +12,16 @@ library;
 
 import 'package:flutter/material.dart';
 
-import '../account/account.dart';
-import '../account/account_screen.dart';
 import '../api/client.dart';
+import '../core/app_scope.dart';
 import '../core/design/palette.dart';
 import '../core/design/tokens.dart';
 import '../core/design/typography.dart';
 import '../core/ui/bars.dart';
 import '../core/ui/motion.dart';
+import '../core/ui/quiet_progress.dart';
 import '../core/ui/surface.dart';
+import '../settings/settings_screen.dart';
 import 'metrics.dart';
 import 'state.dart';
 
@@ -69,24 +70,63 @@ class _ProgressScreenState extends State<ProgressScreen> {
     }
   }
 
-  Future<void> _openAccount() async {
-    // «Да» в ответе означает, что доступ вернули по почте и запись
-    // сменилась. Перечитываем: числа на этом экране считаны за прежнюю
-    // запись, и оставить их значило бы показать врачу чужой путь под его
-    // вернувшейся почтой.
-    final restored = await Navigator.of(context).push(
-      MaterialPageRoute<bool>(
-        builder: (_) => AccountScreen(account: Account(widget.api)),
-      ),
-    );
-    if (restored == true) await _load();
+  /// За чью учётную запись считаны числа на экране.
+  ///
+  /// Доступ возвращают по почте на подэкране «Настроек», и оттуда врач
+  /// возвращается не сюда. Числа при этом считаны за прежнюю запись, и
+  /// оставить их значило бы показать ему чужой путь под его вернувшейся
+  /// почтой — поэтому смена объявляется на всё приложение, а экран её
+  /// слушает.
+  int _epoch = 0;
+
+  /// Счётчик смен записи, взятый один раз при появлении зависимостей.
+  ///
+  /// Держится ссылкой, а не берётся из `context` по месту: к `dispose()`
+  /// дерево уже разобрано, и поиск области оттуда — прямой отказ
+  /// («Looking up a deactivated widget's ancestor is unsafe»). Поймала
+  /// это проверка, не глаз.
+  ValueNotifier<int>? _epochSource;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final epoch = AppScope.of(context).accountEpoch;
+    if (identical(epoch, _epochSource)) return;
+    _epochSource?.removeListener(_accountChanged);
+    _epochSource = epoch..addListener(_accountChanged);
+    _epoch = epoch.value;
+  }
+
+  @override
+  void dispose() {
+    _epochSource?.removeListener(_accountChanged);
+    super.dispose();
+  }
+
+  void _accountChanged() {
+    final now = _epochSource?.value ?? _epoch;
+    if (now == _epoch) return;
+    _epoch = now;
+    _load();
   }
 
   @override
   Widget build(BuildContext context) => Scaffold(body: _body(context));
 
   Widget _body(BuildContext context) {
-    if (_loading) return const Center(child: CircularProgressIndicator());
+    // Первое чтение: показывать нечего. Прогресс живёт на сервере, и
+    // «Уровень 0» на непрочитанном врач принял бы за правду — как и
+    // «Знаков пока нет». Кружка здесь нет по той же причине, по какой его
+    // нет на прочих экранах: отметка обновления говорит, что идёт
+    // проверка, и ничего не утверждает.
+    if (_loading && _signs.isEmpty && _failure == null) {
+      return SafeArea(
+        child: Padding(
+          padding: Gap.screenH,
+          child: const UpdatingLine(updating: true, label: 'Знаки обновляются'),
+        ),
+      );
+    }
 
     final failure = _failure;
     if (failure != null) {
@@ -110,17 +150,13 @@ class _ProgressScreenState extends State<ProgressScreen> {
         // полосу состояния, и собственный отступ она считает сама.
         padding: EdgeInsets.zero,
         children: [
+          // Значок настроек — тот же, что на «Теории» и «Практике», и
+          // ведёт он туда же. Учётная запись лежит за ним: узнать, дошли
+          // ли деньги, надо не чаще, чем сменить настройку, а две разные
+          // двери к одному расходятся в поведении.
           StandingCard(
             standing: _standing,
-            trailing: ScreenHeaderAction(
-              icon: Icons.account_circle_outlined,
-              // Доступ шестым разделом полосы не стал: мерка полосы —
-              // «без него врач не может заниматься», и карточка ей не
-              // отвечает. Но узнать, дошли ли деньги, было нельзя нигде,
-              // и место для этого — там же, где врач смотрит на себя.
-              label: 'Мой доступ',
-              onTap: _openAccount,
-            ),
+            trailing: const SettingsHeaderAction(),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, Gap.xl, 16, Gap.xxl),
