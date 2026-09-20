@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -168,7 +169,7 @@ func (j *Jobs) Place(ctx context.Context, order Order, plan Plan) (Job, error) {
 	job, err := scanJob(j.gate.QueryRow(ctx,
 		`INSERT INTO gen_jobs (kind, source_id, unit_label, idem_key, params)
 		 VALUES ($1, $2, $3, $4, $5)
-		 ON CONFLICT (idem_key) WHERE idem_key <> ''
+		 ON CONFLICT (idem_key) WHERE idem_key <> '' AND status IN ('queued', 'running')
 		 DO UPDATE SET updated_at = gen_jobs.updated_at
 		 RETURNING `+jobColumns,
 		KindCase, plan.SourceID, order.UnitLabel, order.IdemKey(), params))
@@ -320,6 +321,67 @@ func (j *Jobs) Cancel(ctx context.Context, id int64) error {
 	return nil
 }
 
+// Retry заводит новое задание по плану прежнего.
+//
+// # Почему новое задание, а не оживление прежнего
+//
+// Отказ — единственный след того, почему задача не написалась, и
+// переписав его статусом «в очереди», мы стёрли бы разбор вместе с
+// причиной. Составитель, повторивший заказ трижды, должен видеть три
+// отказа, а не один загадочно исправившийся.
+//
+// # Почему без ключа повторности
+//
+// Ключ считается от заказанного и защищает от ДВОЙНОГО НАЖАТИЯ: тот, кто
+// щёлкнул «заказать» дважды, хотел одну задачу. Но он же запирал единицу
+// НАВСЕГДА: задание отказало — ключ остался, и повторный заказ той же
+// единицы молча возвращал прежнее, закрытое задание. Выглядело это как
+// «студия меня не слышит», а единица выбывала из работы насовсем.
+//
+// Повтор — осознанное действие составителя, как и повторный разбор
+// документа (см. PlaceParse), и ключа у него поэтому нет. От двойного
+// нажатия здесь защищает не ключ, а отказ на идущую работу по той же
+// единице: RunningFor.
+func (j *Jobs) Retry(ctx context.Context, prev Job) (Job, error) {
+	params, err := json.Marshal(prev.Plan)
+	if err != nil {
+		return Job{}, fmt.Errorf("план прежнего задания не записан: %w", err)
+	}
+	job, err := scanJob(j.gate.QueryRow(ctx,
+		`INSERT INTO gen_jobs (kind, source_id, unit_label, params)
+		 VALUES ($1, $2, $3, $4)
+		 RETURNING `+jobColumns,
+		KindCase, prev.SourceID, prev.UnitLabel, params))
+	if err != nil {
+		return Job{}, fmt.Errorf("повтор не поставлен в очередь: %w", err)
+	}
+	return job, nil
+}
+
+// RunningFor — идёт ли уже работа по этой единице источника.
+//
+// Отдаёт номер идущего задания. Нужен там, где ключа повторности нет:
+// два задания на одну единицу пишут две задачи, и заплачено будет за обе,
+// а хотел составитель одну.
+func (j *Jobs) RunningFor(ctx context.Context, sourceID int64, unitLabel string) (int64, bool, error) {
+	var id int64
+	err := j.gate.QueryRow(ctx,
+		`SELECT id FROM gen_jobs
+		  WHERE kind = $1
+		    AND status IN ('queued', 'running')
+		    AND source_id = $2
+		    AND unit_label = $3
+		  ORDER BY id
+		  LIMIT 1`, KindCase, sourceID, unitLabel).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("идущие задания по единице не прочитаны: %w", err)
+	}
+	return id, true, nil
+}
+
 func (j *Jobs) finish(ctx context.Context, id int64, status, reason string) error {
 	_, err := j.gate.Exec(ctx,
 		`UPDATE gen_jobs SET status = $2, error = $3, updated_at = NOW() WHERE id = $1`,
@@ -437,6 +499,31 @@ func (j *Jobs) SaveDraft(ctx context.Context, job Job, draft Draft) (int64, erro
 	return id, nil
 }
 
+// SaveCheck записывает итог слепой сверки в черновик.
+//
+// Отдельной записью после черновика, а не полем при вставке: сверка идёт
+// ПОСЛЕ написания и стоит отдельных денег, и черновик обязан существовать
+// раньше неё. Копи мы то и другое до одной вставки, обрыв между узлами
+// терял бы уже написанное — то есть то, за что заплачено.
+func (j *Jobs) SaveCheck(ctx context.Context, draftID int64, check Check) error {
+	body, err := json.Marshal(check)
+	if err != nil {
+		return fmt.Errorf("итог сверки не записан: %w", err)
+	}
+	res, err := j.gate.Exec(ctx,
+		`UPDATE case_drafts SET blind_check = $2 WHERE id = $1`, draftID, body)
+	if err != nil {
+		return fmt.Errorf("итог сверки не сохранён: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		// Черновика нет — значит записали не туда, и молчать нельзя:
+		// успех при нуле строк выглядит как записанная сверка, которой
+		// не существует.
+		return fmt.Errorf("черновик %d не найден: итог сверки не сохранён", draftID)
+	}
+	return nil
+}
+
 // Drafts — черновики, написанные по заданию.
 //
 // Списком, а не одним: перегенерация пишет второй черновик по тому же
@@ -444,7 +531,7 @@ func (j *Jobs) SaveDraft(ctx context.Context, job Job, draft Draft) (int64, erro
 // а затёртый черновик сравнить не с чем.
 func (j *Jobs) Drafts(ctx context.Context, jobID int64) ([]Stored, error) {
 	rows, err := j.gate.Query(ctx,
-		`SELECT id, body FROM case_drafts WHERE job_id = $1 ORDER BY id`, jobID)
+		`SELECT id, body, blind_check FROM case_drafts WHERE job_id = $1 ORDER BY id`, jobID)
 	if err != nil {
 		return nil, fmt.Errorf("черновики задания %d не прочитаны: %w", jobID, err)
 	}
@@ -453,8 +540,8 @@ func (j *Jobs) Drafts(ctx context.Context, jobID int64) ([]Stored, error) {
 	out := []Stored{}
 	for rows.Next() {
 		var id int64
-		var raw []byte
-		if err := rows.Scan(&id, &raw); err != nil {
+		var raw, rawCheck []byte
+		if err := rows.Scan(&id, &raw, &rawCheck); err != nil {
 			return nil, fmt.Errorf("строка черновика не разобрана: %w", err)
 		}
 		var draft Draft
@@ -465,7 +552,21 @@ func (j *Jobs) Drafts(ctx context.Context, jobID int64) ([]Stored, error) {
 			// задачу, которой никто не писал.
 			return nil, fmt.Errorf("черновик задания %d не разобран: %w", jobID, err)
 		}
-		out = append(out, Stored{ID: id, Draft: draft})
+		stored := Stored{ID: id, Draft: draft}
+		if len(rawCheck) > 0 {
+			var check Check
+			if err := json.Unmarshal(rawCheck, &check); err != nil {
+				// И здесь непонятое не применяется, но роняется только
+				// сверка, а не черновик: задача написана и цела, а
+				// неразобранный итог сверки — это ровно «сверки нет».
+				// Уронив весь черновик, мы спрятали бы от составителя
+				// исправную задачу из-за испорченной приписки к ней.
+				log.Printf("черновик %d: итог сверки не разобран: %v", id, err)
+			} else {
+				stored.Check = &check
+			}
+		}
+		out = append(out, stored)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("черновики дочитаны не до конца: %w", err)

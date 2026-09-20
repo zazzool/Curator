@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { ApiError, api } from './api'
-import type { Draft, Job, Me, Source, Unit } from './api'
+import type { Check, Draft, Job, Me, Source, Unit } from './api'
 import { Banner } from './components/Banner'
 
 // Генерация по источнику: заказать задачу, посмотреть очередь, прочитать
@@ -100,6 +100,25 @@ export function Generation({
     }
   }
 
+  // Повтор отказавшего задания.
+  //
+  // Кнопка нужна именно у отказавшего, и до неё выхода не было вовсе:
+  // ключ повторности запирал единицу навсегда, и повторный заказ той же
+  // единицы молча возвращал прежнее, закрытое задание. Выглядело это как
+  // «нажал и ничего не произошло».
+  async function retry(id: number) {
+    setBusy(true)
+    setFailure('')
+    try {
+      await api.retryJob(id)
+      await reload()
+    } catch (error) {
+      setFailure(error instanceof ApiError ? error.message : 'Повтор не заказан')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function show(id: number) {
     setFailure('')
     try {
@@ -174,6 +193,11 @@ export function Generation({
               {canOrder && (job.status === 'queued' || job.status === 'running') && (
                 <button onClick={() => cancel(job.id)} disabled={busy}>
                   Отменить
+                </button>
+              )}
+              {canOrder && (job.status === 'failed' || job.status === 'cancelled') && (
+                <button onClick={() => void retry(job.id)} disabled={busy}>
+                  Повторить
                 </button>
               )}
             </div>
@@ -289,6 +313,7 @@ function JobCard({ me, job, onClose }: { me: Me; job: Job; onClose: () => void }
               ))}
             </ul>
             <p className="hint">{draft.explanationMd}</p>
+            <CheckNote check={draft.check} />
             {accepted[draft.id] ? (
               <Banner kind="success">
                 Задача заведена и лежит в черновиках. Выпустить её — в
@@ -311,5 +336,65 @@ function JobCard({ me, job, onClose }: { me: Me; job: Job; onClose: () => void }
         ))
       )}
     </div>
+  )
+}
+
+/**
+ * Что сказала слепая сверка — рядом с черновиком, который она смотрела.
+ *
+ * До этого вердикт вычислялся и пропадал: за сверку платили, а составитель
+ * её не видел, и задача, с которой сверка НЕ согласилась, выглядела ровно
+ * как та, с которой согласилась.
+ *
+ * Три состояния, и все три разные. Сверки не было вовсе — задачу не
+ * проверял никто. Сверка не состоялась — попытка была, и причина названа
+ * словами: кончились деньги у поставщика, отменили задание, модель
+ * вернула не тот JSON. Сверка прошла — сошлась или нет.
+ *
+ * Несогласие показывается тревогой, а непроверенность — предупреждением, и
+ * путать их нельзя в обе стороны: тревога у непроверенной задачи приучает
+ * не верить тревоге, а спокойный вид у несогласной отправляет задачу
+ * врачу.
+ */
+function CheckNote({ check }: { check?: Check }) {
+  if (!check) {
+    return (
+      <p className="hint">
+        Слепой сверки у этого черновика нет: задачу не проверял никто.
+        Прочитайте её сами, прежде чем принимать.
+      </p>
+    )
+  }
+  if (!check.done) {
+    return (
+      <Banner kind="error">
+        Слепая сверка не состоялась: {check.note || 'причина не записана'}.
+        Задача написана, но не проверена — повторите заказ или прочитайте её
+        сами.
+      </Banner>
+    )
+  }
+  const verdict = check.verdict
+  if (!verdict) {
+    // Сверка объявила себя состоявшейся и не оставила ответа: так бывает у
+    // черновика, записанного прежней выкаткой. Непонятое не применяется —
+    // и уж точно не выдаётся за согласие.
+    return <Banner kind="error">Слепая сверка отмечена прошедшей, но ответа её нет.</Banner>
+  }
+  if (verdict.agrees) {
+    return (
+      <p className="hint">
+        Слепая сверка сошлась: по одному условию, не видя ни заказанной
+        единицы, ни положений источника, она выбрала тот же ответ.
+        {!verdict.sure && ' Уверенной она себя при этом не назвала.'}
+      </p>
+    )
+  }
+  return (
+    <Banner kind="error">
+      Слепая сверка НЕ сошлась: по одному условию она выбрала «{verdict.answer}
+      ». {verdict.why} Это значит, что условие ведёт не к заказанному ответу —
+      посмотрите сами, прежде чем принимать.
+    </Banner>
   )
 }
