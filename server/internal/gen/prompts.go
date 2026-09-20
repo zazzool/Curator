@@ -110,6 +110,17 @@ type Prompt struct {
 	// на отвечающей сразу работает иначе.
 	Model string
 
+	// SourceID — источник, которому это задание принадлежит. Ноль —
+	// задание общее (или отвязанное, см. ниже).
+	//
+	// Три состояния, и все три надо видеть: общее задание узла, своё
+	// задание источника и задание, которое не служит никому — бывшая
+	// правка источника, которую вернули к общей. Последнее не удаляется
+	// (правленое в студии не стирается, у него есть история), но и не
+	// прячется: спрятанное задание в списке — это строка базы, о которой
+	// нельзя узнать, что она есть.
+	SourceID int64
+
 	// IsDefault — по этому заданию узел и работает.
 	//
 	// Умолчание ровно одно на узел, и держит это указатель базы. Поле
@@ -136,15 +147,26 @@ func NewPrompts(gate *dbgate.Gate) *Prompts { return &Prompts{gate: gate} }
 // указатель базы. Нет ни одного — отказ, а не пустое задание: модель,
 // получившая пустое задание, ответит чем угодно, и ответ этот будет
 // выглядеть работой.
-func (p *Prompts) ForNode(ctx context.Context, node string) (Prompt, error) {
+func (p *Prompts) ForNode(ctx context.Context, node string, sourceID int64) (Prompt, error) {
 	var out Prompt
+	// Одним запросом, а не «спросить своё, потом общее»: двумя запросами
+	// между ними помещается чужая правка, и узел взял бы общее задание в
+	// ту секунду, когда источнику только что завели своё. Отказ такой
+	// молчалив — задача напишется, просто не тем заданием.
+	//
+	// Порядок ставит своё выше общего, и LIMIT 1 берёт его. Нет своего —
+	// остаётся умолчание узла, то есть обычная работа.
 	err := p.gate.QueryRow(ctx,
-		`SELECT id, name, node, system_md, user_md, model, is_default, revision
-		   FROM prompts
-		  WHERE node = $1 AND is_default
-		  LIMIT 1`, node).
+		`SELECT p.id, p.name, p.node, p.system_md, p.user_md, p.model,
+		        p.is_default, p.revision, COALESCE(sp.source_id, 0)
+		   FROM prompts p
+		   LEFT JOIN source_prompts sp
+		     ON sp.prompt_id = p.id AND sp.node = p.node AND sp.source_id = $2
+		  WHERE p.node = $1 AND (sp.source_id IS NOT NULL OR p.is_default)
+		  ORDER BY (sp.source_id IS NOT NULL) DESC
+		  LIMIT 1`, node, sourceID).
 		Scan(&out.ID, &out.Name, &out.Node, &out.SystemMd, &out.UserMd,
-			&out.Model, &out.IsDefault, &out.Revision)
+			&out.Model, &out.IsDefault, &out.Revision, &out.SourceID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Prompt{}, fmt.Errorf("у узла «%s» нет задания по умолчанию", NodeWord(node))
 	}
@@ -451,9 +473,12 @@ func seeds() []Prompt {
 // сбила бы его с того, что за чем идёт.
 func (p *Prompts) All(ctx context.Context) ([]Prompt, error) {
 	rows, err := p.gate.Query(ctx,
-		`SELECT id, name, node, system_md, user_md, model, is_default, revision
-		   FROM prompts
-		  ORDER BY node, id`)
+		`SELECT p.id, p.name, p.node, p.system_md, p.user_md, p.model,
+		        p.is_default, p.revision, COALESCE(sp.source_id, 0)
+		   FROM prompts p
+		   LEFT JOIN source_prompts sp
+		     ON sp.prompt_id = p.id AND sp.node = p.node
+		  ORDER BY p.node, p.id`)
 	if err != nil {
 		return nil, fmt.Errorf("задания не прочитаны: %w", err)
 	}
@@ -463,7 +488,8 @@ func (p *Prompts) All(ctx context.Context) ([]Prompt, error) {
 	for rows.Next() {
 		var one Prompt
 		if err := rows.Scan(&one.ID, &one.Name, &one.Node, &one.SystemMd,
-			&one.UserMd, &one.Model, &one.IsDefault, &one.Revision); err != nil {
+			&one.UserMd, &one.Model, &one.IsDefault, &one.Revision,
+			&one.SourceID); err != nil {
 			return nil, fmt.Errorf("задание не прочитано: %w", err)
 		}
 		byNode[one.Node] = append(byNode[one.Node], one)
@@ -556,4 +582,103 @@ func (p *Prompts) Save(ctx context.Context, edit Prompt, login string) (Prompt, 
 		return Prompt{}, err
 	}
 	return out, nil
+}
+
+// Fork заводит источнику своё задание узла, скопировав общее.
+//
+// Копией, а не связью с общим: укажи источник на само умолчание, и
+// правка «для этого источника» молча меняла бы задание всем — то есть
+// делала бы прямо противоположное тому, зачем её просили. Заметили бы
+// это по качеству чужих задач через неделю.
+//
+// Повторный вызов ничего не портит: своё задание уже есть, и оно
+// возвращается как есть. Иначе нажатие дважды заводило бы второе
+// задание и теряло правку первого.
+func (p *Prompts) Fork(ctx context.Context, sourceID int64, node string) (Prompt, error) {
+	if sourceID <= 0 {
+		return Prompt{}, errors.New("источник не назван: своё задание заводится источнику, а не никому")
+	}
+	var out Prompt
+	err := p.gate.InTx(ctx, func(tx pgx.Tx) error {
+		// Замок на источник, а не сверка перед записью: два нажатия,
+		// пришедшие разом, видят отсутствие своего задания оба и заводят
+		// два. Ключ первичный их потом разведёт, но одно задание к тому
+		// времени уже создано и осиротело.
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, sourceID); err != nil {
+			return fmt.Errorf("источник %d не заперт: %w", sourceID, err)
+		}
+
+		var existing string
+		err := tx.QueryRow(ctx,
+			`SELECT prompt_id FROM source_prompts WHERE source_id = $1 AND node = $2`,
+			sourceID, node).Scan(&existing)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("своё задание источника не прочитано: %w", err)
+		}
+		if err == nil {
+			return tx.QueryRow(ctx,
+				`SELECT id, name, node, system_md, user_md, model, is_default, revision
+				   FROM prompts WHERE id = $1`, existing).
+				Scan(&out.ID, &out.Name, &out.Node, &out.SystemMd, &out.UserMd,
+					&out.Model, &out.IsDefault, &out.Revision)
+		}
+
+		var from Prompt
+		err = tx.QueryRow(ctx,
+			`SELECT id, name, node, system_md, user_md, model
+			   FROM prompts WHERE node = $1 AND is_default LIMIT 1`, node).
+			Scan(&from.ID, &from.Name, &from.Node, &from.SystemMd, &from.UserMd, &from.Model)
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Общего задания нет — копировать нечего, и заводить пустое
+			// нельзя: модель на пустое задание ответит чем угодно, и
+			// ответ этот будет выглядеть работой.
+			return fmt.Errorf("у узла «%s» нет общего задания: копировать нечего", NodeWord(node))
+		}
+		if err != nil {
+			return fmt.Errorf("общее задание узла «%s» не прочитано: %w", NodeWord(node), err)
+		}
+
+		// Имя строит сервер, а не составитель: оно опознавательное, и
+		// набранное руками разошлось бы с источником при первом же
+		// переименовании источника.
+		id := fmt.Sprintf("%s-источник-%d", node, sourceID)
+		err = tx.QueryRow(ctx,
+			`INSERT INTO prompts (id, name, node, system_md, user_md, model, is_default)
+			 VALUES ($1, $2, $3, $4, $5, $6, FALSE)
+			 ON CONFLICT (id) DO UPDATE SET id = prompts.id
+			 RETURNING id, name, node, system_md, user_md, model, is_default, revision`,
+			id, from.Name, node, from.SystemMd, from.UserMd, from.Model).
+			Scan(&out.ID, &out.Name, &out.Node, &out.SystemMd, &out.UserMd,
+				&out.Model, &out.IsDefault, &out.Revision)
+		if err != nil {
+			return fmt.Errorf("своё задание источника не заведено: %w", err)
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO source_prompts (source_id, node, prompt_id) VALUES ($1, $2, $3)
+			 ON CONFLICT (source_id, node) DO UPDATE SET prompt_id = EXCLUDED.prompt_id`,
+			sourceID, node, out.ID); err != nil {
+			return fmt.Errorf("своё задание источника не привязано: %w", err)
+		}
+		out.SourceID = sourceID
+		return nil
+	})
+	if err != nil {
+		return Prompt{}, err
+	}
+	return out, nil
+}
+
+// Unfork возвращает узел источника к общему заданию.
+//
+// Снимается ПРИВЯЗКА, а правленое задание остаётся в базе вместе со
+// своей историей: правка задания — врачебная работа, и стирать её
+// нажатием «вернуть общее» нельзя. Передумавший вернётся к ней тем же
+// Fork — он находит задание по имени и привязывает снова.
+func (p *Prompts) Unfork(ctx context.Context, sourceID int64, node string) error {
+	_, err := p.gate.Exec(ctx,
+		`DELETE FROM source_prompts WHERE source_id = $1 AND node = $2`, sourceID, node)
+	if err != nil {
+		return fmt.Errorf("своё задание источника не отвязано: %w", err)
+	}
+	return nil
 }

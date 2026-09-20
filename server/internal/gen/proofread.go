@@ -189,7 +189,7 @@ func (r *Runner) runProofread(ctx context.Context, job Job, draft Draft) (Draft,
 		return draft, report
 	}
 
-	prompt, err := r.prompts.ForNode(ctx, NodeProofread)
+	prompt, err := r.prompts.ForNode(ctx, NodeProofread, job.SourceID)
 	if err != nil {
 		report.Note = "задание вычитки не прочитано: " + err.Error()
 		return draft, report

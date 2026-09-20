@@ -325,7 +325,7 @@ func TestPgЗаданиеУзлаБерётсяИзБазыИПравится(t 
 	if err := prompts.Seed(ctx); err != nil {
 		t.Fatal(err)
 	}
-	prompt, err := prompts.ForNode(ctx, NodeCompose)
+	prompt, err := prompts.ForNode(ctx, NodeCompose, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

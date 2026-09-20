@@ -492,6 +492,16 @@ export type PipelineNode = {
 
   /** Сколько обращений посчитано по прайсу, а не по названной цене. */
   estimated: number
+
+  /**
+   * Задание своё у этого источника, а не общее.
+   *
+   * Приходит с сервера прямо, а не выводится здесь из совпадения
+   * идентификаторов: два места для одного правила расходятся молча, и
+   * разойдясь, показали бы общее задание как своё — то есть позвали бы
+   * править его всем источникам сразу.
+   */
+  own: boolean
 }
 
 /** Модель, о которой что-то известно: для подсказки при выборе. */
@@ -953,8 +963,17 @@ export const api = {
 
   models: () => request<{ models: ModelChoice[] }>('GET', '/admin/api/models'),
 
-  pipeline: () =>
-    request<{ nodes: PipelineNode[]; days: number }>('GET', '/admin/api/pipeline'),
+  pipeline: (source?: number) =>
+    request<{ nodes: PipelineNode[]; days: number; source: number }>(
+      'GET',
+      source ? `/admin/api/pipeline?source=${source}` : '/admin/api/pipeline',
+    ),
+
+  forkNodePrompt: (source: number, node: string) =>
+    request<{ promptId: string }>('POST', `/admin/api/sources/${source}/pipeline/${node}`),
+
+  unforkNodePrompt: (source: number, node: string) =>
+    request<{ status: string }>('DELETE', `/admin/api/sources/${source}/pipeline/${node}`),
 
   cases: (
     query: {

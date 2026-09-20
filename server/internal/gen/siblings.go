@@ -159,7 +159,7 @@ func (r *Runner) checkSiblings(ctx context.Context, job Job, draft Draft, set An
 		return []SiblingCheck{}
 	}
 
-	prompt, err := r.prompts.ForNode(ctx, NodeSiblings)
+	prompt, err := r.prompts.ForNode(ctx, NodeSiblings, job.SourceID)
 	if err != nil {
 		// Задания нет — не сверен ни один, и сказано это про каждый:
 		// один общий отказ пришлось бы разворачивать глазами обратно в
