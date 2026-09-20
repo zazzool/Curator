@@ -40,11 +40,16 @@ export function Packs({ me }: { me: Me }) {
     event.preventDefault()
     setFailure('')
     try {
-      await api.createPack(draft)
+      // Карточка открывается по метке, которую вернул СЕРВЕР, а не по
+      // набранной. Сервер метку приводит к своему виду (обрезает,
+      // опускает регистр), и открытая по набранной карточка не нашлась
+      // бы: составитель завёл набор и тут же прочитал «такого набора
+      // нет».
+      const { slug } = await api.createPack(draft)
       setAdding(false)
       setDraft({ slug: '', title: '', summaryMd: '' })
       await reload()
-      setOpen(draft.slug)
+      setOpen(slug)
     } catch (error) {
       setFailure(error instanceof ApiError ? error.message : 'Набор не заведён')
     }

@@ -1,10 +1,6 @@
-import { useEffect, useState } from 'react'
+import { Suspense, lazy, useEffect, useState } from 'react'
 
 import { Login } from './Login'
-import { Packs } from './Packs'
-import { Reports } from './Reports'
-import { Sales } from './Sales'
-import { Workshop } from './Workshop'
 import { SourceList } from './SourceList'
 import { SourceScreen } from './SourceScreen'
 import { ErrorBoundary } from './components/ErrorBoundary'
@@ -16,6 +12,24 @@ import { readSidebarCollapsed, writeSidebarCollapsed } from './sidebarState'
 import type { SectionId } from './sections'
 import { api, setAuthLost, setToken } from './api'
 import type { Me } from './api'
+
+/*
+ * Четыре раздела приезжают отдельными кусками, а не вместе со студией.
+ *
+ * Собранное одним куском, оно весило под триста килобайт, и всё это
+ * скачивала СТРАНИЦА ВХОДА: Продажи, Отчёты, Наборы и Мастерская — до
+ * того, как станет известно, есть ли у вошедшего право хоть на один из
+ * них. Составитель без права продаж не открывает Продажи никогда, а
+ * платит за них при каждом входе.
+ *
+ * Источники и экран источника остаются в общем куске намеренно: это
+ * раздел по умолчанию, и подгружать его отдельно значит задержать ровно
+ * тот экран, который открывается сразу после входа.
+ */
+const Packs = lazy(() => import('./Packs').then((m) => ({ default: m.Packs })))
+const Reports = lazy(() => import('./Reports').then((m) => ({ default: m.Reports })))
+const Sales = lazy(() => import('./Sales').then((m) => ({ default: m.Sales })))
+const Workshop = lazy(() => import('./Workshop').then((m) => ({ default: m.Workshop })))
 
 /**
  * Каркас студии: колонка разделов слева и три полосы справа от неё —
@@ -123,6 +137,12 @@ export function App() {
               упавшее при переходе — иначе отказ на одном экране висел бы
               и на исправных. */}
           <ErrorBoundary key={`${section}:${openSource?.id ?? ''}`}>
+            {/* Ожидание названо теми же словами, что и всякое чтение в
+                студии: человеку всё равно, ждёт он файл раздела или
+                ответ сервера. Граница отказа стоит СНАРУЖИ — не
+                приехавший по обрыву кусок раздела это отказ отрисовки,
+                и без границы он снял бы всё дерево белым экраном. */}
+            <Suspense fallback={<p className="empty">Читаем…</p>}>
             {section === 'packs' ? (
               <Packs me={me} />
             ) : section === 'sales' ? (
@@ -136,6 +156,7 @@ export function App() {
             ) : (
               <SourceScreen me={me} id={openSource.id} onBack={() => setOpenSource(null)} />
             )}
+            </Suspense>
           </ErrorBoundary>
         </main>
 

@@ -59,6 +59,8 @@ function Prices({ me }: { me: Me }) {
   const [draft, setDraft] = useState({ purpose: 'subscription:month', rubles: '', enabled: true })
   const [failure, setFailure] = useState('')
   const [note, setNote] = useState('')
+  /** Отказ по полю суммы: стоит под полем, а не полосой наверху. */
+  const [суммаНеТа, setСуммаНеТа] = useState('')
 
   const canSell = me.permissions.includes('sales')
 
@@ -81,9 +83,15 @@ function Prices({ me }: { me: Me }) {
     event.preventDefault()
     setFailure('')
     setNote('')
+    setСуммаНеТа('')
     const kopecks = вКопейки(draft.rubles)
     if (kopecks === null) {
-      setFailure('Сумма пишется рублями и копейками: 1990 или 1990,00')
+      // Отказ по полю стоит ПОД полем, а не полосой наверху страницы:
+      // «Сумма пишется рублями и копейками» над формой из трёх полей не
+      // говорит, о котором из них речь, и составитель перебирает их
+      // вслепую. Полоса наверху остаётся за отказами сервера — они про
+      // действие целиком.
+      setСуммаНеТа('Рублями и копейками: 1990 или 1990,00')
       return
     }
     try {
@@ -157,9 +165,19 @@ function Prices({ me }: { me: Me }) {
             <input
               className="fld-short"
               value={draft.rubles}
-              onChange={(e) => setDraft({ ...draft, rubles: e.target.value })}
+              onChange={(e) => {
+                setDraft({ ...draft, rubles: e.target.value })
+                setСуммаНеТа('')
+              }}
               placeholder="1990"
+              aria-invalid={суммаНеТа !== ''}
+              aria-describedby={суммаНеТа === '' ? undefined : 'цена-сумма-отказ'}
             />
+            {суммаНеТа !== '' && (
+              <span id="цена-сумма-отказ" className="fld-error fld-across" role="alert">
+                {суммаНеТа}
+              </span>
+            )}
           </label>
           <label className="form-row">
             <span className="fld-label">Продаётся</span>
@@ -260,20 +278,32 @@ function ClientCard({ me, id, onBack }: { me: Me; id: number; onBack: () => void
   const [income, setIncome] = useState({ purpose: 'subscription:month', rubles: '', note: '' })
   const [failure, setFailure] = useState('')
   const [note, setNote] = useState('')
+  /** Отказ по полю суммы: стоит под полем, а не полосой наверху. */
+  const [суммаНеТа, setСуммаНеТа] = useState('')
   const ключПопытки = useRef('')
   const [busy, setBusy] = useState(false)
 
   const canSell = me.permissions.includes('sales')
 
   const read = useCallback(async () => {
-    const one = await api.client(id)
-    setRights((await api.clientRights(id))?.entitlements ?? [])
-    setPayments((await api.clientPayments(id))?.payments ?? [])
-    try {
-      setPacks((await api.packs())?.packs ?? [])
-    } catch {
-      setPacks([])
-    }
+    // Четыре независимых чтения идут разом, а не в очередь. Ждать их
+    // по одному незачем: ни одно не зависит от прежнего, и четыре
+    // круга по сети складываются в задержку, которую оператор видит
+    // на каждом открытии карточки.
+    //
+    // Витрина наборов — отдельным обещанием с собственным отказом:
+    // права на наборы у продавца может не быть, и отказ по ней не
+    // должен ронять карточку клиента целиком. Остальные три ронять
+    // обязаны: карточка без прав и приходов — это не карточка.
+    const [one, rights, payments, packs] = await Promise.all([
+      api.client(id),
+      api.clientRights(id),
+      api.clientPayments(id),
+      api.packs().catch(() => null),
+    ])
+    setRights(rights?.entitlements ?? [])
+    setPayments(payments?.payments ?? [])
+    setPacks(packs?.packs ?? [])
     return one
   }, [id])
   const opened = useResource(read, 'Карточка не прочитана')
@@ -284,9 +314,12 @@ function ClientCard({ me, id, onBack }: { me: Me; id: number; onBack: () => void
     event.preventDefault()
     setFailure('')
     setNote('')
+    setСуммаНеТа('')
     const kopecks = вКопейки(income.rubles)
     if (kopecks === null) {
-      setFailure('Сумма пишется рублями и копейками: 1990 или 1990,00')
+      // Под полем, а не полосой наверху: полоса над формой из трёх полей
+      // не говорит, о котором из них речь.
+      setСуммаНеТа('Рублями и копейками: 1990 или 1990,00')
       return
     }
     // Ключ повторности рождается один раз на попытку и живёт до её
@@ -496,9 +529,19 @@ function ClientCard({ me, id, onBack }: { me: Me; id: number; onBack: () => void
               <input
                 className="fld-short"
                 value={income.rubles}
-                onChange={(e) => setIncome({ ...income, rubles: e.target.value })}
+                onChange={(e) => {
+                  setIncome({ ...income, rubles: e.target.value })
+                  setСуммаНеТа('')
+                }}
                 placeholder="1990"
+                aria-invalid={суммаНеТа !== ''}
+                aria-describedby={суммаНеТа === '' ? undefined : 'приход-сумма-отказ'}
               />
+              {суммаНеТа !== '' && (
+                <span id="приход-сумма-отказ" className="fld-error fld-across" role="alert">
+                  {суммаНеТа}
+                </span>
+              )}
             </label>
             <label className="form-row">
               <span className="fld-label">Чем подтверждён</span>
