@@ -13,8 +13,8 @@ const ЧИТАТЕЛЬ: Me = { login: 'читатель', displayName: 'Чита
 
 const НАБОРЫ = {
   packs: [
-    { slug: 'cardio', title: 'Кардиология', status: 'published', cases: 2, version: 3 },
-    { slug: 'nevro', title: 'Неврология', status: 'draft', cases: 0, version: 0 },
+    { slug: 'cardio', title: 'Кардиология', status: 'published', line: 'paid', cases: 2, version: 3 },
+    { slug: 'nevro', title: 'Неврология', status: 'draft', line: 'guest', cases: 0, version: 0 },
   ],
 }
 
@@ -23,6 +23,7 @@ const КАРТОЧКА = {
   title: 'Кардиология',
   summaryMd: 'Сорок задач',
   status: 'published',
+  line: 'paid',
   version: 3,
   revision: 7,
   cases: [
@@ -129,6 +130,47 @@ describe('наборы', () => {
       // отличит правку от затирания чужой.
       expect(body.revision).toBe(7)
     })
+  })
+
+  it('линейка набора видна в списке и уходит при сохранении карточки', async () => {
+    // Линейка — это граница бесплатного, и решается она в студии. Не
+    // покажи список, кому набор открыт, — и платный корпус, розданный
+    // гостевой линейкой, не увидит никто: молча раздающий набор выглядит
+    // ровно как молча закрытый.
+    let ушло: Record<string, unknown> | null = null
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if (init?.method === 'PUT' && path === '/admin/api/packs/cardio') {
+          ушло = JSON.parse(String(init.body))
+        }
+        const found: [string, unknown][] = [
+          ['/admin/api/packs/cardio', КАРТОЧКА],
+          ['/admin/api/packs', НАБОРЫ],
+          ['/admin/api/cases', { cases: [] }],
+        ]
+        const one = found.find(([key]) => path.startsWith(key))
+        return Promise.resolve(
+          new Response(JSON.stringify(one ? one[1] : {}), { status: 200 }),
+        )
+      }),
+    )
+    render(<Packs me={СОСТАВИТЕЛЬ} />)
+    // В списке — словом, а не меткой линейки на латинице.
+    expect(await screen.findByText('платный')).toBeTruthy()
+    expect(screen.getByText('гостевой')).toBeTruthy()
+
+    fireEvent.click(screen.getByText('Кардиология'))
+    await screen.findByText('Одышка')
+    const выбор = screen.getByLabelText('Кому открыт') as HTMLSelectElement
+    expect(выбор.value).toBe('paid')
+    fireEvent.change(выбор, { target: { value: 'sponsored' } })
+    fireEvent.click(screen.getByText('Сохранить карточку'))
+
+    await waitFor(() => expect(ушло).not.toBeNull())
+    const тело = ушло as unknown as Record<string, unknown>
+    expect(тело.line).toBe('sponsored')
+    expect(тело.revision).toBe(7)
   })
 
   it('опоздавшая правка не стирает набранное и предлагает перечитать', async () => {

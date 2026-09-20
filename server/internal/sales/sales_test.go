@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"curator/server/internal/dbgate"
+	"curator/server/internal/packs"
 )
 
 func testGate(t *testing.T) *dbgate.Gate {
@@ -50,24 +51,139 @@ func набор(t *testing.T, gate *dbgate.Gate) string {
 	return slug
 }
 
+// наборЛинейки заводит набор названной линейки.
+func наборЛинейки(t *testing.T, gate *dbgate.Gate, line string) string {
+	t.Helper()
+	slug := fmt.Sprintf("liniya-%d-%d", time.Now().UnixNano(), rand.IntN(1000))
+	if _, err := gate.Exec(context.Background(),
+		`INSERT INTO packs (slug, title, status, line) VALUES ($1, $2, 'published', $3)`,
+		slug, "Набор "+slug, line); err != nil {
+		t.Fatalf("набор не заведён: %v", err)
+	}
+	return slug
+}
+
+// привязатьПочту делает врача «авторизованным».
+//
+// Учётная запись заводится молча при первом запуске, и отличает
+// назвавшегося от промолчавшего только почта — на ней и стоит базовая
+// линейка.
+func привязатьПочту(t *testing.T, gate *dbgate.Gate, id int64) {
+	t.Helper()
+	if _, err := gate.Exec(context.Background(),
+		`UPDATE accounts SET email = $2 WHERE id = $1`,
+		id, fmt.Sprintf("vrach-%d@example.ru", id)); err != nil {
+		t.Fatalf("почта не привязана: %v", err)
+	}
+}
+
 func ключ() string {
 	return fmt.Sprintf("к-%d-%d", time.Now().UnixNano(), rand.IntN(100000))
 }
 
-func TestPgНаборБезЦеныОткрытВсем(t *testing.T) {
-	// Правило названо вслух: молчаливое «нет цены — значит закрыто»
-	// закрыло бы всё, что составитель ещё не оценил, и он узнал бы об этом
-	// от врача.
+func TestPgГостевойНаборОткрытБезЕдинойСтрокиПрав(t *testing.T) {
+	// Врач, впервые открывший приложение, ещё никто: учётная запись
+	// заведена молча, почты нет, прав нет. Закройся гостевая линейка — и
+	// первый экран приложения был бы пуст, а пустой первый экран это
+	// удаление приложения.
 	gate := testGate(t)
 	access := NewAccess(gate)
-	slug := набор(t, gate)
+	slug := наборЛинейки(t, gate, packs.LineGuest)
 
 	ok, err := access.Allowed(context.Background(), врач(t, gate), slug, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !ok {
-		t.Error("набор без цены закрыт")
+		t.Error("гостевой набор закрыт от того, ради кого он и заведён")
+	}
+}
+
+func TestPgБазовыйНаборОткрываетсяПривязаннойПочтой(t *testing.T) {
+	// Обе половины сразу: «закрытого не видно» зелено и тогда, когда не
+	// видно ничего, а «открытое видно» — и тогда, когда видно всё подряд.
+	gate := testGate(t)
+	access := NewAccess(gate)
+	ctx := context.Background()
+	slug := наборЛинейки(t, gate, packs.LineBasic)
+	id := врач(t, gate)
+
+	if ok, _ := access.Allowed(ctx, id, slug, time.Now()); ok {
+		t.Fatal("базовый набор открыт тому, кто не назвался")
+	}
+	привязатьПочту(t, gate, id)
+	ok, err := access.Allowed(ctx, id, slug, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Error("привязавший почту не получил базового набора")
+	}
+}
+
+func TestPgСпонсорскийНаборОткрытВсемИБесплатно(t *testing.T) {
+	// За спонсорский набор уже заплатили, и второй раз — деньгами врача —
+	// за него не платят никогда. Стена входа перед ним превратила бы
+	// подарок спонсора в приманку.
+	gate := testGate(t)
+	access := NewAccess(gate)
+	slug := наборЛинейки(t, gate, packs.LineSponsored)
+
+	ok, err := access.Allowed(context.Background(), врач(t, gate), slug, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Error("спонсорский набор закрыт")
+	}
+}
+
+func TestPgВыключеннаяЦенаБольшеНеОткрываетПлатныйНабор(t *testing.T) {
+	// Прежде правилом было «нет действующей цены — набор бесплатен», и
+	// проверка на это здесь стояла. Правило держалось ровно до тех пор,
+	// пока граница бесплатного не была названа: теперь её несёт линейка,
+	// а цена отвечает на другой вопрос — почём продаётся, а не кому
+	// открыто. Оставь мы оба правила, выключенная цена открывала бы
+	// платный набор всем, а линейка при этом говорила бы «платный»: два
+	// источника правды об одном, и расходятся они молча.
+	//
+	// Бесплатным набор делается линейкой sponsored, и это видно в студии
+	// словом, а не отсутствием числа.
+	gate := testGate(t)
+	access, prices := NewAccess(gate), NewPrices(gate)
+	ctx := context.Background()
+	slug := наборЛинейки(t, gate, packs.LinePaid)
+	id := врач(t, gate)
+	привязатьПочту(t, gate, id)
+
+	редакция, err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, true, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := access.Allowed(ctx, id, slug, time.Now()); ok {
+		t.Fatal("платный набор открыт без покупки")
+	}
+	if _, err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, false, редакция); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := access.Allowed(ctx, id, slug, time.Now()); ok {
+		t.Error("выключенная цена открыла платный набор: " +
+			"снятое с продажи не то же самое, что подаренное")
+	}
+}
+
+func TestPgНабораКоторогоНетНеОткрытНикому(t *testing.T) {
+	// Отвечать «открыт» на несуществующий набор значило бы пустить
+	// выгрузку дальше — к набору, которого нет, — и разбирать потом отказ
+	// на шаг позже того места, где он случился.
+	gate := testGate(t)
+	ok, err := NewAccess(gate).Allowed(
+		context.Background(), врач(t, gate), "takogo-nabora-net", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Error("набор, которого нет, объявлен открытым")
 	}
 }
 
@@ -356,34 +472,6 @@ func TestPgЦенаВНольНеПринимается(t *testing.T) {
 	}
 }
 
-func TestPgВыключеннаяЦенаДелаетНаборБесплатным(t *testing.T) {
-	gate := testGate(t)
-	access, prices := NewAccess(gate), NewPrices(gate)
-	ctx := context.Background()
-	slug := набор(t, gate)
-	id := врач(t, gate)
-
-	редакция, err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, true, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ok, _ := access.Allowed(ctx, id, slug, time.Now()); ok {
-		t.Fatal("платный набор открыт без покупки")
-	}
-	if _, err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, false, редакция); err != nil {
-		t.Fatal(err)
-	}
-	ok, err := access.Allowed(ctx, id, slug, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok {
-		t.Error("набор с выключенной ценой остался закрытым")
-	}
-}
-
-// врачСПочтой заводит учётную запись с почтой и именем: искать по ним и
-// есть то, ради чего поиск заведён.
 func врачСПочтой(t *testing.T, gate *dbgate.Gate, email, name string) int64 {
 	t.Helper()
 	var id int64

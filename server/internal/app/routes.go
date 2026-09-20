@@ -194,15 +194,19 @@ func (r *routes) version(w http.ResponseWriter, req *http.Request, _ Caller) {
 // Страницы курсором, а не смещением: между двумя страницами задачу могут
 // выпустить, и при смещении она сдвинет все следующие — врач получит одну
 // задачу дважды, а соседнюю не получит вовсе.
-func (r *routes) cases(w http.ResponseWriter, req *http.Request, _ Caller) {
+func (r *routes) cases(w http.ResponseWriter, req *http.Request, caller Caller) {
 	q := req.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
 
+	scope, ok := r.scopeOf(w, req, caller)
+	if !ok {
+		return
+	}
 	page, err := r.feed.Page(req.Context(), Cursor{
 		After: q.Get("after"),
 		Path:  q.Get("path"),
 		Limit: limit,
-	})
+	}, scope)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "Не вышло получить задачи")
 		return
@@ -210,12 +214,43 @@ func (r *routes) cases(w http.ResponseWriter, req *http.Request, _ Caller) {
 	WriteJSON(w, http.StatusOK, pageJSON(page))
 }
 
-func (r *routes) oneCase(w http.ResponseWriter, req *http.Request, _ Caller) {
-	one, err := r.feed.Case(req.Context(), req.PathValue("id"))
+// scopeOf — чем урезан корпус этому врачу.
+//
+// Ложь во втором значении означает, что ответ уже написан.
+//
+// Отказ, а не полный корпус: непонятое не применяется, и «прав посчитать
+// не удалось» — не повод отдать всё. Отказ врач увидит и повторит
+// обращение; молча выданный лишний корпус не увидит никто.
+//
+// Права читаются по учётной записи, а не по устройству: купленное видно
+// со второго телефона того же врача.
+func (r *routes) scopeOf(w http.ResponseWriter, req *http.Request, caller Caller) (Scope, bool) {
+	// Ответ зависит от предъявителя, и промежуточный кэш обязан об этом
+	// знать. Один и тот же адрес отдаёт разное в зависимости от токена, и
+	// общий кэш по дороге — наш nginx, кэш оператора связи у врача —
+	// отдал бы второму то, что собрано первому. Это не отказ, а
+	// молчаливая подмена состава: ни врач, ни журнал её не увидят.
+	w.Header().Set("Vary", "Authorization")
+
+	ids, cut, err := r.access.OpenPackIDs(req.Context(), caller.AccountID, r.now())
 	if err != nil {
-		// Одинаковый ответ на «нет такой» и на «снята с раздачи»:
-		// снятая задача для приложения не существует, а разные ответы
-		// рассказали бы, что она была.
+		log.Printf("наборы, открытые записи %d: %v", caller.AccountID, err)
+		WriteError(w, http.StatusInternalServerError, "Не вышло получить задачи")
+		return Scope{}, false
+	}
+	return Scope{Cut: cut, PackIDs: ids}, true
+}
+
+func (r *routes) oneCase(w http.ResponseWriter, req *http.Request, caller Caller) {
+	scope, ok := r.scopeOf(w, req, caller)
+	if !ok {
+		return
+	}
+	one, err := r.feed.Case(req.Context(), req.PathValue("id"), scope)
+	if err != nil {
+		// Одинаковый ответ на «нет такой», «снята с раздачи» и «не
+		// открыта вам»: разные ответы рассказали бы, что задача есть, а
+		// перебор номеров превратился бы в опись закрытого.
 		WriteError(w, http.StatusNotFound, "Такой задачи нет")
 		return
 	}

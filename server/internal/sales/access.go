@@ -25,6 +25,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"curator/server/internal/dbgate"
+	"curator/server/internal/packs"
 )
 
 // Access отвечает, открыт ли набор врачу.
@@ -36,47 +37,118 @@ func NewAccess(gate *dbgate.Gate) *Access { return &Access{gate: gate} }
 
 // Allowed — открыт ли набор.
 //
-// Порядок доводов важен, и он же порядок дешевизны: бесплатный набор не
-// требует ни одного взгляда на права, подписка открывает всё, право на
-// набор открывает его один.
+// Решает не эта работа, а `packs.OpenTo`: она одна на витрину, корпус и
+// выгрузку. Здесь только собираются сведения, которых ей не хватает, — и
+// собираются одним запросом, потому что витрина зовёт Allowed на каждый
+// набор списка.
 //
-// # Набор без цены — бесплатный
+// # Чем это было прежде
 //
-// Правило названо вслух, потому что молчаливое «нет цены — значит закрыто»
-// закрыло бы всё, что составитель ещё не оценил, и он узнал бы об этом от
-// врача. Обратное — «нет цены, значит открыто» — ошибается в сторону
-// щедрости, и это верная сторона: незаданная цена видна в студии, а
-// незаслуженно закрытый набор не виден никому.
+// Прежде правилом было «нет действующей цены — набор бесплатен», и оно
+// ошибалось в сторону щедрости сознательно: незаданная цена видна в
+// студии, а незаслуженно закрытый набор не виден никому. Правило
+// держалось ровно до тех пор, пока граница бесплатного не была названа.
+// Теперь она названа линейкой (решение владельца 2026-09-20), и цена
+// отвечает на другой вопрос — почём продаётся, а не кому открыто. Иначе
+// вышло бы два источника правды об одном: выключенная цена открывала бы
+// платный набор всем, а линейка при этом говорила бы «платный».
 //
-// Плата за это названа вслух и оплачена не здесь: выключить цену — одно
-// нажатие, и платный набор становится бесплатным. Способ этот нужен, но
-// след от него должен оставаться, и оставляет его `Prices.Set`, записывая
-// переход в журнал той же транзакцией. Здесь же правило остаётся простым:
-// нет действующей цены — нет и платности.
+// Бесплатным набор делается линейкой `sponsored`, и это видно в студии
+// словом, а не отсутствием числа.
 func (a *Access) Allowed(ctx context.Context, accountID int64, slug string, now time.Time) (bool, error) {
-	var paid bool
-	if err := a.gate.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM prices
-		                 WHERE purpose = $1 AND enabled AND amount_kopecks > 0)`,
-		"pack:"+slug).Scan(&paid); err != nil {
+	var line string
+	var owns, subscribed, emailBound bool
+	err := a.gate.QueryRow(ctx, `
+		SELECT p.line,
+		       EXISTS (SELECT 1 FROM entitlements e
+		                WHERE e.account_id = $1 AND e.pack_id = p.id
+		                  AND e.revoked_at IS NULL AND e.starts_at <= $3
+		                  AND (e.expires_at IS NULL OR e.expires_at > $3)),
+		       EXISTS (SELECT 1 FROM entitlements e
+		                WHERE e.account_id = $1 AND e.kind = 'subscription'
+		                  AND e.revoked_at IS NULL AND e.starts_at <= $3
+		                  AND (e.expires_at IS NULL OR e.expires_at > $3)),
+		       EXISTS (SELECT 1 FROM accounts a
+		                WHERE a.id = $1 AND a.email IS NOT NULL)
+		  FROM packs p WHERE p.slug = $2`, accountID, slug, now).
+		Scan(&line, &owns, &subscribed, &emailBound)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Набора нет — и закрыт он не потому, что за него не заплатили.
+		// Отвечать «открыт» здесь значило бы пустить выгрузку дальше, к
+		// набору, которого нет.
+		return false, nil
+	}
+	if err != nil {
 		return false, err
 	}
-	if !paid {
-		return true, nil
+	return packs.OpenTo(line, packs.Rights{
+		Owns: owns, Subscribed: subscribed, EmailBound: emailBound,
+	}), nil
+}
+
+// OpenPackIDs — номера наборов, открытых этой учётной записи.
+//
+// Второе значение — «есть что резать». Ложь означает, что у установки нет
+// ни одного выпущенного набора: резать корпус нечем, и урезать его в
+// пустоту значило бы показать врачу пустое приложение там, где никто
+// ничего не закрывал. Это единственный случай, когда корпус отдаётся
+// целиком, и он же случай только что поднятой установки.
+//
+// Снятый с витрины набор в список не попадает, а купившему остаётся
+// открыт: покупка сильнее витрины, и набор, ушедший в архив, не должен
+// исчезать из корпуса у того, кто за него заплатил.
+func (a *Access) OpenPackIDs(ctx context.Context, accountID int64, now time.Time) ([]int64, bool, error) {
+	var subscribed, emailBound bool
+	if err := a.gate.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM entitlements e
+		                WHERE e.account_id = $1 AND e.kind = 'subscription'
+		                  AND e.revoked_at IS NULL AND e.starts_at <= $2
+		                  AND (e.expires_at IS NULL OR e.expires_at > $2)),
+		       EXISTS (SELECT 1 FROM accounts a
+		                WHERE a.id = $1 AND a.email IS NOT NULL)`,
+		accountID, now).Scan(&subscribed, &emailBound); err != nil {
+		return nil, false, err
 	}
 
-	var allowed bool
-	err := a.gate.QueryRow(ctx, `
-		SELECT EXISTS (
-		    SELECT 1 FROM entitlements e
-		     LEFT JOIN packs p ON p.id = e.pack_id
-		     WHERE e.account_id = $1
-		       AND e.revoked_at IS NULL
-		       AND e.starts_at <= $3
-		       AND (e.expires_at IS NULL OR e.expires_at > $3)
-		       AND (e.kind = 'subscription' OR p.slug = $2)
-		)`, accountID, slug, now).Scan(&allowed)
-	return allowed, err
+	rows, err := a.gate.Query(ctx, `
+		SELECT p.id, p.line, p.status,
+		       EXISTS (SELECT 1 FROM entitlements e
+		                WHERE e.account_id = $1 AND e.pack_id = p.id
+		                  AND e.revoked_at IS NULL AND e.starts_at <= $2
+		                  AND (e.expires_at IS NULL OR e.expires_at > $2))
+		  FROM packs p`, accountID, now)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+
+	open := []int64{}
+	any := false
+	for rows.Next() {
+		var id int64
+		var line, status string
+		var owns bool
+		if err := rows.Scan(&id, &line, &status, &owns); err != nil {
+			return nil, false, err
+		}
+		if status == "published" {
+			any = true
+		}
+		if status != "published" && !owns {
+			// Черновик не раздаётся никому, а снятый с витрины —
+			// только тому, кто его купил.
+			continue
+		}
+		if packs.OpenTo(line, packs.Rights{
+			Owns: owns, Subscribed: subscribed, EmailBound: emailBound,
+		}) {
+			open = append(open, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	return open, any, nil
 }
 
 // Entitlement — действующее право.

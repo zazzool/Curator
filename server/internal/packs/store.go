@@ -58,8 +58,13 @@ type Pack struct {
 	Slug      string
 	Title     string
 	SummaryMd string
-	Version   int64
-	Cases     int
+
+	// Line — линейка: чем набор открывается. Уезжает и в приложение:
+	// врач, видящий «закрыт», вправе знать, чем он открывается — входом,
+	// покупкой или подпиской.
+	Line    string
+	Version int64
+	Cases   int
 }
 
 // Publish собирает новый выпуск пакета и подписывает его.
@@ -204,7 +209,7 @@ func (s *Store) Latest(ctx context.Context, slug string) (Release, error) {
 // витрине это обещание, а не товар.
 func (s *Store) Shelf(ctx context.Context) ([]Pack, error) {
 	rows, err := s.gate.Query(ctx, `
-		SELECT p.slug, p.title, p.summary_md, r.version,
+		SELECT p.slug, p.title, p.summary_md, p.line, r.version,
 		       jsonb_array_length(r.manifest -> 'cases')
 		  FROM packs p
 		  JOIN LATERAL (
@@ -223,7 +228,8 @@ func (s *Store) Shelf(ctx context.Context) ([]Pack, error) {
 	out := []Pack{}
 	for rows.Next() {
 		var one Pack
-		if err := rows.Scan(&one.Slug, &one.Title, &one.SummaryMd, &one.Version, &one.Cases); err != nil {
+		if err := rows.Scan(&one.Slug, &one.Title, &one.SummaryMd, &one.Line,
+			&one.Version, &one.Cases); err != nil {
 			return nil, err
 		}
 		out = append(out, one)
@@ -327,6 +333,7 @@ type Shown struct {
 	Slug    string
 	Title   string
 	Status  string
+	Line    string
 	Cases   int
 	Version int64
 }
@@ -337,9 +344,18 @@ type Shown struct {
 // на всё одинаково — «нарушено ограничение», — и отказ «метка занята либо
 // негодна» отправляет составителя гадать, что из двух. Сказать, что именно
 // не так, стоит трёх строк и экономит ему вечер.
-func (s *Store) Create(ctx context.Context, slug, title, summary string) error {
+//
+// Линейка спрашивается при заведении, а не проставляется умолчанием:
+// «чем этот набор открывается» — такое же решение о товаре, как его
+// название, и умолчание тут означало бы, что кто-то решил за составителя,
+// платный набор или подарочный.
+func (s *Store) Create(ctx context.Context, slug, title, summary, line string) error {
 	if title == "" {
 		return errors.New("у набора должно быть название")
+	}
+	if !KnownLine(line) {
+		return fmt.Errorf("линейки %q не бывает: набор бывает гостевым, "+
+			"базовым, платным или спонсорским", line)
 	}
 	if !goodSlug(slug) {
 		return errors.New("метка набора пишется латиницей и цифрами через дефис, " +
@@ -354,8 +370,8 @@ func (s *Store) Create(ctx context.Context, slug, title, summary string) error {
 		return fmt.Errorf("набор с меткой %s уже заведён", slug)
 	}
 	if _, err := s.gate.Exec(ctx,
-		`INSERT INTO packs (slug, title, summary_md, status)
-		 VALUES ($1, $2, $3, 'published')`, slug, title, summary); err != nil {
+		`INSERT INTO packs (slug, title, summary_md, status, line)
+		 VALUES ($1, $2, $3, 'published', $4)`, slug, title, summary, line); err != nil {
 		return err
 	}
 	return nil
@@ -479,7 +495,7 @@ func bump(ctx context.Context, tx pgx.Tx, packID int64) (int, error) {
 // All отдаёт наборы составителю.
 func (s *Store) All(ctx context.Context) ([]Shown, error) {
 	rows, err := s.gate.Query(ctx, `
-		SELECT p.slug, p.title, p.status,
+		SELECT p.slug, p.title, p.status, p.line,
 		       (SELECT count(*) FROM pack_items i WHERE i.pack_id = p.id),
 		       coalesce((SELECT max(version) FROM pack_releases r WHERE r.pack_id = p.id), 0)
 		  FROM packs p
@@ -492,7 +508,8 @@ func (s *Store) All(ctx context.Context) ([]Shown, error) {
 	out := []Shown{}
 	for rows.Next() {
 		var one Shown
-		if err := rows.Scan(&one.Slug, &one.Title, &one.Status, &one.Cases, &one.Version); err != nil {
+		if err := rows.Scan(&one.Slug, &one.Title, &one.Status, &one.Line,
+			&one.Cases, &one.Version); err != nil {
 			return nil, err
 		}
 		out = append(out, one)
@@ -519,6 +536,9 @@ type Contents struct {
 	// что составителю надо видеть.
 	Version int64
 
+	// Line — линейка: чем набор открывается (packs.Line*).
+	Line string
+
 	// Revision — редакция набора, с которой студия пришла сохранять.
 	// Возвращается вместе с содержимым и уходит обратно при сохранении:
 	// иначе двое, открывшие один набор, затирают друг друга молча.
@@ -544,9 +564,10 @@ func (s *Store) One(ctx context.Context, slug string) (Contents, error) {
 	err := s.gate.QueryRow(ctx, `
 		SELECT p.slug, p.title, p.summary_md, p.status,
 		       coalesce((SELECT max(version) FROM pack_releases r WHERE r.pack_id = p.id), 0),
-		       p.revision
+		       p.revision, p.line
 		  FROM packs p WHERE p.slug = $1`, slug).
-		Scan(&out.Slug, &out.Title, &out.SummaryMd, &out.Status, &out.Version, &out.Revision)
+		Scan(&out.Slug, &out.Title, &out.SummaryMd, &out.Status, &out.Version,
+			&out.Revision, &out.Line)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Contents{}, errors.New("такого набора нет")
 	}
@@ -590,7 +611,7 @@ func (s *Store) One(ctx context.Context, slug string) (Contents, error) {
 // Редакция здесь та же, что и у состава, и сверяется так же: карточка и
 // состав правятся на одном экране, и «снял с витрины, пока ты
 // переставлял» — та же потеря, что и потерянная перестановка.
-func (s *Store) Update(ctx context.Context, slug, title, summary, status string, revision int) (int, error) {
+func (s *Store) Update(ctx context.Context, slug, title, summary, status, line string, revision int) (int, error) {
 	if title == "" {
 		return 0, errors.New("у набора должно быть название")
 	}
@@ -599,6 +620,10 @@ func (s *Store) Update(ctx context.Context, slug, title, summary, status string,
 	default:
 		return 0, fmt.Errorf("состояния %q у набора не бывает", status)
 	}
+	if !KnownLine(line) {
+		return 0, fmt.Errorf("линейки %q не бывает: набор бывает гостевым, "+
+			"базовым, платным или спонсорским", line)
+	}
 	var grown int
 	err := s.gate.InTx(ctx, func(tx pgx.Tx) error {
 		packID, err := lock(ctx, tx, slug, revision)
@@ -606,8 +631,8 @@ func (s *Store) Update(ctx context.Context, slug, title, summary, status string,
 			return err
 		}
 		if _, err := tx.Exec(ctx,
-			`UPDATE packs SET title = $2, summary_md = $3, status = $4
-			  WHERE id = $1`, packID, title, summary, status); err != nil {
+			`UPDATE packs SET title = $2, summary_md = $3, status = $4, line = $5
+			  WHERE id = $1`, packID, title, summary, status, line); err != nil {
 			return err
 		}
 		grown, err = bump(ctx, tx, packID)

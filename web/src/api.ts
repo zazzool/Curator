@@ -153,6 +153,8 @@ export type Pack = {
   slug: string
   title: string
   status: string
+  /** Линейка: чем набор открывается — guest, basic, paid, sponsored. */
+  line: string
   cases: number
   /** Номер последнего выпуска; 0 — набор ещё не выпускался. */
   version: number
@@ -335,8 +337,29 @@ export function setAuthLost(handler: (() => void) | null): void {
   authLost = handler
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const init: RequestInit = { method, headers: {} }
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  /**
+   * Не звать обработчика потерянной сессии на 401.
+   *
+   * Нужно ровно одному обращению — тому, которым студия при загрузке
+   * спрашивает, открыта ли ещё сессия из печенья. Его 401 значит «не
+   * входил», а не «вышел», и сказать в ответ «сессия кончилась» человеку,
+   * который только что открыл студию впервые, было бы неправдой.
+   */
+  quiet401?: boolean,
+): Promise<T> {
+  const init: RequestInit = {
+    method,
+    headers: {},
+    // Печенье сессии обязано уехать с обращением. Это и так умолчание
+    // fetch для своего источника, но здесь на нём держится весь возврат к
+    // открытой сессии, и умолчание, от которого зависит вход, называется
+    // вслух.
+    credentials: 'same-origin',
+  }
   const headers = init.headers as Record<string, string>
   if (token) headers['Authorization'] = `Bearer ${token}`
   if (body instanceof FormData) {
@@ -366,7 +389,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     // Вход исключён намеренно: неверный код тоже отвечает 401, и звать
     // на нём «сессия кончилась» значит объяснять человеку, что он вышел,
     // ровно в тот момент, когда он входит.
-    if (response.status === 401 && path !== '/admin/api/login') {
+    if (response.status === 401 && path !== '/admin/api/login' && !quiet401) {
       token = ''
       authLost?.()
     }
@@ -386,6 +409,23 @@ export const api = {
     request<{ token: string }>('POST', '/admin/api/login', { login, code }),
 
   me: () => request<Me>('GET', '/admin/api/me'),
+
+  /**
+   * Открыта ли ещё сессия — вопрос при загрузке страницы.
+   *
+   * Токен студии живёт в памяти страницы, а печенье сессии — в браузере, и
+   * после перезагрузки в памяти нет ничего. Спросить некого, кроме сервера:
+   * печенье HttpOnly студии не видно, и решить «я уже вошёл» она сама не
+   * может. `null` значит «не входил» и никого ни о чём не извещает.
+   */
+  resume: () =>
+    request<Me>('GET', '/admin/api/me', undefined, true).catch((error) => {
+      if (error instanceof ApiError && error.status === 401) return null
+      // Сервер не ответил вовсе — это не «не входил». Показать вход всё
+      // равно придётся, но глотать отказ связи здесь нельзя: студия без
+      // сервера не работает, и сказать об этом должен тот, кто спросил.
+      throw error
+    }),
 
   logout: () => request<{ status: string }>('POST', '/admin/api/logout'),
 
@@ -497,6 +537,7 @@ export const api = {
       status: string
       version: number
       revision: number
+      line: string
       cases: PackItem[]
     }>('GET', `/admin/api/packs/${encodeURIComponent(slug)}`)
     // Сервер зовёт состав «cases» — тем же словом, каким в списке наборов
@@ -506,12 +547,18 @@ export const api = {
     return { ...card, items: cases }
   },
 
-  createPack: (pack: { slug: string; title: string; summaryMd: string }) =>
+  createPack: (pack: { slug: string; title: string; summaryMd: string; line: string }) =>
     request<{ slug: string }>('POST', '/admin/api/packs', pack),
 
   savePack: (
     slug: string,
-    card: { title: string; summaryMd: string; status: string; revision: number },
+    card: {
+      title: string
+      summaryMd: string
+      status: string
+      line: string
+      revision: number
+    },
   ) =>
     request<{ status: string; revision: number }>(
       'PUT',

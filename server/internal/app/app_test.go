@@ -124,6 +124,32 @@ func задача(t *testing.T, gate *dbgate.Gate) (string, int64) {
 	return задачаПоПути(t, gate, fmt.Sprintf("п%d-%d", time.Now().UnixNano(), rand.Intn(100000)))
 }
 
+// вГостевомНаборе кладёт задачи в выпущенный гостевой набор.
+//
+// Нужно это всякой проверке ленты, и не по формальности: корпус — это
+// объединение наборов, на которые есть право (наряд 20), и задача, не
+// попавшая ни в один набор, не отдаётся вовсе. Гостевая линейка — самый
+// дешёвый способ сказать «открыто всем» и не заводить прав ради проверки,
+// которая про другое.
+func вГостевомНаборе(t *testing.T, gate *dbgate.Gate, ids ...string) {
+	t.Helper()
+	slug := fmt.Sprintf("gost-%d-%d", time.Now().UnixNano(), rand.Intn(100000))
+	var packID int64
+	if err := gate.QueryRow(context.Background(),
+		`INSERT INTO packs (slug, title, status, line)
+		 VALUES ($1, $2, 'published', 'guest') RETURNING id`,
+		slug, "Гостевой "+slug).Scan(&packID); err != nil {
+		t.Fatalf("гостевой набор не заведён: %v", err)
+	}
+	for ord, id := range ids {
+		if _, err := gate.Exec(context.Background(),
+			`INSERT INTO pack_items (pack_id, case_id, ord) VALUES ($1, $2, $3)`,
+			packID, id, ord); err != nil {
+			t.Fatalf("задача %s не положена в гостевой набор: %v", id, err)
+		}
+	}
+}
+
 // задачаПоПути кладёт задачу под названной меткой верхнего уровня.
 func задачаПоПути(t *testing.T, gate *dbgate.Gate, root string) (string, int64) {
 	t.Helper()
@@ -298,6 +324,7 @@ func TestPgЛентаПоказываетТолькоОпубликованно�
 	token := устройство(t, srv, key)
 	root := fmt.Sprintf("лента%d", time.Now().UnixNano())
 	caseID, sourceID := задачаПоПути(t, gate, root)
+	вГостевомНаборе(t, gate, caseID)
 
 	status, page, raw := call(t, srv, "GET",
 		"/v1/cases?limit=100&path="+root,
@@ -350,6 +377,7 @@ func TestPgСтраницыЛентыИдутКурсоромИНеДублят�
 	for i := 0; i < 5; i++ {
 		id, _ := задачаПоПути(t, gate, root)
 		want[id] = true
+		вГостевомНаборе(t, gate, id)
 	}
 
 	seen, after := map[string]int{}, ""
@@ -415,6 +443,7 @@ func TestPgОтветыЛентыСходятсяСЭталоном(t *testing.T
 	token := устройство(t, srv, key)
 	root := fmt.Sprintf("эталон%d", time.Now().UnixNano())
 	caseID, _ := задачаПоПути(t, gate, root)
+	вГостевомНаборе(t, gate, caseID)
 
 	auth := map[string]string{"Authorization": "Bearer " + token}
 
