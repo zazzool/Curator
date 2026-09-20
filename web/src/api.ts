@@ -146,6 +146,21 @@ export type CaseBody = {
   difficulty: number
 }
 
+/**
+ * Сколько задач в каждом состоянии при этом отборе.
+ *
+ * Считает сервер и считает БЕЗ отбора по состоянию: числа стоят на самих
+ * вкладках состояний, и счёт с учётом открытой вкладки дал бы ноль везде,
+ * кроме неё.
+ */
+export type CaseCounts = {
+  all: number
+  draft: number
+  review: number
+  published: number
+  archived: number
+}
+
 // Замечание, мешающее раздавать задачу. Сервер называет все разом, а не
 // первое: правка идёт в один заход.
 export type Fault = { where: string; what: string }
@@ -521,14 +536,26 @@ export const api = {
       revision: prompt.revision,
     }),
 
-  cases: (query: { source?: number; path?: string; status?: string; limit?: number } = {}) => {
+  cases: (
+    query: {
+      source?: number
+      path?: string
+      status?: string
+      q?: string
+      limit?: number
+    } = {},
+  ) => {
     const params = new URLSearchParams()
     if (query.source) params.set('source', String(query.source))
     if (query.path) params.set('path', query.path)
     if (query.status) params.set('status', query.status)
+    if (query.q) params.set('q', query.q)
     if (query.limit) params.set('limit', String(query.limit))
     const tail = params.toString()
-    return request<Cut & { cases: Case[] }>('GET', `/admin/api/cases${tail ? `?${tail}` : ''}`)
+    return request<Cut & { cases: Case[]; counts?: CaseCounts }>(
+      'GET',
+      `/admin/api/cases${tail ? `?${tail}` : ''}`,
+    )
   },
 
   case: (id: string) => request<Case>('GET', `/admin/api/cases/${id}`),

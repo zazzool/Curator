@@ -26,8 +26,8 @@ describe('ненайденный адрес', () => {
     // Попавший сюда пришёл работать, и отправлять его глазами в колонку
     // разделов незачем.
     render(<NotFound path="/истопники" />)
-    const выход = screen.getByRole('button', { name: 'К источникам' })
+    const выход = screen.getByRole('button', { name: 'К задачам' })
     выход.click()
-    expect(window.location.pathname).toBe('/sources')
+    expect(window.location.pathname).toBe('/cases')
   })
 })

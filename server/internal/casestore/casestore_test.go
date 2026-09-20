@@ -569,3 +569,105 @@ func TestPgНеразобравшийсяЧерновикНеСтановитс�
 		t.Fatal("из неразобравшегося черновика завелась задача")
 	}
 }
+
+func TestPgПоискЗадачНаходитПоНазваниюМеткеИОпознавателю(t *testing.T) {
+	// Составитель ищет задачу по тому, что у него перед глазами: по
+	// названию из списка, по метке из документа или по опознавателю из
+	// чужого письма. Поиск по одному полю из трёх заставил бы его
+	// выбирать между тремя способами не найти.
+	gate := testGate(t)
+	store := NewStore(gate)
+	ctx := context.Background()
+	sourceID := источник(t, gate)
+
+	one, _, err := store.FromDraft(ctx, черновик(t, gate, sourceID, годноеТело()), "проверка")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	found := func(query string) []Case {
+		t.Helper()
+		list, err := store.Cases(ctx, Filter{SourceID: sourceID, Query: query})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return list
+	}
+
+	for _, query := range []string{"Срок", "срок рассмотрения", "3.1", one.ID} {
+		if list := found(query); len(list) != 1 || list[0].ID != one.ID {
+			t.Errorf("поиск %q дал %d задач", query, len(list))
+		}
+	}
+
+	// Регистр не важен: метка приказа пишется то прописными, то
+	// строчными, и набранное строчными обязано находить прописное.
+	if list := found(strings.ToUpper("срок")); len(list) != 1 {
+		t.Errorf("поиск прописными дал %d задач", len(list))
+	}
+
+	// Ненайденное — пустой список, а не все задачи: поиск, отдающий всё
+	// на непохожем запросе, читается как «нашлось», и составитель ищет
+	// глазами то, чего нет.
+	if list := found("такого нет ни у кого"); len(list) != 0 {
+		t.Errorf("непохожий запрос дал %d задач", len(list))
+	}
+
+	// Знаки, значимые для LIKE, ищутся собой. Без экранирования «%»
+	// означал бы «что угодно» и отдал бы весь список — то есть поиск
+	// отвечал бы «нашлось» на любую опечатку.
+	if list := found("%"); len(list) != 0 {
+		t.Errorf("процент сработал как «что угодно»: %d задач", len(list))
+	}
+}
+
+func TestPgЧислаПоСостояниямСчитаютсяБезОтбораПоСостоянию(t *testing.T) {
+	// Числа стоят на самих вкладках состояний. Посчитанные с учётом
+	// открытой вкладки, они показывали бы ноль везде, кроме неё, — то
+	// есть врали бы ровно о том, ради чего их и показывают: «на выверке
+	// набралось двенадцать» видно до того, как туда заглянуть.
+	gate := testGate(t)
+	store := NewStore(gate)
+	ctx := context.Background()
+	sourceID := источник(t, gate)
+
+	черновая, _, err := store.FromDraft(ctx, черновик(t, gate, sourceID, годноеТело()), "проверка")
+	if err != nil {
+		t.Fatal(err)
+	}
+	раздаваемая, _, err := store.FromDraft(ctx, черновик(t, gate, sourceID, годноеТело()), "проверка")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Publish(ctx, раздаваемая.ID, "составитель"); err != nil {
+		t.Fatal(err)
+	}
+
+	counts, err := store.CaseCounts(ctx, Filter{SourceID: sourceID, Status: StatusPublished})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts.All != 2 || counts.Draft != 1 || counts.Published != 1 {
+		t.Fatalf("числа по состояниям: %+v", counts)
+	}
+	if counts.Review != 0 || counts.Archived != 0 {
+		t.Errorf("пустые состояния не пусты: %+v", counts)
+	}
+
+	// Сумма по состояниям сходится со «Всё»: иначе вкладки говорят одно,
+	// а заголовок другое, и верить перестают обеим.
+	if counts.Draft+counts.Review+counts.Published+counts.Archived != counts.All {
+		t.Errorf("сумма не сошлась со «Всё»: %+v", counts)
+	}
+
+	// Прочий отбор числа УЧИТЫВАЮТ: вкладки стоят над отобранным
+	// списком, и число, посчитанное по всей базе, обещало бы задачи,
+	// которых в списке нет.
+	узкий, err := store.CaseCounts(ctx, Filter{SourceID: sourceID, Query: черновая.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if узкий.All != 1 || узкий.Draft != 1 {
+		t.Errorf("отбор поиском числа не сузил: %+v", узкий)
+	}
+}

@@ -29,8 +29,8 @@ export function NotFound({ path }: { path: string }) {
           работать, и отправлять его глазами в колонку разделов незачем. */}
       <div className="page-section">
         <div className="toolbar" style={{ justifyContent: 'center' }}>
-          <button className="primary" onClick={() => go({ name: 'sources' })}>
-            К источникам
+          <button className="primary" onClick={() => go({ name: 'cases', query: {} })}>
+            К задачам
           </button>
         </div>
       </div>

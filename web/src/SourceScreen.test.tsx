@@ -88,16 +88,45 @@ describe('экран источника', () => {
   })
 
   it('раздел, не прочитавший своё, не роняет остальной экран', async () => {
-    // Обнаружилось проверкой, а не на бою: ответ без списка заданий ронял
-    // весь экран источника белым — вместе с документами и принятым,
-    // к генерации отношения не имеющими.
+    // Обнаружилось проверкой, а не на бою: ответ без списка документов
+    // ронял весь экран источника белым — вместе с принятым, к документам
+    // отношения не имеющим. Раздел, не сумевший прочитать своё, обязан
+    // молчать в своих границах.
     serve({
       '/admin/api/sources/1/units': { units: UNITS },
-      '/admin/api/sources/1/documents': { documents: [] },
       '/admin/api/sources/1': SOURCE,
     })
     render(<SourceScreen me={РЕДАКТОР} id={1} onTitle={() => {}} onBack={() => {}} />)
     await waitFor(() => expect(screen.getByText(/Принятые пункты/)).toBeTruthy())
+  })
+
+  it('дверь к задачам уносит источник и срез с собой', async () => {
+    // Метка, переписанная руками из одного списка в другой, ошибается —
+    // и ошибается молча: список задач по чужому срезу выглядит как
+    // «задач нет».
+    render(<SourceScreen me={РЕДАКТОР} id={1} onTitle={() => {}} onBack={() => {}} />)
+
+    const поле = await screen.findByPlaceholderText(/например/)
+    fireEvent.change(поле, { target: { value: '3' } })
+    await act(() => new Promise((done) => setTimeout(done, 400)))
+
+    fireEvent.click(screen.getByText('Показать задачи'))
+    expect(window.location.pathname + window.location.search).toBe('/cases?source=1&path=3')
+  })
+
+  it('прочитанное название уходит наверх, в полосу', async () => {
+    // В адресе стоит только номер, и пришедший по прямой ссылке иначе
+    // видел бы полосу без названия до самого ухода с экрана.
+    const названия: string[] = []
+    render(
+      <SourceScreen
+        me={РЕДАКТОР}
+        id={1}
+        onTitle={(title) => названия.push(title)}
+        onBack={() => {}}
+      />,
+    )
+    await waitFor(() => expect(названия).toContain('Приказ № 1130н'))
   })
 
   it('не обещает принять PDF позже', async () => {
@@ -204,7 +233,7 @@ describe('экран источника', () => {
         return Promise.resolve(new Response(JSON.stringify(SOURCE), { status: 200 }))
       }),
     )
-    render(<SourceScreen me={ГЕНЕРАТОР} id={1} onBack={() => {}} />)
+    render(<SourceScreen me={ГЕНЕРАТОР} id={1} onTitle={() => {}} onBack={() => {}} />)
 
     fireEvent.click(await screen.findByText('Разобрать моделью'))
     await waitFor(() => expect(заказы).toEqual(['/admin/api/documents/5/parse']))
@@ -253,7 +282,7 @@ describe('экран источника', () => {
         return Promise.resolve(new Response(JSON.stringify(SOURCE), { status: 200 }))
       }),
     )
-    render(<SourceScreen me={ГЕНЕРАТОР} id={1} onBack={() => {}} />)
+    render(<SourceScreen me={ГЕНЕРАТОР} id={1} onTitle={() => {}} onBack={() => {}} />)
     fireEvent.click(await screen.findByText('Разобрать моделью'))
     expect(await screen.findByText(/уже разбирается/)).toBeTruthy()
   })
@@ -283,7 +312,7 @@ describe('экран источника', () => {
       },
       '/admin/api/sources/1': SOURCE,
     })
-    render(<SourceScreen me={РЕДАКТОР} id={1} onBack={() => {}} />)
+    render(<SourceScreen me={РЕДАКТОР} id={1} onTitle={() => {}} onBack={() => {}} />)
     // Строка документа показана — значит скрыта именно кнопка, а не раздел.
     expect(await screen.findByText('prikaz.docx')).toBeTruthy()
     expect(screen.queryByText('Разобрать моделью')).toBeNull()
