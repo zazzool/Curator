@@ -96,7 +96,12 @@ export function SourceList({
       <div className="page-head">
         <h2>Источники</h2>
         {canAccept && (
-          <button onClick={() => setAdding(!adding)}>{adding ? 'Не заводить' : 'Завести источник'}</button>
+          // Синим отмечено то, ради чего открыт раздел. Отказ от заведения
+          // синим не отмечается: две синие кнопки подряд перестают что-либо
+          // выделять.
+          <button className={adding ? undefined : 'primary'} onClick={() => setAdding(!adding)}>
+            {adding ? 'Не заводить' : 'Завести источник'}
+          </button>
         )}
       </div>
       <p className="hint">
@@ -124,7 +129,11 @@ export function SourceList({
           </label>
           <label className="form-row">
             <span className="fld-label">Вид</span>
-            <select value={draft.kind} onChange={(e) => setDraft({ ...draft, kind: e.target.value })}>
+            <select
+              className="fld-medium"
+              value={draft.kind}
+              onChange={(e) => setDraft({ ...draft, kind: e.target.value })}
+            >
               {KINDS.map(([value, name]) => (
                 <option key={value} value={value}>
                   {name}
@@ -152,7 +161,11 @@ export function SourceList({
           </label>
           <label className="form-row">
             <span className="fld-label">По чему делит материал</span>
-            <select value={draft.purpose} onChange={(e) => setDraft({ ...draft, purpose: e.target.value })}>
+            <select
+              className="fld-long"
+              value={draft.purpose}
+              onChange={(e) => setDraft({ ...draft, purpose: e.target.value })}
+            >
               {PURPOSES.map(([value, name]) => (
                 <option key={value} value={value}>
                   {name}
@@ -163,6 +176,7 @@ export function SourceList({
           <label className="form-row">
             <span className="fld-label">Что значит вложенность</span>
             <select
+              className="fld-long"
               value={draft.hierarchy}
               onChange={(e) => setDraft({ ...draft, hierarchy: e.target.value })}
             >
@@ -176,6 +190,7 @@ export function SourceList({
           <label className="form-row">
             <span className="fld-label">Полнота</span>
             <select
+              className="fld-medium"
               value={draft.completeness}
               onChange={(e) => setDraft({ ...draft, completeness: e.target.value })}
             >
@@ -205,7 +220,20 @@ export function SourceList({
         {sources === null ? (
           <p className="empty">Читаем список…</p>
         ) : sources.length === 0 ? (
-          <p className="empty">Источников пока нет. Заведите первый — и принесите в него документ.</p>
+          // Пустая страница даёт выход с себя самой, как у донора: тот, кто
+          // пришёл на пустой раздел, пришёл его наполнять, и отправлять его
+          // глазами обратно к заголовку незачем. Когда форма уже открыта,
+          // второй такой кнопки не показывается.
+          <div className="empty stack">
+            <p>Источников пока нет. Заведите первый — и принесите в него документ.</p>
+            {canAccept && !adding && (
+              <div className="toolbar" style={{ justifyContent: 'center' }}>
+                <button className="primary" onClick={() => setAdding(true)}>
+                  Завести источник
+                </button>
+              </div>
+            )}
+          </div>
         ) : (
           <div className="list">
             {sources.map((source) => (

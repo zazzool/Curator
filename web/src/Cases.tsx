@@ -83,7 +83,7 @@ export function Cases({ me, source, path }: { me: Me; source: Source; path: stri
         <h2>Задачи</h2>
         <label className="form-row">
           <span className="fld-label">Состояние</span>
-          <select value={status} onChange={(e) => setStatus(e.target.value)}>
+          <select className="fld-medium" value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">все</option>
             <option value="draft">черновики</option>
             <option value="review">на выверке</option>

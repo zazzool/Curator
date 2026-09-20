@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { Fragment, useCallback, useEffect, useState, type FormEvent } from 'react'
 
 import { датой } from './words'
 import { ПРАВА, праваСловами } from './permissions'
@@ -119,49 +119,74 @@ function Users({ me }: { me: Me }) {
         {users === null ? (
           <p className="empty">Читаем…</p>
         ) : (
-          <div className="list">
-            {users.map((user) => (
-              <div key={user.login} className="list-row">
-                <div className="row-body">
-                  <div className="row-line">
-                    <span>
-                      <span className="mono">{user.login}</span> {user.displayName}
-                      {user.disabled && <span className="tag">вход закрыт</span>}
-                    </span>
-                    <span className="row-tools">
-                      <span className="muted">заведён {датой(user.createdAt)}</span>
+          // Заведённые входы — однородные записи с одними и теми же
+          // столбцами, и читают их сравнением: у кого какие права, кто
+          // когда заведён. Карточка заставляет сличать это глазами по
+          // разным местам строки, столбец — нет. Так это устроено и у
+          // донора.
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Вход</th>
+                  <th>Имя</th>
+                  <th>Права</th>
+                  <th>Заведён</th>
+                  {canWorkshop && <th />}
+                </tr>
+              </thead>
+              <tbody>
+                {users.map((user) => (
+                  <Fragment key={user.login}>
+                    <tr className={user.disabled ? 'faint' : undefined}>
+                      <td>
+                        <span className="mono">{user.login}</span>
+                        {user.disabled && <span className="tag">вход закрыт</span>}
+                      </td>
+                      <td>{user.displayName}</td>
+                      <td className="muted">{праваСловами(user.permissions)}</td>
+                      <td className="muted">{датой(user.createdAt)}</td>
                       {canWorkshop && (
-                        <button onClick={() => setOpen(open === user.login ? null : user.login)}>
-                          {open === user.login ? 'Свернуть' : 'Права'}
-                        </button>
+                        <td>
+                          <span className="toolbar">
+                            <button onClick={() => setOpen(open === user.login ? null : user.login)}>
+                              {open === user.login ? 'Свернуть' : 'Права'}
+                            </button>
+                            <button onClick={() => setDisabled(user, !user.disabled)}>
+                              {user.disabled ? 'Открыть вход' : 'Закрыть вход'}
+                            </button>
+                          </span>
+                        </td>
                       )}
-                      {canWorkshop && (
-                        <button onClick={() => setDisabled(user, !user.disabled)}>
-                          {user.disabled ? 'Открыть вход' : 'Закрыть вход'}
-                        </button>
-                      )}
-                    </span>
-                  </div>
-                  <div className="muted">{праваСловами(user.permissions)}</div>
-                  {open === user.login && canWorkshop && (
-                    <ul className="units">
-                      {ПРАВА.map((right) => (
-                        <li key={right.code}>
-                          <label>
-                            <input
-                              type="checkbox"
-                              checked={user.permissions.includes(right.code)}
-                              onChange={() => togglePermission(user, right.code)}
-                            />{' '}
-                            {right.title} <span className="muted">— {right.about}</span>
-                          </label>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              </div>
-            ))}
+                    </tr>
+                    {open === user.login && canWorkshop && (
+                      // Правка прав раскрывается под своей же строкой и во
+                      // всю ширину: одиннадцать прав с пояснениями в столбец
+                      // не помещаются, а рядом с таблицей потеряли бы, чьи
+                      // они.
+                      <tr>
+                        <td colSpan={5}>
+                          <ul className="units">
+                            {ПРАВА.map((right) => (
+                              <li key={right.code}>
+                                <label>
+                                  <input
+                                    type="checkbox"
+                                    checked={user.permissions.includes(right.code)}
+                                    onChange={() => togglePermission(user, right.code)}
+                                  />{' '}
+                                  {right.title} <span className="muted">— {right.about}</span>
+                                </label>
+                              </li>
+                            ))}
+                          </ul>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
@@ -348,7 +373,7 @@ function Prompts({ me }: { me: Me }) {
             пропала, по качеству задач через неделю.
           </p>
           <div className="form-actions">
-            <button className="primary" type="submit" disabled={busy}>
+            <button type="submit" disabled={busy}>
               Сохранить задание
             </button>
             <button type="button" onClick={() => setOpen(null)}>

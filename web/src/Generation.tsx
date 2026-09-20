@@ -107,7 +107,11 @@ export function Generation({
         <h2>Генерация</h2>
         {canOrder && (
           <span className="form-row">
-            <select value={unitLabel} onChange={(e) => setUnitLabel(e.target.value)}>
+            <select
+              className="fld-long"
+              value={unitLabel}
+              onChange={(e) => setUnitLabel(e.target.value)}
+            >
               <option value="">Выберите {source.unitWord}</option>
               {orderable.map((unit) => (
                 <option key={unit.label} value={unit.label}>
@@ -115,7 +119,7 @@ export function Generation({
                 </option>
               ))}
             </select>
-            <select value={kind} onChange={(e) => setKind(e.target.value)}>
+            <select className="fld-medium" value={kind} onChange={(e) => setKind(e.target.value)}>
               <option value="recognise">узнавание</option>
               <option value="action">действие</option>
             </select>

@@ -8,7 +8,8 @@ import { Workshop } from './Workshop'
 import { SourceList } from './SourceList'
 import { SourceScreen } from './SourceScreen'
 import { Sidebar } from './components/Sidebar'
-import { StatusBar, WhoCells } from './components/StatusBar'
+import { IdentityBar } from './components/IdentityBar'
+import { StatusBar } from './components/StatusBar'
 import { Toolbar } from './components/Toolbar'
 import { readSidebarCollapsed, writeSidebarCollapsed } from './sidebarState'
 import type { SectionId } from './sections'
@@ -83,6 +84,11 @@ export function App() {
         />
 
         <main className="main stack">
+          {/* Кто вошёл — первой строкой рабочей области и на каждом экране,
+              включая экран отказа: заголовок раздела уезжает вверх с первой
+              же прокруткой, а «кто я» нужно в любой момент работы. */}
+          <IdentityBar who={me.displayName || me.login} permissions={me.permissions} />
+
           {section === 'packs' ? (
             <Packs me={me} />
           ) : section === 'sales' ? (
@@ -98,9 +104,9 @@ export function App() {
           )}
         </main>
 
-        <StatusBar
-          cells={<WhoCells who={me.displayName || me.login} permissions={me.permissions} />}
-        />
+        {/* Полоса ждёт сведений об открытом экране и пока пуста — пустая
+            прячется сама, правилом в разметке. */}
+        <StatusBar />
       </div>
     </div>
   )
