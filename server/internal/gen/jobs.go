@@ -601,6 +601,27 @@ func (j *Jobs) SaveCueCheck(ctx context.Context, draftID int64, check CueCheck) 
 	return nil
 }
 
+// SaveRuleCheck записывает итог судьи в черновик.
+func (j *Jobs) SaveRuleCheck(ctx context.Context, draftID int64, check RuleCheckResult) error {
+	// Замечание считается при чтении и не хранится — то же правило, что
+	// у всех прочих узлов: перепиши формулировку, и записанные прежде
+	// черновики остались бы со старой.
+	check.Remark = ""
+	body, err := json.Marshal(check)
+	if err != nil {
+		return fmt.Errorf("итог судьи не записан: %w", err)
+	}
+	res, err := j.gate.Exec(ctx,
+		`UPDATE case_drafts SET rule_check = $2 WHERE id = $1`, draftID, body)
+	if err != nil {
+		return fmt.Errorf("итог судьи не сохранён: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("черновик %d не найден: итог судьи не сохранён", draftID)
+	}
+	return nil
+}
+
 // Drafts — черновики, написанные по заданию.
 //
 // Списком, а не одним: перегенерация пишет второй черновик по тому же
@@ -608,7 +629,7 @@ func (j *Jobs) SaveCueCheck(ctx context.Context, draftID int64, check CueCheck) 
 // а затёртый черновик сравнить не с чем.
 func (j *Jobs) Drafts(ctx context.Context, jobID int64) ([]Stored, error) {
 	rows, err := j.gate.Query(ctx,
-		`SELECT id, body, blind_check, sibling_checks, proofread, cue_check
+		`SELECT id, body, blind_check, sibling_checks, proofread, cue_check, rule_check
 		   FROM case_drafts WHERE job_id = $1 ORDER BY id`, jobID)
 	if err != nil {
 		return nil, fmt.Errorf("черновики задания %d не прочитаны: %w", jobID, err)
@@ -618,8 +639,9 @@ func (j *Jobs) Drafts(ctx context.Context, jobID int64) ([]Stored, error) {
 	out := []Stored{}
 	for rows.Next() {
 		var id int64
-		var raw, rawCheck, rawSiblings, rawProofread, rawCues []byte
-		if err := rows.Scan(&id, &raw, &rawCheck, &rawSiblings, &rawProofread, &rawCues); err != nil {
+		var raw, rawCheck, rawSiblings, rawProofread, rawCues, rawRules []byte
+		if err := rows.Scan(&id, &raw, &rawCheck, &rawSiblings, &rawProofread,
+			&rawCues, &rawRules); err != nil {
 			return nil, fmt.Errorf("строка черновика не разобрана: %w", err)
 		}
 		var draft Draft
@@ -675,6 +697,15 @@ func (j *Jobs) Drafts(ctx context.Context, jobID int64) ([]Stored, error) {
 			} else {
 				check.Remark = check.Remarks()
 				stored.Cues = &check
+			}
+		}
+		if len(rawRules) > 0 {
+			var check RuleCheckResult
+			if err := json.Unmarshal(rawRules, &check); err != nil {
+				log.Printf("черновик %d: итог судьи не разобран: %v", id, err)
+			} else {
+				check.Remark = check.Remarks()
+				stored.Rules = &check
 			}
 		}
 		out = append(out, stored)

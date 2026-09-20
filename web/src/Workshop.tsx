@@ -494,6 +494,11 @@ function Prompts({ me }: { me: Me }) {
 function Rules({ me }: { me: Me }) {
   const [open, setOpen] = useState<string | null>(null)
   const [draft, setDraft] = useState<RuleEdit>(пустоеПравило())
+  // Проверка открытого правила словами, как её написал сервер. Держится
+  // отдельно от draft намеренно: draft — это то, что уедет обратно, а
+  // проверка отсюда не правится, и положи мы её туда, первая же отправка
+  // повезла бы поле, которого ручка не ждёт.
+  const [checkWords, setCheckWords] = useState('')
   const [failure, setFailure] = useState('')
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
@@ -508,6 +513,7 @@ function Rules({ me }: { me: Me }) {
     setOpen(rule.id)
     setNote('')
     setFailure('')
+    setCheckWords(rule.checkWords ?? '')
     setDraft({
       title: rule.title,
       text: rule.text,
@@ -553,6 +559,7 @@ function Rules({ me }: { me: Me }) {
             onClick={() => {
               setOpen('новое')
               setDraft(пустоеПравило())
+              setCheckWords('')
               setNote('')
               setFailure('')
             }}
@@ -588,6 +595,15 @@ function Rules({ me }: { me: Me }) {
                       {rule.title}
                       <span className="tag">{rule.kindWord}</span>
                       <span className="tag">{откуда(rule.source)}</span>
+                      {/*
+                        Правило с машинной проверкой помечено отдельно, и
+                        пометка эта не украшение: такое правило обязательно
+                        к исполнению, а правило без неё держится тем,
+                        согласится ли модель. Решая, чинить задачу или
+                        правило, составитель должен знать, какое из двух
+                        перед ним.
+                      */}
+                      {rule.check && <span className="tag">проверяется машиной</span>}
                     </span>
                     <span className="muted">{состояниеСловами(rule)}</span>
                   </button>
@@ -653,6 +669,17 @@ function Rules({ me }: { me: Me }) {
                 <option value="muted">погашено</option>
               </select>
             </label>
+          )}
+          {/*
+            Проверка показана, но не правится, и сказано это прямо. Поле,
+            которое выглядит полем, а сохраняется мимо, хуже отсутствующего:
+            составитель написал бы проверку и считал бы, что она стоит.
+          */}
+          {open !== 'новое' && checkWords !== '' && (
+            <p className="hint">
+              Это правило проверяется машинно: {checkWords}. Проверка переписывается
+              пока не здесь — правка правила её не тронет и не сотрёт.
+            </p>
           )}
           <p className="hint">
             Погашенное правило не удаляется и не возвращается само: подтверждения

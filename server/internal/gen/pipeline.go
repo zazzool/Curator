@@ -98,6 +98,9 @@ type Result struct {
 	// Cues — итог детектора подсказок.
 	Cues CueCheck
 
+	// Rules — итог судьи: машинные проверки свода.
+	Rules RuleCheckResult
+
 	// Proofread — итог вычитки: что правлено и что отклонено заслоном.
 	Proofread Proofread
 }
@@ -235,7 +238,36 @@ func (r *Runner) run(ctx context.Context, job Job) (Result, error) {
 
 	r.runSiblings(ctx, job, draftID, draft, set, &result)
 	r.runCueCheck(ctx, job, draftID, draft, &result)
+	r.runJudge(ctx, job, draftID, draft, &result)
 	return result, nil
+}
+
+// runJudge — судья: машинные проверки свода.
+//
+// Последним и без обращения к модели, как и детектор подсказок. Идёт он
+// ПОСЛЕ обучения не случайно: замечание детектора может в эту самую
+// минуту дорастить правило до кворума, и судья должен мерить свод таким,
+// каким он стал. Обратный порядок дал бы задачу, написанную по одному
+// своду, а сужденную по другому — и разошлись бы они ровно на том
+// правиле, которое эта задача и подтвердила.
+//
+// Отказ узла задание не роняет: задача написана и сверена, а
+// несостоявшийся суд — пометка, а не брак. Но и «чисто» он не значит:
+// Done остаётся ложью, и это видно.
+func (r *Runner) runJudge(ctx context.Context, job Job, draftID int64, draft Draft, result *Result) {
+	if r.rules == nil {
+		// Свода нет вовсе — судить нечем, и сказано это вслух. Молчание
+		// составитель примет за «правила соблюдены».
+		result.Rules = RuleCheckResult{Note: "свод правил не подключён"}
+	} else if book, err := r.rules.Book(ctx); err != nil {
+		result.Rules = RuleCheckResult{Note: "свод правил не прочитан: " + err.Error()}
+	} else {
+		result.Rules = Judge(book, job.Plan, draft)
+	}
+	if err := r.jobs.SaveRuleCheck(ctx, draftID, result.Rules); err != nil {
+		log.Printf("задание %d: итог судьи не записан в черновик %d: %v",
+			job.ID, draftID, err)
+	}
 }
 
 // runCueCheck — детектор подсказок.
