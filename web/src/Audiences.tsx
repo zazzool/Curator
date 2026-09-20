@@ -178,6 +178,32 @@ function RuleEditor({
     onChange(rule.map((one, i) => (i === index ? next : one)))
   }
 
+  /**
+   * Смена признака уносит с собой порог и окно, которых новый признак не
+   * берёт.
+   *
+   * Оставь их — и правило «решил не меньше 50 задач», переключённое на
+   * «почта привязана», уехало бы на сервер с порогом, который сервер
+   * отвергает словами «признак — это да или нет». Составитель при этом
+   * видел бы на экране признак без числа и не понимал, о каком пороге
+   * речь: поле, которое его хранит, уже не рисуется.
+   */
+  function сменить(index: number, one: Условие, trait: string) {
+    const known = признак(trait)
+    onChange(
+      rule.map((item, i) =>
+        i === index
+          ? {
+              trait,
+              not: one.not,
+              ...(known?.порог !== undefined ? { n: one.n ?? 0 } : {}),
+              ...(known?.заОкно === true ? { over: one.over ?? 'all' } : {}),
+            }
+          : item,
+      ),
+    )
+  }
+
   return (
     <div className="form-row">
       <span className="fld-label">Правило</span>
@@ -196,7 +222,7 @@ function RuleEditor({
                 <select
                   aria-label="Признак"
                   value={one.trait}
-                  onChange={(e) => set(index, { ...one, trait: e.target.value })}
+                  onChange={(e) => сменить(index, one, e.target.value)}
                 >
                   {ПРИЗНАКИ.map((item) => (
                     <option key={item.code} value={item.code}>

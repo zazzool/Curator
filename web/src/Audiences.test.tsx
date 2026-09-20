@@ -182,3 +182,34 @@ describe('признаки словами', () => {
     ).toBe('когда-либо платил и решил не меньше задач 50 задач за всё время')
   })
 })
+
+describe('правка правила', () => {
+  it('смена признака уносит порог, которого новый признак не берёт', async () => {
+    // Оставь порог — и правило уехало бы на сервер с числом, которое
+    // сервер отвергает, а составитель видел бы признак без поля и не
+    // понимал, о каком пороге речь.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ audiences: [], traits: [], windows: [] }), {
+            status: 200,
+          }),
+        ),
+      ),
+    )
+    render(<Audiences me={ОПЕРАТОР} />)
+    fireEvent.click(await screen.findByText('Завести группу'))
+    fireEvent.click(screen.getByText('Добавить признак'))
+
+    // Единица меры стоит в той же подписи, и читающий с экрана слышит
+    // «Порог задач» — то есть чего именно порог.
+    fireEvent.change(screen.getByLabelText('Признак'), { target: { value: 'solved-min' } })
+    fireEvent.change(screen.getByLabelText(/Порог/), { target: { value: '50' } })
+    expect(screen.getByText(/решил не меньше задач 50 задач/)).toBeTruthy()
+
+    fireEvent.change(screen.getByLabelText('Признак'), { target: { value: 'email-bound' } })
+    expect(screen.queryByLabelText(/Порог/)).toBeNull()
+    expect(screen.getByText(/Читается так: почта привязана$/)).toBeTruthy()
+  })
+})
