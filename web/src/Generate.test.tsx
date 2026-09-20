@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { Generate } from './Generate'
-import type { Draft, Job, Me, Source, Unit } from './api'
+import type { Check, Draft, Job, Me, Source, Unit } from './api'
 
 const SOURCE: Source = {
   id: 1,
@@ -301,5 +301,124 @@ describe('страница заказа задачи', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('слепая сверка и повтор', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    window.history.replaceState(null, '', '/generate')
+  })
+
+  /** Задание с одним черновиком, у которого сверка такая, какую попросили. */
+  function сЧерновиком(check?: Check) {
+    const draft = check === undefined ? ЧЕРНОВИК : { ...ЧЕРНОВИК, check }
+    return {
+      ...ОБЫЧНО,
+      '/admin/api/sources/1/jobs': { jobs: [job({ status: 'done' })] },
+      '/admin/api/jobs/7': job({ status: 'done', drafts: [draft] }),
+    }
+  }
+
+  it('несогласие сверки показывается тревогой, а не тонет в подсказке', async () => {
+    // Вердикт сверки вычислялся и ПРОПАДАЛ: за сверку платили, а
+    // составитель её не видел — задача, с которой сверка не согласилась,
+    // выглядела ровно как та, с которой согласилась.
+    serve(
+      сЧерновиком({
+        done: true,
+        verdict: {
+          answer: '3.2',
+          why: 'В условии назван письменный отказ.',
+          sure: true,
+          agrees: false,
+        },
+      }),
+    )
+    render(<Generate me={СОСТАВИТЕЛЬ} source={1} />)
+    fireEvent.click(await screen.findByText('Открыть'))
+
+    const тревога = await screen.findByText(/Слепая сверка НЕ сошлась/)
+    expect(тревога.textContent).toMatch(/3\.2/)
+    expect(тревога.textContent).toMatch(/письменный отказ/)
+  })
+
+  it('согласие сверки не выглядит тревогой', async () => {
+    // Тревога у исправной задачи приучает не верить тревоге, и тогда её
+    // перестанут читать там, где она заслужена.
+    serve(
+      сЧерновиком({
+        done: true,
+        verdict: { answer: '3.1', why: '', sure: true, agrees: true },
+      }),
+    )
+    render(<Generate me={СОСТАВИТЕЛЬ} source={1} />)
+    fireEvent.click(await screen.findByText('Открыть'))
+
+    expect(await screen.findByText(/Слепая сверка сошлась/)).toBeTruthy()
+    expect(screen.queryByText(/НЕ сошлась/)).toBeNull()
+  })
+
+  it('несостоявшаяся сверка названа отдельно от несогласия и с причиной', async () => {
+    // «Сверки не было» и «сверка не согласна» требуют разного: первое —
+    // прочитать задачу самому, второе — разобрать спор. Слитые в одно, они
+    // дают «всё чисто» у сотни непроверенных задач подряд.
+    serve(сЧерновиком({ done: false, note: 'у поставщика кончились деньги' }))
+    render(<Generate me={СОСТАВИТЕЛЬ} source={1} />)
+    fireEvent.click(await screen.findByText('Открыть'))
+
+    const сказано = await screen.findByText(/Слепая сверка не состоялась/)
+    expect(сказано.textContent).toMatch(/кончились деньги/)
+    expect(screen.queryByText(/НЕ сошлась/)).toBeNull()
+  })
+
+  it('черновик без сверки не выдаётся за проверенный', async () => {
+    // Молчание здесь читается как «всё хорошо», а значит задача, которую
+    // не смотрел никто, уходит к врачу с видом проверенной.
+    serve(сЧерновиком())
+    render(<Generate me={СОСТАВИТЕЛЬ} source={1} />)
+    fireEvent.click(await screen.findByText('Открыть'))
+
+    expect(await screen.findByText(/задачу не проверял никто/)).toBeTruthy()
+  })
+
+  it('отказавшее задание можно повторить', async () => {
+    // До кнопки повтора выхода не было вовсе: ключ повторности запирал
+    // единицу навсегда, и повторный заказ молча возвращал прежнее,
+    // закрытое задание.
+    const calls = serve({
+      ...ОБЫЧНО,
+      '/admin/api/sources/1/jobs': {
+        jobs: [job({ id: 7, status: 'failed', error: 'модель вернула не тот JSON' })],
+      },
+      '/admin/api/jobs/7/retry': job({ id: 8, status: 'queued' }),
+    })
+    render(<Generate me={СОСТАВИТЕЛЬ} source={1} />)
+
+    fireEvent.click(await screen.findByText('Повторить'))
+    await waitFor(() => expect(calls).toContain('POST /admin/api/jobs/7/retry'))
+    // Отменить закрытое нечего: отмена и повтор — про разные состояния.
+    expect(screen.queryByText('Отменить')).toBeNull()
+  })
+
+  it('у идущего задания повтора нет', async () => {
+    // Второе задание по той же единице написало бы вторую задачу, и
+    // заплачено было бы за обе.
+    serve({ ...ОБЫЧНО, '/admin/api/sources/1/jobs': { jobs: [job({ status: 'running' })] } })
+    render(<Generate me={СОСТАВИТЕЛЬ} source={1} />)
+
+    await waitFor(() => expect(screen.getByText('Отменить')).toBeTruthy())
+    expect(screen.queryByText('Повторить')).toBeNull()
+  })
+
+  it('человеку без права генерации повторять нечем', async () => {
+    serve({
+      ...ОБЫЧНО,
+      '/admin/api/sources/1/jobs': { jobs: [job({ status: 'failed', error: 'отказ' })] },
+    })
+    render(<Generate me={ЧИТАТЕЛЬ} source={1} />)
+
+    await waitFor(() => expect(screen.getByText('Открыть')).toBeTruthy())
+    expect(screen.queryByText('Повторить')).toBeNull()
   })
 })

@@ -1,6 +1,7 @@
 package gen
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -20,6 +21,7 @@ func Routes(desk *studio.Desk, jobs *Jobs, resolver *Resolver, prompts *Prompts)
 	desk.Handle(studio.PermGenerate, "GET /admin/api/sources/{id}/jobs", r.list)
 	desk.Handle(studio.PermGenerate, "GET /admin/api/jobs/{id}", r.show)
 	desk.Handle(studio.PermGenerate, "POST /admin/api/jobs/{id}/cancel", r.cancel)
+	desk.Handle(studio.PermGenerate, "POST /admin/api/jobs/{id}/retry", r.retry)
 
 	// Разбор документа закрыт правом генерации, а не правом принимать
 	// разбор, и это не описка. Право принимать отвечает на «что теперь
@@ -86,6 +88,56 @@ func (r *routes) parse(w http.ResponseWriter, req *http.Request, _ studio.User) 
 	job, err := r.jobs.PlaceParse(req.Context(), plan)
 	if err != nil {
 		studio.WriteError(w, http.StatusInternalServerError, "Разбор не поставлен в очередь")
+		return
+	}
+	studio.WriteJSON(w, http.StatusCreated, jobJSON(job, nil))
+}
+
+// retry заводит новое задание по плану отказавшего.
+//
+// План берётся у прежнего задания, а не разрешается заново, и это
+// существенно: повторяют обычно то, что отказало по дороге — кончились
+// деньги, модель вернула не тот JSON, оборвалась сеть, — а не то, что
+// стало невыполнимым. Разреши мы заказ заново, повтор отказал бы всякий
+// раз, когда соседнюю единицу успели поправить, и выглядело бы это как
+// «повторить нельзя», хотя повторять было можно.
+//
+// Повторяется только ЗАКРЫТОЕ задание. Идущее повторять нечего: оно ещё
+// не кончилось, и второе задание по той же единице написало бы вторую
+// задачу — заплатить пришлось бы за обе, а хотел составитель одну.
+func (r *routes) retry(w http.ResponseWriter, req *http.Request, _ studio.User) {
+	id, ok := pathID(w, req)
+	if !ok {
+		return
+	}
+	prev, err := r.jobs.Job(req.Context(), id)
+	if err != nil {
+		studio.WriteError(w, http.StatusNotFound, "Такого задания нет")
+		return
+	}
+	if prev.Kind != KindCase {
+		// Разбор документа повторяется своей ручкой: у него другой заказ,
+		// другой исполнитель и свой заслон на параллельный разбор.
+		studio.WriteError(w, http.StatusBadRequest,
+			"Это задание не про написание задачи: разбор документа повторяется со страницы источника")
+		return
+	}
+	if prev.Status == "queued" || prev.Status == "running" {
+		studio.WriteError(w, http.StatusConflict,
+			"Это задание ещё идёт: дождитесь конца или снимите его")
+		return
+	}
+	if running, busy, err := r.jobs.RunningFor(req.Context(), prev.SourceID, prev.UnitLabel); err != nil {
+		studio.WriteError(w, http.StatusInternalServerError, "Идущие задания не проверены")
+		return
+	} else if busy {
+		studio.WriteError(w, http.StatusConflict, studio.Sentence(fmt.Sprintf(
+			"по этой единице уже идёт задание № %d: дождитесь конца или снимите его", running)))
+		return
+	}
+	job, err := r.jobs.Retry(req.Context(), prev)
+	if err != nil {
+		studio.WriteError(w, http.StatusInternalServerError, "Повтор не поставлен в очередь")
 		return
 	}
 	studio.WriteJSON(w, http.StatusCreated, jobJSON(job, nil))
