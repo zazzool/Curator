@@ -24,13 +24,20 @@ import (
 // права.
 func newDesk(t *testing.T, perms ...studio.Permission) (*httptest.Server, string, *Store) {
 	t.Helper()
+	srv, token, store, _ := newDeskWith(t, nil, perms...)
+	return srv, token, store
+}
+
+// newDeskWith — то же, но с подставной моделью для уплотнения свода.
+func newDeskWith(t *testing.T, talker Talker, perms ...studio.Permission) (*httptest.Server, string, *Store, *studio.Desk) {
+	t.Helper()
 	gate := testGate(t)
 	users, sessions := studio.NewUsers(gate, nil), studio.NewSessions(gate)
 	desk := studio.NewDesk(users, sessions)
 	studio.Routes(desk)
 
 	store := NewStore(gate)
-	Routes(desk, store)
+	Routes(desk, store, talker)
 
 	ctx := context.Background()
 	login := fmt.Sprintf("свод-%d-%d", time.Now().UnixNano(), rand.Intn(1000))
@@ -45,7 +52,7 @@ func newDesk(t *testing.T, perms ...studio.Permission) (*httptest.Server, string
 
 	srv := httptest.NewServer(desk.Handler())
 	t.Cleanup(srv.Close)
-	return srv, token, store
+	return srv, token, store, desk
 }
 
 func call(t *testing.T, srv *httptest.Server, token, method, path string, body any) (int, map[string]any) {

@@ -6,7 +6,7 @@ import { ПРАВА, правоСловами, праваСловами } from '
 import { ApiError, api } from './api'
 import { Loaded, useResource } from './useResource'
 import { confirmed } from './confirm'
-import type { Me, Prompt, Rule, RuleEdit, StudioUser } from './api'
+import type { CompactionGroup, CompactionPlan, Me, Prompt, Rule, RuleEdit, StudioUser } from './api'
 import { Banner } from './components/Banner'
 
 // Мастерская: пользователи студии, задания моделям и ключи программ.
@@ -614,6 +614,13 @@ function Rules({ me }: { me: Me }) {
         </Loaded>
       </div>
 
+      {canEdit && (
+        <Compaction
+          rules={rules.state === 'ready' ? rules.value : []}
+          onApplied={reload}
+        />
+      )}
+
       {open !== null && canEdit && (
         <form className="page-section form-grid" onSubmit={save}>
           <label className="form-row">
@@ -700,6 +707,160 @@ function Rules({ me }: { me: Me }) {
   )
 }
 
+/**
+ * Уплотнение свода: слить сказанное дважды, сжать многословное.
+ *
+ * Панель показывается всегда, а не только когда свод перерос блок, и это
+ * решение. Место в блоке кончается МОЛЧА — правило, не поместившееся в
+ * него, выглядит действующим и не действует, — и узнать об этом
+ * составитель может только здесь. Спрячь панель до беды, и он увидит её
+ * ровно тогда, когда беда уже случилась и держится неделю.
+ *
+ * План предлагается отдельно от применения намеренно: уплотнение меняет
+ * то, что уходит модели, то есть качество всех будущих задач. Между
+ * предложением и сводом стоит человек, и он снимает галочки с групп,
+ * которые не принял.
+ */
+function Compaction({ rules, onApplied }: { rules: Rule[]; onApplied: () => Promise<unknown> }) {
+  const [plan, setPlan] = useState<CompactionPlan | null>(null)
+  const [taken, setTaken] = useState<Record<string, boolean>>({})
+  const [failure, setFailure] = useState('')
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  // Сколько правил уходит в задание — считаем по тому же признаку, что и
+  // сервер: действующее и не закрытое. Число «правил в своде» здесь
+  // соврало бы: погашенные и слитые в блок не идут.
+  const живых = rules.filter((r) => r.status === 'active' && !r.validTo).length
+
+  async function suggest() {
+    setFailure('')
+    setNote('')
+    setBusy(true)
+    try {
+      const got = await api.suggestCompaction()
+      setPlan(got)
+      // Все группы отмечены заранее: план и так прошёл заслон сервера, а
+      // пустой список галочек заставил бы отмечать по одной то, что
+      // составитель чаще всего принимает целиком.
+      setTaken(Object.fromEntries((got?.groups ?? []).map((g) => [g.keepId, true])))
+    } catch (error) {
+      setFailure(error instanceof ApiError ? error.message : 'План уплотнения не составлен')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function apply() {
+    const groups = (plan?.groups ?? []).filter((g) => taken[g.keepId])
+    if (groups.length === 0) {
+      return
+    }
+    setFailure('')
+    setNote('')
+    setBusy(true)
+    try {
+      const done = await api.applyCompaction(groups as CompactionGroup[])
+      // «Просили» и «прошло» называются парой. Скажи мы одно «слито 3»,
+      // и составитель, пославший пять групп, решил бы, что свод уплотнён
+      // целиком, — а две отверг заслон.
+      const хвост =
+        done.merged === done.asked
+          ? ''
+          : ` Отвергнуто заслоном: ${done.asked - done.merged}.`
+      setNote(
+        `Слито групп: ${done.merged} из ${done.asked}.` +
+          хвост +
+          ` Блок правил: ${done.before} → ${done.after} байт из ${done.limit}.`,
+      )
+      setPlan(null)
+      await onApplied()
+    } catch (error) {
+      setFailure(error instanceof ApiError ? error.message : 'Уплотнение не применено')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="page-section">
+      <div className="page-head">
+        <h3>Уплотнение свода</h3>
+        <button type="button" onClick={suggest} disabled={busy}>
+          Предложить, что слить
+        </button>
+      </div>
+      <p className="hint">
+        Свод растёт сам, и правила приходят к одному и тому же разными словами.
+        Место в задании ограничено: то, что не поместилось, выглядит действующим
+        и до модели не доезжает. Сейчас в задание уходит {живых} правил.
+      </p>
+
+      {failure && <Banner kind="error">{failure}</Banner>}
+      {note && <Banner kind="success">{note}</Banner>}
+
+      {plan && (
+        <>
+          <Banner kind={plan.dropped > 0 ? 'error' : 'info'}>
+            {plan.dropped > 0
+              ? `До модели не доезжает правил: ${plan.dropped}. Блок вмещает ${plan.limit} байт, правила занимают ${plan.before}.`
+              : `Блок вмещает ${plan.limit} байт, правила занимают ${plan.before}. Всё доезжает.`}
+          </Banner>
+          {plan.note && <p className="hint">{plan.note}</p>}
+          {plan.groups.length === 0 ? (
+            <p className="empty">Сливать нечего: правила говорят о разном.</p>
+          ) : (
+            <>
+              <div className="list">
+                {plan.groups.map((group) => (
+                  <label key={group.keepId} className="list-row">
+                    <span>
+                      <input
+                        type="checkbox"
+                        checked={taken[group.keepId] ?? false}
+                        onChange={(e) =>
+                          setTaken({ ...taken, [group.keepId]: e.target.checked })
+                        }
+                      />{' '}
+                      {group.text}
+                      <span className="tag">
+                        {group.mergeIds.length === 0
+                          ? 'сжать'
+                          : `слить ${group.mergeIds.length + 1}`}
+                      </span>
+                      {/*
+                        Обоснование стоит рядом с текстом, а не прячется:
+                        по нему составитель и решает. «Оба про слова из
+                        положений» проверяемо, «похожи» — нет, и увидеть
+                        разницу он должен до того, как нажмёт.
+                      */}
+                      <span className="muted"> {group.why}</span>
+                    </span>
+                    <span className="muted">освободит {group.saved} б.</span>
+                  </label>
+                ))}
+              </div>
+              <div className="form-actions">
+                <button type="button" onClick={apply} disabled={busy}>
+                  Слить отмеченное
+                </button>
+                <button type="button" onClick={() => setPlan(null)} disabled={busy}>
+                  Не сливать
+                </button>
+              </div>
+              <p className="hint">
+                Слитое правило не удаляется: оно закрывается датой со ссылкой на
+                то, в которое слито. Подтверждения проверок после этого доезжают
+                до выжившего, а не копятся у закрытого.
+              </p>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
 /** Рода правил. Порядок — по весу в задании: существо впереди слога. */
 const РОДА = [
   { code: 'substance', word: 'существо' },
@@ -754,6 +915,8 @@ function словоСостояния(status: string): string {
       return 'черновик'
     case 'deprecated':
       return 'закрыто'
+    case 'merged':
+      return 'слито'
     default:
       return status
   }

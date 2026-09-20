@@ -474,6 +474,103 @@ describe('мастерская', () => {
     expect((calls[0]!.body as { status?: string }).status).toBe('muted')
   })
 
+  it('вытеснение из блока называется числом, а не молчанием', async () => {
+    // То, ради чего уплотнение и заведено. Правило, не поместившееся в
+    // блок, выглядит в списке действующим и до модели не доезжает;
+    // узнать об этом составитель может только здесь. Показывай мы
+    // «уплотнять нечего» и молчи про вытесненные — панель успокаивала бы
+    // ровно в том случае, ради которого написана.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if (path.startsWith('/admin/api/rules/compaction')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                groups: [],
+                before: 4200,
+                after: 4200,
+                limit: 3500,
+                dropped: 6,
+                note: '',
+              }),
+              { status: 200 },
+            ),
+          )
+        }
+        void init
+        return Promise.resolve(
+          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ, СВОД)), {
+            status: 200,
+          }),
+        )
+      }),
+    )
+    render(<Workshop me={МАСТЕР} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Предложить, что слить' }))
+    expect(await screen.findByText(/не доезжает правил: 6/)).toBeTruthy()
+    // И «сливать нечего» при этом тоже сказано: одно не заменяет другого.
+    expect(screen.getByText(/Сливать нечего/)).toBeTruthy()
+  })
+
+  it('слить уходит только отмеченное составителем', async () => {
+    // План приходит от модели, и составитель снимает с него галочки.
+    // Уйди на сервер весь план целиком — снятая галочка не значила бы
+    // ничего, а выглядела бы решением.
+    const посланное: unknown[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if (path === '/admin/api/rules/compaction/apply') {
+          посланное.push(JSON.parse(String(init?.body ?? '{}')))
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                asked: 1, merged: 1, failed: [],
+                before: 900, after: 700, limit: 3500, dropped: 0,
+                rules: СВОД.rules,
+              }),
+              { status: 200 },
+            ),
+          )
+        }
+        if (path.startsWith('/admin/api/rules/compaction')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                groups: [
+                  { keepId: 'a', mergeIds: ['b'], text: 'Первая сводная.', why: 'оба про слог', saved: 120 },
+                  { keepId: 'c', mergeIds: ['d'], text: 'Вторая сводная.', why: 'оба про разметку', saved: 80 },
+                ],
+                before: 900, after: 700, limit: 3500, dropped: 0, note: '',
+              }),
+              { status: 200 },
+            ),
+          )
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ, СВОД)), {
+            status: 200,
+          }),
+        )
+      }),
+    )
+    render(<Workshop me={МАСТЕР} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Предложить, что слить' }))
+    await screen.findByText('Вторая сводная.')
+
+    // Снимаем вторую группу. Ищем её галочку ПО ТЕКСТУ группы, а не по
+    // месту в списке: на странице есть и другие галочки, и проверка,
+    // считающая их по порядку, поехала бы от любой правки соседней
+    // панели, ничего не сказав о своём предмете.
+    fireEvent.click(screen.getByRole('checkbox', { name: /Вторая сводная/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Слить отмеченное' }))
+
+    await waitFor(() => expect(посланное.length).toBe(1))
+    const groups = (посланное[0] as { groups: { keepId: string }[] }).groups
+    expect(groups.map((g) => g.keepId)).toEqual(['a'])
+  })
+
   it('без права «задания» свод читается, но не правится', async () => {
     // Раздел не прячется: спрятанная вкладка при открытой ручке — это
     // подсказка, где искать, а не запрет. Прячется действие, и рядом
@@ -487,5 +584,9 @@ describe('мастерская', () => {
     expect(await screen.findByText('Слово «ритуально» в условии')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Написать правило' })).toBeNull()
     expect(screen.getByText(/Свод правит тот, кому выдано право/)).toBeTruthy()
+    // Уплотнение — та же власть над сводом, и кнопка его прячется вместе
+    // с остальными: показанная, она отказала бы правом на сервере, а
+    // выглядела бы поломкой студии.
+    expect(screen.queryByRole('button', { name: 'Предложить, что слить' })).toBeNull()
   })
 })

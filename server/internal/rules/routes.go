@@ -16,16 +16,23 @@ import (
 // ради которой право заданий и отделено от права заказать одну задачу.
 // Завести здесь второе право значило бы раздать ту же власть дважды и
 // потом гадать, какое из двух её на самом деле держит.
-func Routes(desk *studio.Desk, store *Store) {
-	r := &routes{store: store}
+func Routes(desk *studio.Desk, store *Store, talker Talker) {
+	r := &routes{store: store, talker: talker}
 
 	desk.Handle(studio.PermPrompts, "GET /admin/api/rules", r.list)
 	desk.Handle(studio.PermPrompts, "POST /admin/api/rules", r.create)
 	desk.Handle(studio.PermPrompts, "PUT /admin/api/rules/{id}", r.save)
+
+	// Уплотнение — две ручки, и обе POST. Предложение плана тратит
+	// деньги у поставщика моделей, а GET браузер и прокси вправе
+	// повторить сами: страница, открытая дважды, платила бы дважды.
+	desk.Handle(studio.PermPrompts, "POST /admin/api/rules/compaction", r.suggestCompaction)
+	desk.Handle(studio.PermPrompts, "POST /admin/api/rules/compaction/apply", r.applyCompaction)
 }
 
 type routes struct {
-	store *Store
+	store  *Store
+	talker Talker
 }
 
 // ruleRequest — что составителю позволено назвать.
@@ -177,8 +184,100 @@ func ruleJSON(r Rule) map[string]any {
 	if r.ValidTo != nil {
 		out["validTo"] = r.ValidTo
 	}
+	if r.MergedInto != "" {
+		out["mergedInto"] = r.MergedInto
+	}
 	if !r.LastSeenAt.IsZero() {
 		out["lastSeenAt"] = r.LastSeenAt
 	}
 	return out
+}
+
+// compactionRequest — план, вернувшийся из браузера.
+//
+// Составитель мог отклонить часть групп, и потому принятый план приходит
+// обратно списком. Дописать себе прав он при этом не может: список
+// проходит тот же Sanitize, что и пришедший от модели, — права
+// проверяются здесь, а не там, где план составляли.
+type compactionRequest struct {
+	Groups []CompactionGroup `json:"groups"`
+}
+
+// suggestCompaction просит у модели план уплотнения.
+func (r *routes) suggestCompaction(w http.ResponseWriter, req *http.Request, _ studio.User) {
+	if r.talker == nil {
+		// Не отказ студии, а объяснение: без ключа поставщика уплотнять
+		// некому, и сказать об этом словами полезнее, чем спрятать
+		// кнопку. Спрятанную кнопку составитель принимает за поломку.
+		studio.WriteError(w, http.StatusNotImplemented,
+			"Модель не настроена: уплотнять свод некому.")
+		return
+	}
+	book, err := r.store.Book(req.Context())
+	if err != nil {
+		studio.WriteError(w, http.StatusInternalServerError, studio.Sentence(err.Error()))
+		return
+	}
+	// Модель не названа: уплотнение идёт умолчальной моделью поставщика.
+	// Выбор модели на каждый узел — отдельная работа, и завести здесь
+	// своё поле раньше неё значило бы поселить выбор во втором месте.
+	plan, err := SuggestCompaction(req.Context(), r.talker, "", book)
+	if err != nil {
+		studio.WriteError(w, http.StatusBadGateway, studio.Sentence(err.Error()))
+		return
+	}
+	studio.WriteJSON(w, http.StatusOK, plan)
+}
+
+// applyCompaction проводит принятый составителем план по своду.
+func (r *routes) applyCompaction(w http.ResponseWriter, req *http.Request, _ studio.User) {
+	var body compactionRequest
+	if err := studio.DecodeBody(req, &body); err != nil {
+		studio.WriteError(w, http.StatusBadRequest, "Запрос не разобран: "+err.Error())
+		return
+	}
+	book, err := r.store.Book(req.Context())
+	if err != nil {
+		studio.WriteError(w, http.StatusInternalServerError, studio.Sentence(err.Error()))
+		return
+	}
+	safe := Sanitize(body.Groups, book)
+
+	done, failed, err := r.store.ApplyCompaction(req.Context(), safe, r.store.now())
+	if err != nil {
+		studio.WriteError(w, http.StatusInternalServerError, studio.Sentence(err.Error()))
+		return
+	}
+
+	// «Сколько просили» и «сколько прошло» отдаются парой. Отдай мы одно
+	// «применено 3», и составитель, пославший пять групп, не узнал бы,
+	// что две отвергнуты заслоном, — и решил бы, что свод уплотнён.
+	after, err := r.store.Book(req.Context())
+	if err != nil {
+		studio.WriteError(w, http.StatusInternalServerError, studio.Sentence(err.Error()))
+		return
+	}
+	bytesAfter, _ := blockBytes(after.inForce())
+	if failed == nil {
+		failed = []string{}
+	}
+	list, err := r.store.All(req.Context())
+	if err != nil {
+		studio.WriteError(w, http.StatusInternalServerError, studio.Sentence(err.Error()))
+		return
+	}
+	out := make([]map[string]any, 0, len(list))
+	for _, one := range list {
+		out = append(out, ruleJSON(one))
+	}
+	studio.WriteJSON(w, http.StatusOK, map[string]any{
+		"asked":   len(body.Groups),
+		"merged":  done,
+		"failed":  failed,
+		"before":  safe.Before,
+		"after":   bytesAfter,
+		"limit":   BlockLimit(),
+		"dropped": after.Dropped(),
+		"rules":   out,
+	})
 }

@@ -300,8 +300,51 @@ export type Rule = {
   quorum: number
   validFrom: string
   validTo?: string
+  /** В какое правило это слито при уплотнении. Пусто у всех прочих. */
+  mergedInto?: string
   lastSeenAt?: string
   updatedAt: string
+}
+
+/** Одна группа уплотнения: что во что сливается. */
+export type CompactionGroup = {
+  keepId: string
+  mergeIds: string[]
+  title?: string
+  text: string
+  why: string
+  /** Сколько байт блока освобождает группа. Считает сервер. */
+  saved: number
+}
+
+/** Что предлагается сделать со сводом. */
+export type CompactionPlan = {
+  groups: CompactionGroup[]
+  /** Размер блока правил до и после уплотнения, в байтах. */
+  before: number
+  after: number
+  /** Сколько байт вмещает блок. Без него «2600» ни о чём не говорит. */
+  limit: number
+  /**
+   * Сколько правил не доезжает до модели СЕЙЧАС. То самое молчаливое
+   * усечение, ради которого уплотнение и заведено.
+   */
+  dropped: number
+  note?: string
+  model?: string
+}
+
+/** Что вышло из применения плана. */
+export type CompactionResult = {
+  asked: number
+  merged: number
+  /** Группы, отвергнутые заслоном, с причиной у каждой. */
+  failed: string[]
+  before: number
+  after: number
+  limit: number
+  dropped: number
+  rules: Rule[]
 }
 
 /** Что составителю позволено назвать у правила. */
@@ -815,6 +858,15 @@ export const api = {
 
   saveRule: (id: string, rule: RuleEdit) =>
     request<Rule>('PUT', `/admin/api/rules/${encodeURIComponent(id)}`, rule),
+
+  // Обе ручки уплотнения — POST, и предложение плана тоже: оно тратит
+  // деньги у поставщика моделей, а GET браузер и прокси вправе повторить
+  // сами.
+  suggestCompaction: () =>
+    request<CompactionPlan>('POST', '/admin/api/rules/compaction', {}),
+
+  applyCompaction: (groups: CompactionGroup[]) =>
+    request<CompactionResult>('POST', '/admin/api/rules/compaction/apply', { groups }),
 
   prompts: () => request<{ prompts: Prompt[] }>('GET', '/admin/api/prompts'),
 

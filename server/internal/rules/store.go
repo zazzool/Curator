@@ -32,8 +32,8 @@ func NewStore(gate *dbgate.Gate) *Store {
 func (s *Store) All(ctx context.Context) ([]Rule, error) {
 	rows, err := s.gate.Query(ctx,
 		`SELECT id, title, text, why, kind, source, status, pinned, scope,
-		        check_json, confirmations, seen_jobs, valid_from, valid_to,
-		        last_seen_at, created_at, updated_at
+		        check_json, confirmations, seen_jobs, merged_into, valid_from,
+		        valid_to, last_seen_at, created_at, updated_at
 		   FROM rulebook
 		  ORDER BY id`)
 	if err != nil {
@@ -46,10 +46,15 @@ func (s *Store) All(ctx context.Context) ([]Rule, error) {
 		var r Rule
 		var scope, check []byte
 		var lastSeen *time.Time
+		var mergedInto *string
 		if err := rows.Scan(&r.ID, &r.Title, &r.Text, &r.Why, &r.Kind, &r.Source,
 			&r.Status, &r.Pinned, &scope, &check, &r.Confirmations, &r.SeenJobs,
-			&r.ValidFrom, &r.ValidTo, &lastSeen, &r.CreatedAt, &r.UpdatedAt); err != nil {
+			&mergedInto, &r.ValidFrom, &r.ValidTo, &lastSeen,
+			&r.CreatedAt, &r.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("правило не прочитано: %w", err)
+		}
+		if mergedInto != nil {
+			r.MergedInto = *mergedInto
 		}
 		if err := readCheck(&r, check); err != nil {
 			return nil, err
@@ -118,22 +123,30 @@ func (s *Store) Save(ctx context.Context, r Rule) (Rule, error) {
 	if err != nil {
 		return Rule{}, err
 	}
+	// Пустая ссылка уезжает NULL, а не пустой строкой: «слито в ничто»
+	// и «не слито» — разные сведения, а пустая строка сливает их в одно.
+	var mergedInto *string
+	if r.MergedInto != "" {
+		mergedInto = &r.MergedInto
+	}
 
 	_, err = s.gate.Exec(ctx,
 		`INSERT INTO rulebook (id, title, text, why, kind, source, status, pinned,
-		                    scope, check_json, confirmations, seen_jobs, valid_from,
-		                    valid_to, last_seen_at, updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+		                    scope, check_json, confirmations, seen_jobs, merged_into,
+		                    valid_from, valid_to, last_seen_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
 		 ON CONFLICT (id) DO UPDATE SET
 		     title = EXCLUDED.title, text = EXCLUDED.text, why = EXCLUDED.why,
 		     kind = EXCLUDED.kind, source = EXCLUDED.source,
 		     status = EXCLUDED.status, pinned = EXCLUDED.pinned,
 		     scope = EXCLUDED.scope, check_json = EXCLUDED.check_json,
 		     confirmations = EXCLUDED.confirmations,
-		     seen_jobs = EXCLUDED.seen_jobs, valid_to = EXCLUDED.valid_to,
+		     seen_jobs = EXCLUDED.seen_jobs, merged_into = EXCLUDED.merged_into,
+		     valid_to = EXCLUDED.valid_to,
 		     last_seen_at = EXCLUDED.last_seen_at, updated_at = EXCLUDED.updated_at`,
 		r.ID, r.Title, r.Text, r.Why, r.Kind, r.Source, r.Status, r.Pinned,
-		scope, check, r.Confirmations, seen, r.ValidFrom, r.ValidTo, lastSeen, r.UpdatedAt)
+		scope, check, r.Confirmations, seen, mergedInto, r.ValidFrom, r.ValidTo,
+		lastSeen, r.UpdatedAt)
 	if err != nil {
 		return Rule{}, fmt.Errorf("правило %q не записано: %w", r.ID, err)
 	}
@@ -198,24 +211,41 @@ func (s *Store) Seed(ctx context.Context) error {
 // зачлось: повторное подтверждение тем же заданием — не ошибка, а
 // обычный случай.
 func (s *Store) Confirm(ctx context.Context, id string, jobID int64) (Rule, bool, error) {
+	return s.confirm(ctx, id, jobID, 0)
+}
+
+// mergeHops — сколько раз подтверждение идёт по ссылке слияния.
+//
+// Предел, а не доверие данным: свод правится руками и наливается
+// накатом, и цепочка, замкнувшаяся сама на себя, повесила бы работу
+// навсегда. Восьми хватает с запасом — слияние слитого само по себе
+// редкость, — а девятое звено означает не длинный свод, а круг.
+const mergeHops = 8
+
+func (s *Store) confirm(ctx context.Context, id string, jobID int64, hop int) (Rule, bool, error) {
 	var out Rule
 	var counted bool
+	var forward string
 	now := s.now()
 
 	err := s.gate.InTx(ctx, func(tx pgx.Tx) error {
 		var r Rule
 		var scope, check []byte
 		var lastSeen *time.Time
+		var mergedInto *string
 		err := tx.QueryRow(ctx,
 			`SELECT id, title, text, why, kind, source, status, pinned, scope, check_json,
-			        confirmations, seen_jobs, valid_from, valid_to,
+			        confirmations, seen_jobs, merged_into, valid_from, valid_to,
 			        last_seen_at, created_at, updated_at
 			   FROM rulebook WHERE id = $1 FOR UPDATE`, id).
 			Scan(&r.ID, &r.Title, &r.Text, &r.Why, &r.Kind, &r.Source, &r.Status,
-				&r.Pinned, &scope, &check, &r.Confirmations, &r.SeenJobs, &r.ValidFrom,
-				&r.ValidTo, &lastSeen, &r.CreatedAt, &r.UpdatedAt)
+				&r.Pinned, &scope, &check, &r.Confirmations, &r.SeenJobs, &mergedInto,
+				&r.ValidFrom, &r.ValidTo, &lastSeen, &r.CreatedAt, &r.UpdatedAt)
 		if err != nil {
 			return fmt.Errorf("правило %q не прочитано для подтверждения: %w", id, err)
+		}
+		if mergedInto != nil {
+			r.MergedInto = *mergedInto
 		}
 		if len(scope) > 0 {
 			if err := json.Unmarshal(scope, &r.Scope); err != nil {
@@ -227,6 +257,18 @@ func (s *Store) Confirm(ctx context.Context, id string, jobID int64) (Rule, bool
 		}
 		if lastSeen != nil {
 			r.LastSeenAt = *lastSeen
+		}
+
+		if r.MergedInto != "" {
+			// Правило слито в другое, и подтверждение идёт ТУДА.
+			// Требование никуда не делось — у него сменился
+			// опознаватель; засчитай мы подтверждение закрытому, и
+			// уплотнение тихо разорвало бы петлю самообучения: детектор
+			// продолжал бы находить своё, счётчик рос бы у мёртвого
+			// правила, а живое выглядело бы никем не подтверждённым.
+			forward = r.MergedInto
+			out = r
+			return nil
 		}
 
 		if hasInt(r.SeenJobs, jobID) {
@@ -260,7 +302,13 @@ func (s *Store) Confirm(ctx context.Context, id string, jobID int64) (Rule, bool
 		out, counted = r, true
 		return nil
 	})
-	return out, counted, err
+	if err != nil || forward == "" {
+		return out, counted, err
+	}
+	if hop >= mergeHops {
+		return out, false, fmt.Errorf("правило %q слито по кругу: подтверждать некого", id)
+	}
+	return s.confirm(ctx, forward, jobID, hop+1)
 }
 
 // Propose заводит выведенное правило, если его ещё нет, и подтверждает
