@@ -41,11 +41,21 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/curator . && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/migrate ./cmd/migrate && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/user ./cmd/user && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/import ./cmd/import && \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/importcatalog ./cmd/importcatalog
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/importcatalog ./cmd/importcatalog && \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/backup ./cmd/backup
 
 # --- Рантайм ---
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates tzdata && \
+# postgresql16-client — ради pg_dump и pg_restore: снимок базы снимает и
+# разворачивает они, а не свой обход таблиц. Свой обход пишет то, что
+# помнил писавший, и новая таблица в схеме в него не попадёт — молча,
+# потому что снимок всё равно получится.
+#
+# Версия названа поимённо (16, а не postgresql-client), и это не
+# придирка: pg_dump старше базы отказывается с ней разговаривать. Версия
+# базы — 16; сменится она — сменится и эта строка, и расхождение будет
+# видно отказом при первой же съёмке, а не пропажей снимков.
+RUN apk add --no-cache ca-certificates tzdata postgresql16-client && \
     adduser -D -u 10001 app
 
 WORKDIR /app
@@ -71,6 +81,11 @@ COPY --from=server /out/import /app/import
 # собирается из открытого репозитория. Путь к нему называет человек, и
 # каталог с ним монтируется на время ввоза.
 COPY --from=server /out/importcatalog /app/importcatalog
+
+# Снимок базы руками — перед накатом, который страшно катить, перед
+# ввозом, перед правкой данных. Служба снимает и сама, раз в сутки, но
+# ждать суточного срока в такую минуту никто не станет.
+COPY --from=server /out/backup /app/backup
 
 COPY --from=web /build/dist /app/web
 
