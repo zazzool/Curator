@@ -212,7 +212,7 @@ func TestPgСрезНаSQLСходитсяСРазбором(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, path := range []string{"", "F", "F/F3", "F/F3/F32", "нет-такого"} {
-		fromSQL, err := s.SliceUnits(ctx, srcID, path)
+		fromSQL, err := s.SliceUnits(ctx, srcID, path, 0)
 		if err != nil {
 			t.Fatalf("срез %q на SQL: %v", path, err)
 		}
@@ -229,7 +229,7 @@ func TestPgСрезНаSQLСходитсяСРазбором(t *testing.T) {
 
 	// Отдельно — сосед по началу строки: без разделителя в сверке срез F3
 	// утащил бы F30, и молча.
-	got, err := s.SliceUnits(ctx, srcID, "F/F3")
+	got, err := s.SliceUnits(ctx, srcID, "F/F3", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestPgСрезНеЛовитсяНаПодчёркиваниеВМетке(
 		t.Fatal(err)
 	}
 
-	got, err := s.SliceUnits(ctx, srcID, "п_1")
+	got, err := s.SliceUnits(ctx, srcID, "п_1", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +274,7 @@ func TestPgПустойСрезНеNil(t *testing.T) {
 	ctx := context.Background()
 	s := NewStore(testGate(t))
 	srcID := newSource(t, s)
-	got, err := s.SliceUnits(ctx, srcID, "нет-такого")
+	got, err := s.SliceUnits(ctx, srcID, "нет-такого", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -659,5 +659,44 @@ func TestPgПустыхПарЭтоПустойСписок(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("у нового источника %d пар", len(got))
+	}
+}
+
+// Предел стоит в запросе, а не в обрезании прочитанного.
+//
+// Обрезать список после чтения — значит всё равно поднять из базы
+// четырнадцать тысяч строк ради пятисот показанных, и разница эта видна
+// только под нагрузкой, то есть на бою. Проверка сторожит именно запрос:
+// она спрашивает у хранилища, а не у ручки.
+func TestPgПределСрезаСтоитВЗапросе(t *testing.T) {
+	ctx := context.Background()
+	s := NewStore(testGate(t))
+	srcID := newSource(t, s)
+
+	units := make([]Unit, 0, 20)
+	for i := 0; i < 20; i++ {
+		units = append(units, Unit{Label: fmt.Sprintf("п.%d", i), Title: "Пункт"})
+	}
+	docID := draftDoc(t, s, srcID, units, nil)
+	if _, err := s.AcceptDraft(ctx, srcID, docID, "врач"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.SliceUnits(ctx, srcID, "", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 5 {
+		t.Errorf("при пределе 5 прочитано %d единиц", len(got))
+	}
+
+	// Ноль — это «без предела», а не «ни одной»: разбору источника нужны
+	// все единицы, и ручка отличается от него ровно этим доводом.
+	all, err := s.SliceUnits(ctx, srcID, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 20 {
+		t.Errorf("без предела прочитано %d единиц вместо двадцати", len(all))
 	}
 }

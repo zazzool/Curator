@@ -192,18 +192,36 @@ func pathID(w http.ResponseWriter, req *http.Request) (int64, bool) {
 	return id, true
 }
 
+// findClients ищет клиентов, говоря, если показал не всех.
+//
+// Молчаливое отсечение здесь дороже, чем кажется: оператор ищет врача по
+// куску фамилии, видит пятьдесят однофамильцев без пятьдесят первого и
+// заводит вторую учётную запись тому, у кого она есть. Поэтому рядом со
+// списком едет и предел, и признак того, что подошедших больше.
 func (r *routes) findClients(w http.ResponseWriter, req *http.Request, _ studio.User) {
-	limit, _ := strconv.Atoi(req.URL.Query().Get("limit"))
-	list, err := r.clients.Find(req.Context(), req.URL.Query().Get("q"), limit)
+	asked, _ := strconv.Atoi(req.URL.Query().Get("limit"))
+	limit := ClientsShown(asked)
+
+	// На одного больше предела: так «их ровно столько» и «их больше»
+	// различаются без второго запроса со счётом.
+	list, err := r.clients.Find(req.Context(), req.URL.Query().Get("q"), limit+1)
 	if err != nil {
 		studio.WriteError(w, http.StatusInternalServerError, "Клиенты не прочитаны")
 		return
+	}
+	more := len(list) > limit
+	if more {
+		list = list[:limit]
 	}
 	out := make([]map[string]any, 0, len(list))
 	for _, one := range list {
 		out = append(out, clientJSON(one))
 	}
-	studio.WriteJSON(w, http.StatusOK, map[string]any{"clients": out})
+	studio.WriteJSON(w, http.StatusOK, map[string]any{
+		"clients": out,
+		"limit":   limit,
+		"more":    more,
+	})
 }
 
 func (r *routes) showClient(w http.ResponseWriter, req *http.Request, _ studio.User) {

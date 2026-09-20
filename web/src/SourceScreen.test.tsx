@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { SourceScreen } from './SourceScreen'
@@ -205,5 +205,83 @@ describe('экран источника', () => {
     render(<SourceScreen me={ЧИТАТЕЛЬ} id={1} onBack={() => {}} />)
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Состояние' })).toBeTruthy())
     expect(screen.queryByText('Объявить действующим')).toBeNull()
+  })
+})
+
+describe('пределы и отбор', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('говорит числом, что показаны не все единицы', async () => {
+    // Отбор, показавший пятьсот единиц из четырнадцати тысяч, и отбор,
+    // показавший все пятьсот, какие есть, выглядели одинаково — а
+    // решения по ним принимаются разные: по первому составитель
+    // заказывает генерацию, думая, что видит весь класс.
+    serve({
+      '/admin/api/sources/1/units': { units: UNITS, limit: 500, more: true },
+      '/admin/api/sources/1/jobs': { jobs: [] },
+      '/admin/api/cases': { cases: [] },
+      '/admin/api/sources/1/documents': { documents: [] },
+      '/admin/api/sources/1': SOURCE,
+    })
+    render(<SourceScreen me={РЕДАКТОР} id={1} onBack={() => {}} />)
+    const note = await screen.findByText(/Показаны первые 500/)
+    expect(note.textContent).toMatch(/сузьте срез/i)
+  })
+
+  it('о полном списке не говорит, что он обрезан', async () => {
+    // Иначе «показаны не все» стояло бы над всяким списком, и читать его
+    // перестали бы вместе с тем случаем, ради которого оно написано.
+    serve({
+      '/admin/api/sources/1/units': { units: UNITS, limit: 500, more: false },
+      '/admin/api/sources/1/jobs': { jobs: [] },
+      '/admin/api/cases': { cases: [] },
+      '/admin/api/sources/1/documents': { documents: [] },
+      '/admin/api/sources/1': SOURCE,
+    })
+    render(<SourceScreen me={РЕДАКТОР} id={1} onBack={() => {}} />)
+    await waitFor(() => expect(screen.getByText('3.2')).toBeTruthy())
+    expect(screen.queryByText(/Показаны первые/)).toBeNull()
+  })
+
+  it('набранный отбор не шлёт запрос на каждую клавишу', async () => {
+    // Отбор висел прямо на onChange: «F31.2» — двадцать обращений за
+    // секунду, и все, кроме последнего, заказаны за то, чего составитель
+    // уже не ищет.
+    vi.useFakeTimers()
+    try {
+      serve({
+        '/admin/api/sources/1/units': { units: UNITS, more: false },
+        '/admin/api/sources/1/jobs': { jobs: [] },
+        '/admin/api/cases': { cases: [] },
+        '/admin/api/sources/1/documents': { documents: [] },
+        '/admin/api/sources/1': SOURCE,
+      })
+      render(<SourceScreen me={РЕДАКТОР} id={1} onBack={() => {}} />)
+      // Через act: перечитывание заводится эффектом React, и без него
+      // эффект не сольётся, а проверка покажет «запрос не ушёл» там, где
+      // он ушёл бы у человека.
+      await act(() => vi.advanceTimersByTimeAsync(400))
+
+      const fetched = () =>
+        (globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.filter(
+          (call) => String(call[0]).includes('/units'),
+        ).length
+      const before = fetched()
+
+      const field = screen.getByPlaceholderText(/например/)
+      for (const value of ['F', 'F3', 'F31', 'F31.', 'F31.2']) {
+        fireEvent.change(field, { target: { value } })
+        await act(() => vi.advanceTimersByTimeAsync(50))
+      }
+      expect(fetched()).toBe(before)
+
+      // А остановившись — уходит, и ровно один раз.
+      await act(() => vi.advanceTimersByTimeAsync(400))
+      expect(fetched()).toBe(before + 1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

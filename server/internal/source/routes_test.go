@@ -399,3 +399,85 @@ func TestPgПовторнаяПриёмкаНеУдваиваетПоложен�
 		t.Fatalf("после двух приёмок положений стало %d вместо одного: %s", got, raw)
 	}
 }
+
+// Список единиц упирается в предел, и обрезанное названо числом.
+//
+// Предела не было вовсе, при том что пояснение той же ручки говорило «у
+// классификации единиц тысячи». МКБ-10 приезжал целиком — четырнадцать
+// тысяч узлов списка и выпадающий список из четырнадцати тысяч строк без
+// поиска.
+//
+// Важнее самого предела вторая половина: отбор, показавший пятьсот из
+// четырнадцати тысяч, и отбор, показавший все пятьсот, какие есть,
+// выглядят одинаково, а решения по ним принимаются разные.
+func TestPgСписокЕдиницУпираетсяВПределИГоворитОбЭтом(t *testing.T) {
+	srv, token := newDesk(t, studio.PermSourceRead, studio.PermSourceAccept)
+	sourceID := newSourceJSON(t, srv, token)
+
+	_, uploaded, _ := upload(t, srv, token, sourceID, "приказ.md",
+		[]byte(fmt.Sprintf("# Порядок\n\nтело %d\n", time.Now().UnixNano())))
+	docID := int64(uploaded["id"].(float64))
+
+	units := make([]map[string]string, 0, MaxUnitsShown+10)
+	for i := 0; i < MaxUnitsShown+10; i++ {
+		units = append(units, map[string]string{
+			"label": fmt.Sprintf("п.%d", i), "parentLabel": "", "title": "Пункт",
+		})
+	}
+	status, _, raw := call(t, srv, token, "PUT",
+		fmt.Sprintf("/admin/api/documents/%d/draft", docID),
+		map[string]any{"units": units, "statements": []map[string]string{}})
+	if status != http.StatusOK {
+		t.Fatalf("черновик не лёг: %d %s", status, raw)
+	}
+	if status, _, raw = call(t, srv, token, "POST",
+		fmt.Sprintf("/admin/api/documents/%d/accept", docID), nil); status != http.StatusOK {
+		t.Fatalf("черновик не принят: %d %s", status, raw)
+	}
+
+	status, body, raw := call(t, srv, token, "GET",
+		fmt.Sprintf("/admin/api/sources/%d/units", sourceID), nil)
+	if status != http.StatusOK {
+		t.Fatalf("единицы не отданы: %d %s", status, raw)
+	}
+	if got := len(body["units"].([]any)); got != MaxUnitsShown {
+		t.Errorf("отдано %d единиц при пределе %d", got, MaxUnitsShown)
+	}
+	// Через `, ok`, а не прямым приведением: на ответе без этих полей —
+	// то есть ровно на том, что проверяется, — приведение паникует, и
+	// красный прогон говорит о панике вместо того, чего не хватило.
+	// Тело в отказ не печатается по той же причине: пятьсот единиц в
+	// журнале сторожа прячут строку, ради которой его открыли.
+	if more, ok := body["more"].(bool); !ok || !more {
+		t.Error("обрезание не названо: список выглядит полным")
+	}
+	if limit, ok := body["limit"].(float64); !ok || int(limit) != MaxUnitsShown {
+		t.Errorf("предел не назван или назван не тем: %v", body["limit"])
+	}
+}
+
+// Список короче предела обрезанным не объявляется.
+//
+// Иначе «показаны не все» стояло бы над всяким списком, и читать его
+// перестали бы — вместе с тем случаем, ради которого он написан.
+func TestPgКороткийСписокЕдиницНеОбъявленОбрезанным(t *testing.T) {
+	srv, token := newDesk(t, studio.PermSourceRead, studio.PermSourceAccept)
+	sourceID := newSourceJSON(t, srv, token)
+
+	_, uploaded, _ := upload(t, srv, token, sourceID, "приказ.md",
+		[]byte(fmt.Sprintf("# Порядок\n\nтело %d\n", time.Now().UnixNano())))
+	docID := int64(uploaded["id"].(float64))
+	call(t, srv, token, "PUT", fmt.Sprintf("/admin/api/documents/%d/draft", docID),
+		map[string]any{
+			"units":      []map[string]string{{"label": "1", "title": "Пункт"}},
+			"statements": []map[string]string{},
+		})
+	call(t, srv, token, "POST", fmt.Sprintf("/admin/api/documents/%d/accept", docID), nil)
+
+	_, body, _ := call(t, srv, token, "GET",
+		fmt.Sprintf("/admin/api/sources/%d/units", sourceID), nil)
+	if more, ok := body["more"].(bool); !ok || more {
+		t.Errorf("короткий список объявлен обрезанным или не объявлен вовсе: %v",
+			body["more"])
+	}
+}

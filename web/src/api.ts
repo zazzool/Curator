@@ -5,6 +5,26 @@
 // показывался бы человеку, а на другом падал бы в журнал браузера, где его
 // никто не увидит.
 
+/**
+ * Признак того, что список показан не целиком.
+ *
+ * Отдельным типом на все списки с пределом: список, обрезанный молча, и
+ * список, который весь помещается, выглядят одинаково, а решения по ним
+ * принимаются разные. Оператор, увидевший пятьдесят однофамильцев без
+ * пятьдесят первого, заводит второго врача тому, у кого запись есть;
+ * составитель, увидевший пятьсот единиц из четырнадцати тысяч, заказывает
+ * генерацию по тому, что считает целым классом.
+ *
+ * Поля необязательные: ручка, предела не имеющая, их не шлёт, и обходиться
+ * без них показ обязан.
+ */
+export type Cut = {
+  /** Сколько строк ручка отдаёт за раз. */
+  limit?: number
+  /** Подошло больше, чем показано. */
+  more?: boolean
+}
+
 export type Source = {
   id: number
   slug: string
@@ -373,7 +393,7 @@ export const api = {
   // Пустой путь означает весь источник: срез по пути — то, ради чего путь
   // вообще считается, и отдельной ручки под «всё» заводить незачем.
   units: (id: number, path = '') =>
-    request<{ units: Unit[] }>(
+    request<Cut & { units: Unit[] }>(
       'GET',
       `/admin/api/sources/${id}/units${path ? `?path=${encodeURIComponent(path)}` : ''}`,
     ),
@@ -439,7 +459,7 @@ export const api = {
     if (query.status) params.set('status', query.status)
     if (query.limit) params.set('limit', String(query.limit))
     const tail = params.toString()
-    return request<{ cases: Case[] }>('GET', `/admin/api/cases${tail ? `?${tail}` : ''}`)
+    return request<Cut & { cases: Case[] }>('GET', `/admin/api/cases${tail ? `?${tail}` : ''}`)
   },
 
   case: (id: string) => request<Case>('GET', `/admin/api/cases/${id}`),
@@ -495,7 +515,7 @@ export const api = {
     ),
 
   clients: (q = '', limit = 50) =>
-    request<{ clients: Client[] }>(
+    request<Cut & { clients: Client[] }>(
       'GET',
       `/admin/api/clients?limit=${limit}${q ? `&q=${encodeURIComponent(q)}` : ''}`,
     ),

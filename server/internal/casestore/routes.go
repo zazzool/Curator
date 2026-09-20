@@ -31,26 +31,43 @@ type routes struct {
 	store *Store
 }
 
+// list отдаёт задачи по отбору, говоря, если показал не все.
+//
+// Молчаливое отсечение здесь стоило ложного утверждения: подбор задач в
+// набор брал двести штук, выбрасывал уже добавленные и, когда все двести
+// оказывались в наборе, писал «раздаваемых задач не нашлось» — при том
+// что их могли быть тысячи.
 func (r *routes) list(w http.ResponseWriter, req *http.Request, _ studio.User) {
 	q := req.URL.Query()
 	sourceID, _ := strconv.ParseInt(q.Get("source"), 10, 64)
-	limit, _ := strconv.Atoi(q.Get("limit"))
+	asked, _ := strconv.Atoi(q.Get("limit"))
+	limit := CasesShown(asked)
 
+	// На одну больше предела: так «их ровно столько» и «их больше»
+	// различаются без второго запроса со счётом.
 	cases, err := r.store.Cases(req.Context(), Filter{
 		SourceID: sourceID,
 		Path:     q.Get("path"),
 		Status:   Status(q.Get("status")),
-		Limit:    limit,
+		Limit:    limit + 1,
 	})
 	if err != nil {
 		studio.WriteError(w, http.StatusInternalServerError, "Задачи не прочитаны")
 		return
 	}
+	more := len(cases) > limit
+	if more {
+		cases = cases[:limit]
+	}
 	out := make([]map[string]any, 0, len(cases))
 	for _, one := range cases {
 		out = append(out, caseJSON(one))
 	}
-	studio.WriteJSON(w, http.StatusOK, map[string]any{"cases": out})
+	studio.WriteJSON(w, http.StatusOK, map[string]any{
+		"cases": out,
+		"limit": limit,
+		"more":  more,
+	})
 }
 
 func (r *routes) show(w http.ResponseWriter, req *http.Request, _ studio.User) {

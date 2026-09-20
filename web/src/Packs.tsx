@@ -462,22 +462,28 @@ function PackCard({ me, slug, onBack }: { me: Me; slug: string; onBack: () => vo
 // Показываются только раздаваемые: набор из черновиков соберётся, а врач
 // получит выпуск, половины которого нет ни в ленте, ни в повторении.
 function Picker({ chosen, onAdd }: { chosen: string[]; onAdd: (one: Case) => void }) {
-  const read = useCallback(
-    async () => (await api.cases({ status: 'published', limit: 200 }))?.cases ?? [],
-    [],
-  )
+  const read = useCallback(async () => {
+    const answer = await api.cases({ status: 'published', limit: 200 })
+    return { all: answer?.cases ?? [], more: answer?.more === true }
+  }, [])
   const found = useResource(read, 'Задачи не прочитаны')
 
   return (
     <div className="page-section">
       <Loaded from={found} while="Читаем задачи…">
-      {(all) => {
+      {({ all, more }) => {
       const free = all.filter((one) => !chosen.includes(one.id))
+      // Три разных положения, и раньше все три говорили одно.
+      // «Не нашлось» при двухстах задачах, все из которых уже в наборе, —
+      // утверждение ложное: их могут быть тысячи, просто подбор берёт
+      // двести за раз. Составитель верил ему и считал набор собранным.
       return free.length === 0 ? (
         <p className="empty">
-          Раздаваемых задач, которых ещё нет в наборе, не нашлось. Набор
-          собирается из опубликованных: черновик не доедет ни до ленты, ни до
-          повторения.
+          {all.length === 0
+            ? 'Раздаваемых задач не нашлось. Набор собирается из опубликованных: черновик не доедет ни до ленты, ни до повторения.'
+            : more
+              ? 'Все показанные задачи уже в наборе, а раздаваемых больше, чем подбор берёт за раз. Выпустите этот набор и соберите следующий: отбора по источнику у подбора пока нет.'
+              : 'Все раздаваемые задачи уже в наборе.'}
         </p>
       ) : (
         <div className="list">

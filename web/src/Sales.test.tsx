@@ -196,6 +196,49 @@ describe('продажи', () => {
     expect(posted).toBe(0)
   })
 
+  it('приход уносит ровно ту сумму, которую набрал оператор', async () => {
+    // Единственная проверка платежа была отрицательной: она смотрела,
+    // что негодная сумма НЕ ушла. Подели сумму на сто в `accept` — и
+    // всякая продажа занижается стократно, а набор остаётся зелёным.
+    // Занижение обнаружится не сегодня, а исправлять его придётся
+    // возвратом по живым деньгам.
+    let ушло: Record<string, unknown> | null = null
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if (init?.method === 'POST' && path.includes('/payments')) {
+          ушло = JSON.parse(String(init.body))
+          return Promise.resolve(
+            new Response(JSON.stringify({ id: 12, kopecks: 199050 }), { status: 200 }),
+          )
+        }
+        const found = ОБЫЧНО.find(([key]) => path.startsWith(key))
+        return Promise.resolve(
+          new Response(JSON.stringify(found ? found[1] : {}), { status: 200 }),
+        )
+      }),
+    )
+    render(<Sales me={ОПЕРАТОР} />)
+    fireEvent.click(await screen.findByText('Иванов И.И.'))
+    const поле = await screen.findByPlaceholderText('1990')
+    fireEvent.change(поле, { target: { value: '1990,50' } })
+    fireEvent.change(screen.getByPlaceholderText('перевод от 19.09, чек №…'), {
+      target: { value: 'перевод от 20.09' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Оформить приход' }))
+
+    await waitFor(() => expect(ушло).not.toBeNull())
+    const тело = ушло as unknown as Record<string, unknown>
+    expect(тело.kopecks).toBe(199050)
+    expect(тело.accountId).toBe(7)
+    expect(тело.purpose).toBe('subscription:month')
+    expect(тело.note).toBe('перевод от 20.09')
+    // Ключ повторности — обязательство перед оператором, нажавшим второй
+    // раз на оборванной связи: без него сервер оформит второй приход, а
+    // деньги были одни.
+    expect(String(тело.idemKey ?? '')).not.toBe('')
+  })
+
   it('второй приход того же врача идёт своим ключом повторности', async () => {
     // Ключ складывался из врача, назначения, суммы и числа месяца, и у
     // двух РАЗНЫХ приходов совпадал. Врач, купивший второй месяц в тот

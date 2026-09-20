@@ -209,7 +209,10 @@ function ClientSearch({ onOpen }: { onOpen: (id: number) => void }) {
   // запросы уходят по очереди, ответы возвращаются как придётся, и
   // счётчик походов внутри чтения не даёт обогнавшему затереть свежий.
   const [asked, setAsked] = useState('')
-  const read = useCallback(async () => (await api.clients(asked))?.clients ?? [], [asked])
+  const read = useCallback(async () => {
+    const answer = await api.clients(asked)
+    return { list: answer?.clients ?? [], more: answer?.more === true, limit: answer?.limit }
+  }, [asked])
   const clients = useResource(read, 'Клиенты не прочитаны')
 
   return (
@@ -238,7 +241,7 @@ function ClientSearch({ onOpen }: { onOpen: (id: number) => void }) {
 
       <div className="page-section">
         <Loaded from={clients}>
-        {(list) => list.length === 0 ? (
+        {({ list, more, limit }) => list.length === 0 ? (
           <p className="empty">
             {query
               ? 'По этому запросу никого. Проверьте почту — искать можно и по части её.'
@@ -262,6 +265,15 @@ function ClientSearch({ onOpen }: { onOpen: (id: number) => void }) {
                 </span>
               </button>
             ))}
+            {more && (
+              // Оператор, увидевший полный список без пятьдесят первого
+              // врача, заводит вторую учётную запись тому, у кого она
+              // есть. Числом, а не словами «показаны не все»: без числа
+              // непонятно, насколько не все.
+              <p className="hint">
+                Показаны первые {limit}. Подошло больше — уточните запрос.
+              </p>
+            )}
           </div>
         )}
         </Loaded>
