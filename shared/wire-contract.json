@@ -37,6 +37,46 @@
         "token": "string",
         "accountId": "number",
         "deviceId": "number"
+      },
+      "_2": "Тот же вид у возврата доступа по почте: приложение разбирает оба ответа одним кодом."
+    },
+
+    "POST /v1/me/email": {
+      "status": 202,
+      "_": [
+        "Ответ НЕ зависит от того, свободен ли адрес: занятый чужой записью его",
+        "не получает, но видит ровно это же. Иначе ручка превращается в способ",
+        "узнать, заведён ли у нас такой врач."
+      ],
+      "fields": {
+        "sent": "boolean",
+        "hint": "string"
+      }
+    },
+
+    "POST /v1/me/email/confirm": {
+      "status": 200,
+      "fields": {
+        "email": "string"
+      }
+    },
+
+    "POST /v1/recovery": {
+      "status": 202,
+      "_": "Тот же ответ на знакомый адрес, незнакомый и вовсе не адрес.",
+      "fields": {
+        "sent": "boolean",
+        "hint": "string"
+      }
+    },
+
+    "POST /v1/recovery/confirm": {
+      "status": 201,
+      "_": "Вид совпадает с POST /v1/devices намеренно: это то же заведение устройства, только на найденной записи.",
+      "fields": {
+        "token": "string",
+        "accountId": "number",
+        "deviceId": "number"
       }
     },
 

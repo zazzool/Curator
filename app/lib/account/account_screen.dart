@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 
 import '../api/client.dart';
 import 'account.dart';
+import 'email_card.dart';
 import 'model.dart';
 
 class AccountScreen extends StatefulWidget {
@@ -85,6 +86,16 @@ class _AccountScreenState extends State<AccountScreen> {
     }
   }
 
+  /// Доступ вернулся: токен сменился, и запись теперь другая.
+  ///
+  /// Закрываем экран с ответом «да»: перечитать надо не только его —
+  /// лента, повторение и знаки показывают прежнюю запись, и оставь мы их
+  /// как есть, врач увидел бы чужие числа под своей вернувшейся почтой.
+  void _recovered() {
+    if (!mounted) return;
+    Navigator.of(context).pop(true);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -130,6 +141,10 @@ class _AccountScreenState extends State<AccountScreen> {
           ),
           const SizedBox(height: 8),
           TextField(
+            // Метка проверке: полей на экране теперь несколько, и «первое
+            // попавшееся» однажды окажется полем почты — молча, потому
+            // что вводится туда тоже текст.
+            key: const Key('поле имени'),
             controller: _name,
             decoration: const InputDecoration(border: OutlineInputBorder()),
             textInputAction: TextInputAction.done,
@@ -144,17 +159,19 @@ class _AccountScreenState extends State<AccountScreen> {
             ),
           ),
           const SizedBox(height: 24),
+          EmailCard(
+            account: widget.account,
+            email: profile.email,
+            // Перечитываем, а не дописываем привязанный адрес в свою
+            // копию: правда о записи лежит на сервере, и вторая копия
+            // расходится с ней молча.
+            onBound: (_) => _load(),
+            onRecovered: _recovered,
+          ),
+          const SizedBox(height: 24),
           Text('Запись', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
           Text('Номер: ${profile.accountId}'),
-          // Про почту сказано то, что есть. Обещать привязку «позже»
-          // нельзя: привязки нет ни здесь, ни на сервере, и обещание
-          // отправило бы врача ждать того, чего никто не делает.
-          Text(
-            profile.email.isEmpty
-                ? 'Почта не привязана: запись живёт на этом устройстве.'
-                : 'Почта: ${profile.email}',
-          ),
         ],
       ),
     );

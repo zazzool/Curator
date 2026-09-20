@@ -31,6 +31,7 @@ import (
 	"curator/server/internal/gen"
 	"curator/server/internal/llm"
 	"curator/server/internal/llmusage"
+	"curator/server/internal/mail"
 	"curator/server/internal/packs"
 	"curator/server/internal/progress"
 	"curator/server/internal/sales"
@@ -150,9 +151,19 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 		prices = sales.NewPrices(gate)
 
 		keys = app.NewKeys(gate)
-		door := app.NewDoor(keys, app.NewAccounts(gate))
+		accounts := app.NewAccounts(gate)
+		door := app.NewDoor(keys, accounts)
 		app.Routes(door, app.NewFeed(gate), app.NewAttempts(gate, progress.Default()), access)
 		app.ReferenceRoutes(door, app.NewReference(gate))
+
+		// Почта. Настройки может не быть вовсе — служба обязана
+		// подниматься и раздавать задачи там, где почты нет; отказывают
+		// тогда только сами ручки почты, и отказывают словами.
+		post := mail.FromEnv()
+		if !post.Ready() {
+			log.Print("почта не настроена: привязать её и вернуть доступ врач не сможет")
+		}
+		app.EmailRoutes(door, app.NewEmails(accounts), post, time.Now)
 		app.PackRoutes(door, packStore, access, prices)
 		app.TelemetryRoutes(door, telemetry.NewStore(gate))
 		mux.Handle("/v1/", door.Handler())
