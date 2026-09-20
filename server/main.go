@@ -30,6 +30,7 @@ import (
 	"curator/server/internal/dbgate"
 	"curator/server/internal/envfile"
 	"curator/server/internal/gen"
+	"curator/server/internal/limits"
 	"curator/server/internal/llm"
 	"curator/server/internal/llmusage"
 	"curator/server/internal/mail"
@@ -167,7 +168,13 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 		app.EmailRoutes(door, app.NewEmails(accounts), post, time.Now)
 		app.PackRoutes(door, packStore, access, prices)
 		app.TelemetryRoutes(door, telemetry.NewStore(gate))
-		mux.Handle("/v1/", door.Handler())
+
+		// Потолок на тело обращения приложения. Самое крупное здесь —
+		// посылка телеметрии: до 500 событий, и потолок взят с запасом
+		// на них. Без потолка разбор тела шёл до конца, а потолок в 500
+		// разборов сверялся ПОСЛЕ разбора — то есть память была уже
+		// занята, а контейнеру отведено 512 мегабайт.
+		mux.Handle("/v1/", limits.Body(1<<20, door.Handler()))
 	}
 
 	// Редакционное API. Без базы его нет вовсе, и это честнее заглушки:
@@ -201,7 +208,13 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 		}).Every(ctx, 24*time.Hour)
 
 		generation(ctx, gate, desk)
-		mux.Handle("/admin/api/", desk.Handler())
+
+		// Потолок студии крупнее: сюда приносят документ источника, и
+		// приказ на сотню страниц в DOCX весит мегабайты. Он всё равно
+		// потолок: без него тело не ограничено ничем, а студия открыта
+		// тому, у кого есть учётная запись, — то есть отказ здесь стоит
+		// не меньше, чем отказ от постороннего.
+		mux.Handle("/admin/api/", limits.Body(32<<20, desk.Handler()))
 	}
 
 	// Статика студии. Пусто — раздача выключена, и это нормальный режим

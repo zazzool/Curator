@@ -21,6 +21,9 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
+
+	"curator/server/internal/limits"
 )
 
 // Door — маршруты приложения.
@@ -67,6 +70,33 @@ func (d *Door) Keyed(pattern string, h func(http.ResponseWriter, *http.Request, 
 		}
 		h(w, r, keyID)
 	})
+}
+
+// Metered оборачивает обработчик ведром жетонов по адресу обращающегося.
+//
+// Стоит на объявлении маршрута, а не внутри обработчика: так видно,
+// какие ручки считаются, прямо в списке маршрутов. Считаются те, что
+// работают ДО учётной записи и тратят наше от имени постороннего:
+// заведение устройства и письмо на чужой адрес. Ключ программы им не
+// защита — он лежит в сборке, то есть у всякого, кто её разобрал, и
+// пояснение к Keyed это признаёт.
+func Metered(
+	b *limits.Bucket,
+	now func() time.Time,
+	message string,
+	h func(http.ResponseWriter, *http.Request, string),
+) func(http.ResponseWriter, *http.Request, string) {
+	return func(w http.ResponseWriter, r *http.Request, keyID string) {
+		if !b.Allow(limits.Address(r), now()) {
+			// Ни срока, ни счёта в ответе: и то, и другое говорит
+			// перебирающему, когда возвращаться. Retry-After — для
+			// исправного клиента, который читает заголовки, а не текст.
+			w.Header().Set("Retry-After", "60")
+			WriteError(w, http.StatusTooManyRequests, message)
+			return
+		}
+		h(w, r, keyID)
+	}
 }
 
 // Device объявляет маршрут, закрытый токеном устройства.

@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"curator/server/internal/limits"
 	"curator/server/internal/progress"
 	"curator/server/internal/sales"
 )
@@ -27,7 +28,17 @@ func Routes(door *Door, feed *Feed, attempts *Attempts, access *sales.Access) {
 
 	// Заведение устройства — единственное, что закрыто ключом программы и
 	// не закрыто токеном: токена в этот момент ещё нет.
-	door.Keyed("POST /v1/devices", r.enroll)
+	//
+	// И оно же считается по адресу. Ключ программы лежит в сборке, то
+	// есть у всякого, кто её разобрал, — пояснение к Keyed это признаёт
+	// само. Без счёта первый же любопытный заводит нам столько учётных
+	// записей, сколько выдержит база; запас в двадцать заведений покрывает
+	// переустановку приложения и общий адрес за одним прокси, а пять в
+	// минуту — это больше, чем врач заводит устройств за всю жизнь.
+	door.Keyed("POST /v1/devices", Metered(
+		limits.NewBucket(20, 5), time.Now,
+		"Слишком много заведений с этого адреса. Попробуйте позже",
+		r.enroll))
 
 	door.Device("GET /v1/me", r.me)
 	door.Device("PUT /v1/me", r.rename)
