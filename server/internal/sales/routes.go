@@ -46,13 +46,13 @@ type priceRequest struct {
 // Принимаются копейки, а не рубли: рубль с копейками, приехавший дробным
 // числом, теряет копейку на первом же переводе в двоичную дробь. Рубли —
 // дело витрины, и перевод делается при показе.
-func (r *routes) setPrice(w http.ResponseWriter, req *http.Request, _ studio.User) {
+func (r *routes) setPrice(w http.ResponseWriter, req *http.Request, user studio.User) {
 	var body priceRequest
 	if err := studio.DecodeBody(req, &body); err != nil {
 		studio.WriteError(w, http.StatusBadRequest, "Запрос не разобран: "+err.Error())
 		return
 	}
-	if err := r.prices.Set(req.Context(), body.Purpose, body.Kopecks, body.Enabled); err != nil {
+	if err := r.prices.Set(req.Context(), user.Login, body.Purpose, body.Kopecks, body.Enabled); err != nil {
 		studio.WriteError(w, http.StatusBadRequest, studio.Sentence(err.Error()))
 		return
 	}

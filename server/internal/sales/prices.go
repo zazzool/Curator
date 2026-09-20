@@ -2,8 +2,12 @@ package sales
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"curator/server/internal/dbgate"
 )
@@ -33,8 +37,22 @@ type Price struct {
 	At      time.Time
 }
 
-// Set задаёт цену.
-func (p *Prices) Set(ctx context.Context, purpose string, kopecks int64, enabled bool) error {
+// Set задаёт цену и записывает это в журнал.
+//
+// # Почему запись в журнал здесь обязательна
+//
+// Выключение цены — это и есть предусмотренный способ сделать набор
+// бесплатным (см. отказ на ноль ниже), то есть одно нажатие в студии
+// открывает всем то, за что платили. Само по себе это не беда: способ
+// нужен, и он видим в студии. Бедой было то, что след оставался только в
+// самой строке цены — `enabled = FALSE` и новое `updated_at`, без ответа
+// на вопросы «кто» и «что было до». Вопрос этот задают ровно один раз и
+// ровно тогда, когда деньги уже не пришли.
+//
+// Журнал пишется той же транзакцией, что и цена: записанная цена без
+// записи в журнал — это ровно тот след, которого не было, а запись в
+// журнал без цены — рассказ о том, чего не случилось.
+func (p *Prices) Set(ctx context.Context, by, purpose string, kopecks int64, enabled bool) error {
 	known, err := ParsePurpose(purpose)
 	if err != nil {
 		return err
@@ -46,13 +64,44 @@ func (p *Prices) Set(ctx context.Context, purpose string, kopecks int64, enabled
 		return errors.New("цена должна быть больше нуля; " +
 			"бесплатный набор делается выключением цены, а не нулём")
 	}
-	_, err = p.gate.Exec(ctx, `
-		INSERT INTO prices (purpose, amount_kopecks, enabled)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (purpose) DO UPDATE
-		   SET amount_kopecks = $2, enabled = $3, updated_at = NOW()`,
-		string(known), kopecks, enabled)
-	return err
+	return p.gate.InTx(ctx, func(tx pgx.Tx) error {
+		var hadPrice, wasEnabled bool
+		var wasKopecks int64
+		err := tx.QueryRow(ctx,
+			`SELECT TRUE, enabled, amount_kopecks FROM prices WHERE purpose = $1`,
+			string(known)).Scan(&hadPrice, &wasEnabled, &wasKopecks)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO prices (purpose, amount_kopecks, enabled)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (purpose) DO UPDATE
+			   SET amount_kopecks = $2, enabled = $3, updated_at = NOW()`,
+			string(known), kopecks, enabled); err != nil {
+			return err
+		}
+
+		// «Стал бесплатным» — это переход, а не состояние: товар, у
+		// которого цены не было и не появилось, бесплатным не становился,
+		// и строка об этом в журнале была бы шумом.
+		becameFree := hadPrice && wasEnabled && !enabled
+		details, err := json.Marshal(map[string]any{
+			"kopecks":    kopecks,
+			"enabled":    enabled,
+			"was":        hadPrice,
+			"wasEnabled": wasEnabled,
+			"wasKopecks": wasKopecks,
+			"becameFree": becameFree,
+		})
+		if err != nil {
+			return fmt.Errorf("запись в журнал не собрана: %w", err)
+		}
+		_, err = tx.Exec(ctx,
+			`INSERT INTO admin_journal (user_login, action, subject, details)
+			 VALUES ($1, 'price:set', $2, $3)`, by, string(known), details)
+		return err
+	})
 }
 
 // All отдаёт все цены.

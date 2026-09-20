@@ -53,6 +53,7 @@ package backup
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -112,6 +113,40 @@ func (k *Keeper) now() time.Time {
 	return time.Now()
 }
 
+// hidePassword уносит пароль из доводов команды в её окружение.
+//
+// pg_dump и pg_restore получают строку подключения доводом, то есть
+// вместе с паролем, а `ps` на хосте виден всякому, кто на него вошёл.
+// Про этот самый случай написано в docker-compose.yml нашими же словами
+// — и здесь же это правило нарушалось. Окружение процесса, в отличие от
+// доводов, чужому процессу не видно: /proc/PID/environ читает только
+// владелец и root.
+//
+// Возвращается строка БЕЗ пароля и окружение с PGPASSWORD. Клиенты
+// Postgres читают эту переменную сами, и второго пути тут не нужно.
+//
+// Строка не в виде URL (`host=… password=…`) отдаётся как есть: разобрать
+// её правильно — это повторить разбор libpq, а повторённый наполовину он
+// отдаст pg_dump не ту базу. Молчать об этом нельзя, поэтому такой случай
+// — отказ: снимок, снятый не с той базы, выглядит как снимок.
+func hidePassword(dsn string) (string, []string, error) {
+	if !strings.HasPrefix(dsn, "postgres://") && !strings.HasPrefix(dsn, "postgresql://") {
+		return "", nil, fmt.Errorf(
+			"строка подключения не в виде URL: снимки берут её только так, " +
+				"иначе пароль уехал бы в доводы команды")
+	}
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "", nil, fmt.Errorf("строка подключения не разобрана: %w", err)
+	}
+	password, has := u.User.Password()
+	if !has {
+		return dsn, os.Environ(), nil
+	}
+	u.User = url.User(u.User.Username())
+	return u.String(), append(os.Environ(), "PGPASSWORD="+password), nil
+}
+
 // Take снимает базу.
 //
 // Формат custom, а не текстовый SQL: он сжат, из него можно развернуть
@@ -133,9 +168,14 @@ func (k *Keeper) Take(ctx context.Context) (Snapshot, error) {
 	// и на другом контуре, где роли зовут иначе. Снимок, требующий роли с
 	// тем же именем, восстанавливается только туда, откуда снят, — то есть
 	// ровно не туда, куда нужно.
+	shown, env, err := hidePassword(k.DSN)
+	if err != nil {
+		return Snapshot{}, err
+	}
 	cmd := exec.CommandContext(ctx, "pg_dump",
 		"--format=custom", "--no-owner", "--no-acl",
-		"--file="+path, k.DSN)
+		"--file="+path, shown)
+	cmd.Env = env
 	if out, err := cmd.CombinedOutput(); err != nil {
 		// Недописанный файл убираем: снимок на половине — это снимок,
 		// который выглядит как снимок.
@@ -187,9 +227,14 @@ func (k *Keeper) Verify(ctx context.Context, path string) error {
 	// TestPgОборванныйСнимокНеПроходитСверку), а отказ по отдельному
 	// объекту подделать здесь нечем — нашей схеме не нужны ни расширения,
 	// ни роли.
+	shown, env, err := hidePassword(k.VerifyDSN)
+	if err != nil {
+		return err
+	}
 	cmd := exec.CommandContext(ctx, "pg_restore",
 		"--clean", "--if-exists", "--no-owner", "--no-acl",
-		"--exit-on-error", "--dbname="+k.VerifyDSN, path)
+		"--exit-on-error", "--dbname="+shown, path)
+	cmd.Env = env
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("снимок не разворачивается: %w: %s", err, strings.TrimSpace(string(out)))
 	}

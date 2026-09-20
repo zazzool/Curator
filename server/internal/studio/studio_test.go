@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -355,3 +356,99 @@ func TestPgОтказВходаНичегоНеРассказывает(t *testi
 }
 
 func errorOf(_ string, err error) error { return err }
+
+// Оберег мастерской держится против двух снятий разом.
+//
+// Показанный аудитом дефект: счёт оставшихся и правка шли двумя запросами
+// без замка, и два снятия, пришедшие в один миг, видели друг друга живыми
+// и проходили оба. Из сорока кругов тридцать девять оставляли установку
+// без единого человека с правом мастерской.
+//
+// Кругов здесь столько же: один круг проходит и на сломанном коде — беда
+// эта из тех, что случаются не каждый раз, и проверка в один круг
+// объявила бы её почищенной, ничего не проверив.
+func TestPgПоследнийМастерНеСнимаетсяДвумяСразу(t *testing.T) {
+	ctx := context.Background()
+	gate := testGate(t)
+	users := NewUsers(gate, nil)
+	const rounds = 40
+
+	for round := 0; round < rounds; round++ {
+		a, b := newLogin(), newLogin()
+		for _, login := range []string{a, b} {
+			if _, _, err := users.Create(ctx, login, login, []Permission{PermWorkshop}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// Кроме этих двоих мастеров в базе быть не должно, иначе оберег
+		// и не обязан срабатывать.
+		if _, err := gate.Exec(ctx, `UPDATE users SET disabled_at = NOW()
+		     WHERE login <> $1 AND login <> $2 AND 'workshop' = ANY (permissions)`,
+			a, b); err != nil {
+			t.Fatal(err)
+		}
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for _, login := range []string{a, b} {
+			wg.Add(1)
+			go func(login string) {
+				defer wg.Done()
+				<-start
+				_ = users.SetPermissions(ctx, login, []Permission{PermCaseRead})
+			}(login)
+		}
+		close(start)
+		wg.Wait()
+
+		var left int
+		if err := gate.QueryRow(ctx, `SELECT count(*) FROM users
+		     WHERE disabled_at IS NULL AND 'workshop' = ANY (permissions)`).Scan(&left); err != nil {
+			t.Fatal(err)
+		}
+		if left == 0 {
+			t.Fatalf("круг %d: права мастерской не осталось ни у кого", round)
+		}
+	}
+}
+
+// Отказ оберега называет себя, а не тупик в базе.
+//
+// Замок мог бы стоять по строкам оставшихся мастеров, и тогда два снятия
+// встали бы во взаимное ожидание: человек получил бы «обнаружен тупик»
+// вместо объяснения, почему право не снято. Проверка сторожит именно
+// слова отказа.
+func TestPgОберегМастерскойОтказываетВнятно(t *testing.T) {
+	ctx := context.Background()
+	gate := testGate(t)
+	users := NewUsers(gate, nil)
+
+	only := newLogin()
+	if _, _, err := users.Create(ctx, only, only, []Permission{PermWorkshop}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gate.Exec(ctx, `UPDATE users SET disabled_at = NOW()
+	     WHERE login <> $1 AND 'workshop' = ANY (permissions)`, only); err != nil {
+		t.Fatal(err)
+	}
+
+	err := users.SetPermissions(ctx, only, []Permission{PermCaseRead})
+	if !errors.Is(err, ErrLastWorkshop) {
+		t.Fatalf("снятие с последнего мастера отказало не оберегом: %v", err)
+	}
+
+	// И правка при отказе не применилась наполовину: транзакция откатана.
+	user, _, err := users.ByLogin(ctx, only)
+	if err != nil {
+		t.Fatal(err)
+	}
+	has := false
+	for _, p := range user.Permissions {
+		if p == PermWorkshop {
+			has = true
+		}
+	}
+	if !has {
+		t.Error("право мастерской снято, хотя оберег отказал")
+	}
+}

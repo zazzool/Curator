@@ -177,7 +177,7 @@ func TestPgПлатныйНаборНеОтдаётСодержаниеБезП�
 	if _, err := store.Publish(ctx, slug, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err := sales.NewPrices(gate).Set(ctx, "pack:"+slug, 49900, true); err != nil {
+	if err := sales.NewPrices(gate).Set(ctx, "проверка", "pack:"+slug, 49900, true); err != nil {
 		t.Fatal(err)
 	}
 

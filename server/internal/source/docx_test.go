@@ -3,6 +3,7 @@ package source
 import (
 	"archive/zip"
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 )
@@ -177,5 +178,58 @@ func TestDocxНеБерётВычеркнутоеРецензентом(t *testi
 	}
 	if !strings.Contains(got, "новый текст") {
 		t.Errorf("текст потерян: %q", got)
+	}
+}
+
+// Развёрнутая разметка упирается в потолок.
+//
+// Файл ограничен MaxDocumentBytes, но это размер СЖАТЫЙ: повторяющаяся
+// разметка жмётся в тысячи раз, и тридцать мегабайт разворачиваются в
+// гигабайты — в контейнер, которому отведено 512. Падает при этом служба
+// целиком, вместе с раздачей задач врачам, которые ничего не загружали.
+//
+// Бомба здесь настоящая, но потолок маленький: собирать двести мегабайт
+// ради проверки устройства — это двадцать секунд у сторожа на каждый
+// push. Разметка при этом правильная: на мусоре отказал бы разборщик XML,
+// и проверка прошла бы на сломанном коде, ничего не проверив.
+func TestDocxРазвёрнутаяРазметкаУпираетсяВПотолок(t *testing.T) {
+	const потолок = 1 << 20
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.Create("word/document.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	para := strings.Repeat(`<w:p><w:r><w:t>положение</w:t></w:r></w:p>`, 1<<10)
+	if _, err := io.WriteString(w, docHeader); err != nil {
+		t.Fatal(err)
+	}
+	for wrote := 0; wrote <= потолок; wrote += len(para) {
+		if _, err := io.WriteString(w, para); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := io.WriteString(w, docFooter); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if buf.Len() >= потолок {
+		t.Fatalf("бомба вышла %d байт при потолке %d — сжатия не случилось, "+
+			"и проверка не о том", buf.Len(), потолок)
+	}
+
+	if _, err := docxToMarkdown(buf.Bytes(), потолок); err == nil {
+		t.Fatal("разметка размером больше потолка разобралась без отказа")
+	} else if !strings.Contains(err.Error(), "МБ") {
+		t.Errorf("отказ не называет потолка: %v", err)
+	}
+
+	// И тот же файл под своим потолком разбирается: проверка сторожит
+	// отказ на большом, а не отказ вообще.
+	if _, err := docxToMarkdown(buf.Bytes(), maxDocumentXMLBytes); err != nil {
+		t.Errorf("документ в пределах потолка не разобрался: %v", err)
 	}
 }
