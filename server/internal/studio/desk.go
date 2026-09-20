@@ -3,6 +3,7 @@ package studio
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"strings"
@@ -25,11 +26,17 @@ type Desk struct {
 	mux      *http.ServeMux
 	users    *Users
 	sessions *Sessions
+	guard    *guard
 
 	// now — источник времени. Полем, а не time.Now по месту: проверке
 	// нужно подвинуть часы, чтобы увидеть истёкшую сессию, а ждать сутки
 	// она не может.
 	now func() time.Time
+
+	// hold — чем придерживается ответ на неудачный вход. Полем по тому же
+	// доводу, что и часы: проверке сторожа нужны десятки попыток подряд, а
+	// настоящая задержка растянула бы её на минуты.
+	hold func(context.Context, time.Duration)
 }
 
 // NewDesk собирает стол студии.
@@ -38,7 +45,25 @@ func NewDesk(users *Users, sessions *Sessions) *Desk {
 		mux:      http.NewServeMux(),
 		users:    users,
 		sessions: sessions,
+		guard:    newGuard(),
 		now:      time.Now,
+		hold:     sleep,
+	}
+}
+
+// sleep придерживает ответ, но не дольше, чем ждёт сам обратившийся.
+//
+// Через контекст, а не голым time.Sleep: оборвавший обращение не должен
+// держать поток сервера — перебирающий рвёт соединения именно затем.
+func sleep(ctx context.Context, d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-ctx.Done():
 	}
 }
 
@@ -82,13 +107,55 @@ func (d *Desk) Public(pattern string, h http.HandlerFunc) {
 // SetClock подменяет часы. Только для проверок.
 func (d *Desk) SetClock(now func() time.Time) { d.now = now }
 
+// SetHold подменяет задержку неудачного входа. Только для проверок.
+func (d *Desk) SetHold(hold func(context.Context, time.Duration)) { d.hold = hold }
+
+// ErrGate — единственный отказ входа.
+//
+// Один на все случаи намеренно: неизвестное имя, негодный код, закрытый
+// вход, непривязанный аутентификатор, исчерпанные попытки — снаружи всё это
+// обязано выглядеть одинаково. Разные отказы отвечают на вопрос, который
+// ответом не считается: существует ли такое имя и что с ним не так.
+//
+// Причина при этом не теряется: она уходит в журнал, где её читаем мы, а не
+// тот, кто стучится.
+var ErrGate = errors.New("имя или код не подошли")
+
 // Login — вход по имени и одноразовому коду.
+//
+// Порядок здесь не случайный, и переставить его нельзя:
+//
+//  1. сторож спрашивается ДО обращения к базе — иначе перебор бесплатно
+//     нагружает базу запросом на каждую попытку;
+//  2. удачный код гасится сразу — годен он три окна подряд, и подсмотренный
+//     через плечо код иначе работает второй раз;
+//  3. ответ на неудачу придерживается, и тем дольше, чем больше их было
+//     подряд.
+//
+// Придержанная попытка всё равно считается: не считай мы упёршихся в
+// предел, окно наблюдения истекало бы прямо под перебором.
 func (d *Desk) Login(ctx context.Context, login, code string) (string, error) {
-	user, err := d.users.VerifyCode(ctx, login, code, d.now())
-	if err != nil {
-		return "", err
+	now := d.now()
+	if !d.guard.allow(login, now) {
+		d.hold(ctx, d.guard.note(login, now))
+		log.Printf("вход не состоялся: имя %q, попытки исчерпаны", guardKey(login))
+		return "", ErrGate
 	}
-	return d.sessions.Issue(ctx, user.ID, d.now())
+
+	user, err := d.users.VerifyCode(ctx, login, code, now)
+	if err == nil && !d.guard.consume(login, code, now) {
+		err = errors.New("код уже предъявляли")
+	}
+	if err != nil {
+		d.hold(ctx, d.guard.note(login, now))
+		// Сам код в журнал не пишется: он годен ещё полторы минуты, а
+		// журнал читают не только те, кому можно входить.
+		log.Printf("вход не состоялся: имя %q, %v", guardKey(login), err)
+		return "", ErrGate
+	}
+
+	d.guard.clear(login)
+	return d.sessions.Issue(ctx, user.ID, now)
 }
 
 // bearer достаёт токен из заголовка.

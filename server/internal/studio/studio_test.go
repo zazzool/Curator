@@ -2,6 +2,7 @@ package studio
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -261,3 +262,96 @@ func TestМаршрутНеизвестнымПравомНеОбъявляет�
 	desk := NewDesk(nil, nil)
 	desk.Handle(Permission("придуманное"), "GET /admin/api/что-то", nil)
 }
+
+func TestPgПереборКодаУпираетсяВПредел(t *testing.T) {
+	// Шесть цифр — это миллион вариантов на три годных в каждый момент.
+	// Защитой это становится только тогда, когда попытки считают.
+	ctx := context.Background()
+	gate := testGate(t)
+	desk := NewDesk(NewUsers(gate), NewSessions(gate))
+	// Задержка подменяется пустышкой: она здесь не предмет проверки, а
+	// настоящая растянула бы дюжину попыток на минуту.
+	desk.SetHold(func(context.Context, time.Duration) {})
+
+	login := newLogin()
+	if _, _, err := NewUsers(gate).Create(ctx, login, "Составитель", nil); err != nil {
+		t.Fatal(err)
+	}
+	_, secret, err := NewUsers(gate).ByLogin(ctx, login)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < guardLimit; i++ {
+		if _, err := desk.Login(ctx, login, "000000"); err == nil {
+			t.Fatalf("попытка %d прошла по коду, которого не выдавали", i+1)
+		}
+	}
+
+	// Годный код после исчерпанных попыток тоже не пускает: считается
+	// число попыток, а не их удачность, — иначе перебор просто продолжался
+	// бы до совпадения.
+	code, err := totp.Code(secret, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := desk.Login(ctx, login, code); err == nil {
+		t.Fatal("после исчерпанных попыток вход прошёл: перебор ничем не ограничен")
+	}
+}
+
+func TestPgГодныйКодНеПроходитДважды(t *testing.T) {
+	// Код годен своё окно и оба соседних — почти полторы минуты. Всё это
+	// время подсмотренный через плечо код работал бы второй раз.
+	ctx := context.Background()
+	gate := testGate(t)
+	users := NewUsers(gate)
+	desk := NewDesk(users, NewSessions(gate))
+	desk.SetHold(func(context.Context, time.Duration) {})
+
+	login := newLogin()
+	if _, _, err := users.Create(ctx, login, "Составитель", nil); err != nil {
+		t.Fatal(err)
+	}
+	_, secret, err := users.ByLogin(ctx, login)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := totp.Code(secret, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := desk.Login(ctx, login, code); err != nil {
+		t.Fatalf("вход по годному коду отказал: %v", err)
+	}
+	if _, err := desk.Login(ctx, login, code); err == nil {
+		t.Fatal("тот же код пустил второй раз")
+	}
+}
+
+func TestPgОтказВходаНичегоНеРассказывает(t *testing.T) {
+	// Неизвестное имя и негодный код обязаны отличаться только тем, что
+	// пишется в журнал. Разные отказы наружу — это ответ на вопрос,
+	// существует ли имя.
+	ctx := context.Background()
+	gate := testGate(t)
+	desk := NewDesk(NewUsers(gate), NewSessions(gate))
+	desk.SetHold(func(context.Context, time.Duration) {})
+
+	login := newLogin()
+	if _, _, err := NewUsers(gate).Create(ctx, login, "Составитель", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	known := errorOf(desk.Login(ctx, login, "000000"))
+	unknown := errorOf(desk.Login(ctx, newLogin(), "000000"))
+	if known == nil || unknown == nil {
+		t.Fatal("вход прошёл по коду, которого не выдавали")
+	}
+	if !errors.Is(known, ErrGate) || !errors.Is(unknown, ErrGate) {
+		t.Fatalf("отказ входа не единственный: %v против %v", known, unknown)
+	}
+}
+
+func errorOf(_ string, err error) error { return err }
