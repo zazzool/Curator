@@ -82,6 +82,58 @@ type Stored struct {
 	// (см. Check.Done); студия обязана показать это отдельно от
 	// несогласия, иначе непроверенная задача читается как чистая.
 	Check *Check `json:"check,omitempty"`
+
+	// Siblings — итоги различающей сверки по неверным вариантам. Пусто —
+	// сверки не было; ПУСТОЙ СПИСОК — сверять было нечего. Разные случаи,
+	// и студия показывает их по-разному.
+	Siblings *[]SiblingCheck `json:"siblings,omitempty"`
+}
+
+// Rivals — неверные варианты черновика вместе с положениями их единиц.
+//
+// Берутся от ЧЕРНОВИКА, а не от плана: сверять надо то, что реально уйдёт
+// обучающемуся. Круг плана — это кандидаты, и модель выбрала из них не
+// обязательно всех; сверив кандидатов, мы проверили бы задачу, которой
+// никто не увидит.
+//
+// Эталон отсеивается по метке у узнавания и по тексту у действия — то же
+// различие, по которому мерится сам черновик. Вариант, которому в плане
+// единицы не нашлось, возвращается БЕЗ положений, а не выбрасывается:
+// несверенный вариант обязан назвать себя, иначе он неотличим от
+// сверенного и чистого.
+func (d Draft) Rivals(plan Plan) []UnitRef {
+	answer := strings.TrimSpace(d.Answer)
+	byLabel := make(map[string]UnitRef, len(plan.Siblings)+1)
+	for _, s := range plan.Siblings {
+		byLabel[strings.ToLower(s.Label)] = s
+	}
+
+	out := []UnitRef{}
+	seen := map[string]bool{}
+	for _, o := range d.Options {
+		label := strings.TrimSpace(o.Label)
+		text := strings.TrimSpace(o.Text)
+		if plan.TaskKind == KindAction {
+			// У действия вариант — это текст, и единицы за ним нет:
+			// сверять его против положений соседа нечем. Такой круг
+			// различающая сверка пропускает целиком, и это не пробел, а
+			// разные предметы.
+			continue
+		}
+		if label == "" || strings.EqualFold(label, answer) || strings.EqualFold(label, plan.Unit.Label) {
+			continue
+		}
+		if seen[strings.ToLower(label)] {
+			continue
+		}
+		seen[strings.ToLower(label)] = true
+		ref, known := byLabel[strings.ToLower(label)]
+		if !known {
+			ref = UnitRef{Label: label, Title: text}
+		}
+		out = append(out, ref)
+	}
+	return out
 }
 
 // Condition — условие задачи целиком: склейка фрагментов.

@@ -524,6 +524,32 @@ func (j *Jobs) SaveCheck(ctx context.Context, draftID int64, check Check) error 
 	return nil
 }
 
+// SaveSiblingChecks записывает итоги различающей сверки в черновик.
+//
+// Пустой список записывается тоже, и это не пустая работа: «сверяли, и
+// сверять было нечего» — не то же самое, что «не сверяли». Первое бывает
+// у задачи-действия, где за вариантами единиц нет вовсе; второе значит,
+// что узел не дошёл. Слей их в NULL — и задача без единой сверенной
+// альтернативы выглядела бы разобранной.
+func (j *Jobs) SaveSiblingChecks(ctx context.Context, draftID int64, checks []SiblingCheck) error {
+	if checks == nil {
+		checks = []SiblingCheck{}
+	}
+	body, err := json.Marshal(checks)
+	if err != nil {
+		return fmt.Errorf("итоги различающей сверки не записаны: %w", err)
+	}
+	res, err := j.gate.Exec(ctx,
+		`UPDATE case_drafts SET sibling_checks = $2 WHERE id = $1`, draftID, body)
+	if err != nil {
+		return fmt.Errorf("итоги различающей сверки не сохранены: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("черновик %d не найден: итоги различающей сверки не сохранены", draftID)
+	}
+	return nil
+}
+
 // Drafts — черновики, написанные по заданию.
 //
 // Списком, а не одним: перегенерация пишет второй черновик по тому же
@@ -531,7 +557,8 @@ func (j *Jobs) SaveCheck(ctx context.Context, draftID int64, check Check) error 
 // а затёртый черновик сравнить не с чем.
 func (j *Jobs) Drafts(ctx context.Context, jobID int64) ([]Stored, error) {
 	rows, err := j.gate.Query(ctx,
-		`SELECT id, body, blind_check FROM case_drafts WHERE job_id = $1 ORDER BY id`, jobID)
+		`SELECT id, body, blind_check, sibling_checks
+		   FROM case_drafts WHERE job_id = $1 ORDER BY id`, jobID)
 	if err != nil {
 		return nil, fmt.Errorf("черновики задания %d не прочитаны: %w", jobID, err)
 	}
@@ -540,8 +567,8 @@ func (j *Jobs) Drafts(ctx context.Context, jobID int64) ([]Stored, error) {
 	out := []Stored{}
 	for rows.Next() {
 		var id int64
-		var raw, rawCheck []byte
-		if err := rows.Scan(&id, &raw, &rawCheck); err != nil {
+		var raw, rawCheck, rawSiblings []byte
+		if err := rows.Scan(&id, &raw, &rawCheck, &rawSiblings); err != nil {
 			return nil, fmt.Errorf("строка черновика не разобрана: %w", err)
 		}
 		var draft Draft
@@ -564,6 +591,17 @@ func (j *Jobs) Drafts(ctx context.Context, jobID int64) ([]Stored, error) {
 				log.Printf("черновик %d: итог сверки не разобран: %v", id, err)
 			} else {
 				stored.Check = &check
+			}
+		}
+		if len(rawSiblings) > 0 {
+			var checks []SiblingCheck
+			if err := json.Unmarshal(rawSiblings, &checks); err != nil {
+				// И здесь роняется только сверка, а не черновик: задача
+				// написана и цела, а неразобранные итоги — это ровно
+				// «различающей сверки нет».
+				log.Printf("черновик %d: итоги различающей сверки не разобраны: %v", id, err)
+			} else {
+				stored.Siblings = &checks
 			}
 		}
 		out = append(out, stored)
