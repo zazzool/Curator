@@ -1,7 +1,8 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useState, type FormEvent } from 'react'
 
 import { ApiError, api } from './api'
-import type { Me, Source } from './api'
+import { Loaded, useResource } from './useResource'
+import type { Me } from './api'
 
 // Словари закрыты на сервере, и здесь они повторены списками выбора: поле,
 // куда можно вписать что угодно, отдало бы серверу значение, которое тот
@@ -58,24 +59,18 @@ export function SourceList({
   // рисуется.
   onOpen: (id: number, title: string) => void
 }) {
-  const [sources, setSources] = useState<Source[] | null>(null)
   const [failure, setFailure] = useState('')
   const [adding, setAdding] = useState(false)
   const [draft, setDraft] = useState(EMPTY)
 
   const canAccept = me.permissions.includes('source:accept')
 
-  async function reload() {
-    try {
-      setSources((await api.sources()).sources)
-    } catch (error) {
-      setFailure(error instanceof ApiError ? error.message : 'Список источников не прочитан')
-    }
-  }
-
-  useEffect(() => {
-    void reload()
-  }, [])
+  // Отказ чтения живёт в самом чтении, а не в общем `failure`: смешай их —
+  // и отказ заведения источника гасился бы удачным перечитыванием списка,
+  // которое идёт сразу за ним.
+  const read = useCallback(async () => (await api.sources()).sources, [])
+  const sources = useResource(read, 'Список источников не прочитан')
+  const reload = sources.reload
 
   async function create(event: FormEvent) {
     event.preventDefault()
@@ -217,9 +212,8 @@ export function SourceList({
       {failure && <p className="banner error">{failure}</p>}
 
       <div className="page-section">
-        {sources === null ? (
-          <p className="empty">Читаем список…</p>
-        ) : sources.length === 0 ? (
+        <Loaded from={sources} while="Читаем список…">
+        {(list) => list.length === 0 ? (
           // Пустая страница даёт выход с себя самой, как у донора: тот, кто
           // пришёл на пустой раздел, пришёл его наполнять, и отправлять его
           // глазами обратно к заголовку незачем. Когда форма уже открыта,
@@ -236,7 +230,7 @@ export function SourceList({
           </div>
         ) : (
           <div className="list">
-            {sources.map((source) => (
+            {list.map((source) => (
               <button
                 key={source.id}
                 className="list-row"
@@ -250,6 +244,7 @@ export function SourceList({
             ))}
           </div>
         )}
+        </Loaded>
       </div>
     </div>
   )

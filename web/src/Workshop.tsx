@@ -1,10 +1,11 @@
-import { Fragment, useCallback, useEffect, useState, type FormEvent } from 'react'
+import { Fragment, useCallback, useState, type FormEvent } from 'react'
 
 import { датой, датойИвременем } from './words'
 import { dropDraft, readDraft, writeDraft } from './draftStore'
 import { ПРАВА, праваСловами } from './permissions'
 import { ApiError, api } from './api'
-import type { AppKey, Me, Prompt, StudioUser } from './api'
+import { Loaded, useResource } from './useResource'
+import type { Me, Prompt, StudioUser } from './api'
 
 // Мастерская: пользователи студии, задания моделям и ключи программ.
 //
@@ -29,7 +30,7 @@ export function Workshop({ me }: { me: Me }) {
 // которой нет, не безопаснее ручки под правом: она выносит ту же власть в
 // ssh, где ни журнала, ни отказа за последнего мастера.
 function Users({ me }: { me: Me }) {
-  const [users, setUsers] = useState<StudioUser[] | null>(null)
+
   const [draft, setDraft] = useState<{ login: string; displayName: string; permissions: string[] }>(
     { login: '', displayName: '', permissions: [] },
   )
@@ -39,17 +40,12 @@ function Users({ me }: { me: Me }) {
 
   const canWorkshop = me.permissions.includes('workshop')
 
-  const reload = useCallback(async () => {
-    try {
-      setUsers((await api.users())?.users ?? [])
-    } catch (error) {
-      setFailure(error instanceof ApiError ? error.message : 'Пользователи не прочитаны')
-    }
-  }, [])
-
-  useEffect(() => {
-    void reload()
-  }, [reload])
+  // Отказ чтения живёт в самом чтении, а не в общем `failure`: смешай их —
+  // и отказ заведения входа гасился бы удачным перечитыванием списка,
+  // которое идёт сразу за ним.
+  const read = useCallback(async () => (await api.users())?.users ?? [], [])
+  const users = useResource(read, 'Пользователи не прочитаны')
+  const reload = users.reload
 
   async function create(event: FormEvent) {
     event.preventDefault()
@@ -117,9 +113,8 @@ function Users({ me }: { me: Me }) {
       )}
 
       <div className="page-section">
-        {users === null ? (
-          <p className="empty">Читаем…</p>
-        ) : (
+        <Loaded from={users}>
+        {(list) => (
           // Заведённые входы — однородные записи с одними и теми же
           // столбцами, и читают их сравнением: у кого какие права, кто
           // когда заведён. Карточка заставляет сличать это глазами по
@@ -137,7 +132,7 @@ function Users({ me }: { me: Me }) {
                 </tr>
               </thead>
               <tbody>
-                {users.map((user) => (
+                {list.map((user) => (
                   <Fragment key={user.login}>
                     <tr className={user.disabled ? 'faint' : undefined}>
                       <td>
@@ -190,6 +185,7 @@ function Users({ me }: { me: Me }) {
             </table>
           </div>
         )}
+        </Loaded>
       </div>
 
       {canWorkshop && (
@@ -252,7 +248,6 @@ function Users({ me }: { me: Me }) {
 
 // Задания моделям.
 function Prompts({ me }: { me: Me }) {
-  const [prompts, setPrompts] = useState<Prompt[] | null>(null)
   const [open, setOpen] = useState<string | null>(null)
   const [draft, setDraft] = useState({ name: '', systemMd: '', userMd: '', revision: 0 })
   /** Когда был записан восстановленный черновик; пустая строка — своего нет. */
@@ -263,17 +258,9 @@ function Prompts({ me }: { me: Me }) {
 
   const canEdit = me.permissions.includes('prompts')
 
-  const reload = useCallback(async () => {
-    try {
-      setPrompts((await api.prompts())?.prompts ?? [])
-    } catch (error) {
-      setFailure(error instanceof ApiError ? error.message : 'Задания моделей не прочитаны')
-    }
-  }, [])
-
-  useEffect(() => {
-    void reload()
-  }, [reload])
+  const read = useCallback(async () => (await api.prompts())?.prompts ?? [], [])
+  const prompts = useResource(read, 'Задания моделей не прочитаны')
+  const reload = prompts.reload
 
   type Набранное = { name: string; systemMd: string; userMd: string; revision: number }
 
@@ -360,13 +347,12 @@ function Prompts({ me }: { me: Me }) {
       {note && <p className="banner success">{note}</p>}
 
       <div className="page-section">
-        {prompts === null ? (
-          <p className="empty">Читаем…</p>
-        ) : prompts.length === 0 ? (
+        <Loaded from={prompts}>
+        {(list) => list.length === 0 ? (
           <p className="empty">Заданий нет: генерация не запустится.</p>
         ) : (
           <div className="list">
-            {prompts.map((prompt) => (
+            {list.map((prompt) => (
               <button
                 key={prompt.id}
                 className="list-row"
@@ -381,6 +367,7 @@ function Prompts({ me }: { me: Me }) {
             ))}
           </div>
         )}
+        </Loaded>
       </div>
 
       {open !== null && canEdit && (
@@ -430,7 +417,10 @@ function Prompts({ me }: { me: Me }) {
                   // Выбрасывать черновик — дело человека, а не студии:
                   // восстановленное он мог не узнать в лицо, и пути
                   // обратно к сохранённому без этой кнопки нет.
-                  const было = prompts?.find((one) => one.id === open)
+                  const было =
+                    prompts.state === 'ready'
+                      ? prompts.value.find((one) => one.id === open)
+                      : undefined
                   if (было) {
                     dropDraft(было.id)
                     setDraft({
@@ -458,24 +448,15 @@ function Prompts({ me }: { me: Me }) {
 
 // Ключи программ.
 function AppKeys({ me }: { me: Me }) {
-  const [keys, setKeys] = useState<AppKey[] | null>(null)
   const [draft, setDraft] = useState({ keyId: '', title: '' })
   const [issued, setIssued] = useState<{ keyId: string; key: string; note: string } | null>(null)
   const [failure, setFailure] = useState('')
 
   const canWorkshop = me.permissions.includes('workshop')
 
-  const reload = useCallback(async () => {
-    try {
-      setKeys((await api.appKeys())?.keys ?? [])
-    } catch (error) {
-      setFailure(error instanceof ApiError ? error.message : 'Ключи программ не прочитаны')
-    }
-  }, [])
-
-  useEffect(() => {
-    void reload()
-  }, [reload])
+  const read = useCallback(async () => (await api.appKeys())?.keys ?? [], [])
+  const keys = useResource(read, 'Ключи программ не прочитаны')
+  const reload = keys.reload
 
   async function issue(event: FormEvent) {
     event.preventDefault()
@@ -526,13 +507,12 @@ function AppKeys({ me }: { me: Me }) {
       )}
 
       <div className="page-section">
-        {keys === null ? (
-          <p className="empty">Читаем…</p>
-        ) : keys.length === 0 ? (
+        <Loaded from={keys}>
+        {(list) => list.length === 0 ? (
           <p className="empty">Ключей нет: ни одна сборка приложения к серверу не подключится.</p>
         ) : (
           <div className="list">
-            {keys.map((key) => (
+            {list.map((key) => (
               <div key={key.keyId} className="list-row">
                 <span>
                   <span className="mono">{key.keyId}</span> {key.title}
@@ -548,6 +528,7 @@ function AppKeys({ me }: { me: Me }) {
             ))}
           </div>
         )}
+        </Loaded>
       </div>
 
       {canWorkshop && (

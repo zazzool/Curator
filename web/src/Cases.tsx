@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 
 import { ApiError, api } from './api'
 import { dropDraft, readDraft, writeDraft } from './draftStore'
+import { Loaded, useResource } from './useResource'
 import type { Case, CaseBody, Fault, Me, Source } from './api'
 import { датойИвременем } from './words'
 
@@ -11,7 +12,6 @@ import { датойИвременем } from './words'
 // задача принадлежит единице источника, и список задач в отрыве от
 // источника пришлось бы читать по меткам, набранным руками.
 export function Cases({ me, source, path }: { me: Me; source: Source; path: string }) {
-  const [cases, setCases] = useState<Case[]>([])
   const [status, setStatus] = useState('')
   const [open, setOpen] = useState<Case | null>(null)
   const [failure, setFailure] = useState('')
@@ -21,21 +21,15 @@ export function Cases({ me, source, path }: { me: Me; source: Source; path: stri
 
   const canWrite = me.permissions.includes('case:write')
 
-  const reload = useCallback(async () => {
-    try {
-      const loaded = await api.cases({ source: source.id, path, status })
-      // Список без списка — пустой список, а не падение раздела: раздел,
-      // не сумевший прочитать своё, обязан молчать в своих границах, а не
-      // ронять белым весь экран источника.
-      setCases(loaded?.cases ?? [])
-    } catch (error) {
-      setFailure(error instanceof ApiError ? error.message : 'Задачи не прочитаны')
-    }
+  const read = useCallback(async () => {
+    const loaded = await api.cases({ source: source.id, path, status })
+    // Список без списка — пустой список, а не падение раздела: раздел,
+    // не сумевший прочитать своё, обязан молчать в своих границах, а не
+    // ронять белым весь экран источника.
+    return loaded?.cases ?? []
   }, [source.id, path, status])
-
-  useEffect(() => {
-    void reload()
-  }, [reload])
+  const cases = useResource(read, 'Задачи не прочитаны')
+  const reload = cases.reload
 
   // clear разводит два разных отказа: обычный и список замечаний. Смешай
   // их — и после неудачной публикации замечания висели бы поверх
@@ -114,7 +108,11 @@ export function Cases({ me, source, path }: { me: Me; source: Source; path: stri
         </p>
       )}
 
-      {cases.length === 0 ? (
+      {/* «Задач нет» — это ответ, и до ответа его писать нельзя: прежде
+          список заводился пустым, и первую секунду каждого открытия
+          составитель читал, что задач по источнику ещё нет. */}
+      <Loaded from={cases} while="Читаем задачи…">
+      {(list) => list.length === 0 ? (
         <p className="empty">
           {path
             ? 'Под этим путём задач нет. Проверьте метку — она пишется так же, как в документе.'
@@ -122,7 +120,7 @@ export function Cases({ me, source, path }: { me: Me; source: Source; path: stri
         </p>
       ) : (
         <div className="list">
-          {cases.map((one) => (
+          {list.map((one) => (
             <div key={one.id} className="list-row">
               <span>
                 <span className="mono">{one.unitLabel}</span> {one.body.title || 'без названия'}
@@ -143,6 +141,7 @@ export function Cases({ me, source, path }: { me: Me; source: Source; path: stri
           ))}
         </div>
       )}
+      </Loaded>
 
       {open && (
         <CaseCard

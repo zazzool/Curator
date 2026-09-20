@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react'
 
 import { счётом } from './words'
 import { ApiError, api } from './api'
-import type { Case, Me, Pack, PackContents, PackItem } from './api'
+import { Loaded, useResource } from './useResource'
+import type { Case, Me, PackItem } from './api'
 
 // Наборы задач: что собрано, из чего и что уехало на устройства.
 //
@@ -19,7 +20,6 @@ const STATUS: Record<string, string> = {
 }
 
 export function Packs({ me }: { me: Me }) {
-  const [packs, setPacks] = useState<Pack[] | null>(null)
   const [open, setOpen] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
   const [draft, setDraft] = useState({ slug: '', title: '', summaryMd: '' })
@@ -27,17 +27,12 @@ export function Packs({ me }: { me: Me }) {
 
   const canPack = me.permissions.includes('packs')
 
-  const reload = useCallback(async () => {
-    try {
-      setPacks((await api.packs())?.packs ?? [])
-    } catch (error) {
-      setFailure(error instanceof ApiError ? error.message : 'Наборы не прочитаны')
-    }
-  }, [])
-
-  useEffect(() => {
-    void reload()
-  }, [reload])
+  // Отказ чтения живёт в самом чтении, а не в общем `failure`: смешай их —
+  // и отказ заведения набора гасился бы удачным перечитыванием списка,
+  // которое идёт сразу за ним.
+  const read = useCallback(async () => (await api.packs())?.packs ?? [], [])
+  const packs = useResource(read, 'Наборы не прочитаны')
+  const reload = packs.reload
 
   async function create(event: FormEvent) {
     event.preventDefault()
@@ -132,9 +127,8 @@ export function Packs({ me }: { me: Me }) {
       {failure && <p className="banner error">{failure}</p>}
 
       <div className="page-section">
-        {packs === null ? (
-          <p className="empty">Читаем список…</p>
-        ) : packs.length === 0 ? (
+        <Loaded from={packs} while="Читаем список…">
+        {(list) => list.length === 0 ? (
           // Выход с пустой страницы — там же, где пустота объявлена
           // (донорская повадка): пришедший на пустой раздел пришёл его
           // наполнять.
@@ -153,7 +147,7 @@ export function Packs({ me }: { me: Me }) {
           </div>
         ) : (
           <div className="list">
-            {packs.map((pack) => (
+            {list.map((pack) => (
               <button key={pack.slug} className="list-row" onClick={() => setOpen(pack.slug)}>
                 <span>
                   {pack.title}
@@ -169,6 +163,7 @@ export function Packs({ me }: { me: Me }) {
             ))}
           </div>
         )}
+        </Loaded>
       </div>
     </div>
   )
@@ -176,7 +171,6 @@ export function Packs({ me }: { me: Me }) {
 
 // Карточка набора: состав, правка описания и выпуск.
 function PackCard({ me, slug, onBack }: { me: Me; slug: string; onBack: () => void }) {
-  const [pack, setPack] = useState<PackContents | null>(null)
   const [items, setItems] = useState<PackItem[]>([])
   const [card, setCard] = useState({ title: '', summaryMd: '', status: 'published' })
   const [failure, setFailure] = useState('')
@@ -186,20 +180,19 @@ function PackCard({ me, slug, onBack }: { me: Me; slug: string; onBack: () => vo
 
   const canPack = me.permissions.includes('packs')
 
-  const reload = useCallback(async () => {
-    try {
-      const loaded = await api.pack(slug)
-      setPack(loaded)
-      setItems(loaded.items)
-      setCard({ title: loaded.title, summaryMd: loaded.summaryMd, status: loaded.status })
-    } catch (error) {
-      setFailure(error instanceof ApiError ? error.message : 'Набор не прочитан')
-    }
-  }, [slug])
+  const read = useCallback(() => api.pack(slug), [slug])
+  const opened = useResource(read, 'Набор не прочитан')
+  const reload = opened.reload
+  const pack = opened.state === 'ready' ? opened.value : null
 
+  // Набранное составителем заводится с прочитанного и переписывается
+  // только НОВЫМ ответом сервера, а не каждой отрисовкой: иначе правка
+  // описания откатывалась бы на любое перечитывание.
   useEffect(() => {
-    void reload()
-  }, [reload])
+    if (pack === null) return
+    setItems(pack.items)
+    setCard({ title: pack.title, summaryMd: pack.summaryMd, status: pack.status })
+  }, [pack])
 
   // Состав на экране и состав в базе расходятся сразу, как только
   // составитель что-то переставил, и сказать ему об этом надо прямо:
@@ -275,7 +268,9 @@ function PackCard({ me, slug, onBack }: { me: Me; slug: string; onBack: () => vo
           <h2>Набор</h2>
           <button onClick={onBack}>К наборам</button>
         </div>
-        {failure ? <p className="banner error">{failure}</p> : <p className="empty">Читаем набор…</p>}
+        <Loaded from={opened} while="Читаем набор…">
+          {() => null}
+        </Loaded>
       </div>
     )
   }
@@ -431,28 +426,18 @@ function PackCard({ me, slug, onBack }: { me: Me; slug: string; onBack: () => vo
 // Показываются только раздаваемые: набор из черновиков соберётся, а врач
 // получит выпуск, половины которого нет ни в ленте, ни в повторении.
 function Picker({ chosen, onAdd }: { chosen: string[]; onAdd: (one: Case) => void }) {
-  const [found, setFound] = useState<Case[] | null>(null)
-  const [failure, setFailure] = useState('')
-
-  useEffect(() => {
-    async function load() {
-      try {
-        setFound((await api.cases({ status: 'published', limit: 200 }))?.cases ?? [])
-      } catch (error) {
-        setFailure(error instanceof ApiError ? error.message : 'Задачи не прочитаны')
-      }
-    }
-    void load()
-  }, [])
-
-  const free = (found ?? []).filter((one) => !chosen.includes(one.id))
+  const read = useCallback(
+    async () => (await api.cases({ status: 'published', limit: 200 }))?.cases ?? [],
+    [],
+  )
+  const found = useResource(read, 'Задачи не прочитаны')
 
   return (
     <div className="page-section">
-      {failure && <p className="banner error">{failure}</p>}
-      {found === null ? (
-        <p className="empty">Читаем задачи…</p>
-      ) : free.length === 0 ? (
+      <Loaded from={found} while="Читаем задачи…">
+      {(all) => {
+      const free = all.filter((one) => !chosen.includes(one.id))
+      return free.length === 0 ? (
         <p className="empty">
           Раздаваемых задач, которых ещё нет в наборе, не нашлось. Набор
           собирается из опубликованных: черновик не доедет ни до ленты, ни до
@@ -469,7 +454,9 @@ function Picker({ chosen, onAdd }: { chosen: string[]; onAdd: (one: Case) => voi
             </button>
           ))}
         </div>
-      )}
+      )
+      }}
+      </Loaded>
     </div>
   )
 }

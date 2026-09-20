@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 
 import { счётом } from './words'
-import { ApiError, api } from './api'
-import type { CaseStats, EventCount, Me } from './api'
+import { api } from './api'
+import { Loaded, useResource } from './useResource'
+import type { CaseStats, Me } from './api'
 
 // Отчёты: как разбирают задачи и что делают в приложении.
 //
@@ -16,34 +17,24 @@ import type { CaseStats, EventCount, Me } from './api'
 // крайности и тонут.
 
 export function Reports({ me }: { me: Me }) {
-  const [floor, setFloor] = useState(0)
-  const [easy, setEasy] = useState<CaseStats[]>([])
-  const [hard, setHard] = useState<CaseStats[]>([])
-  const [events, setEvents] = useState<EventCount[] | null>(null)
   const [days, setDays] = useState(7)
-  const [failure, setFailure] = useState('')
-  const [read, setRead] = useState(false)
 
   const canRead = me.permissions.includes('analytics')
 
-  const reload = useCallback(async () => {
-    setFailure('')
-    try {
-      const cases = await api.reportCases()
-      setFloor(cases?.floor ?? 0)
-      setEasy(cases?.easy ?? [])
-      setHard(cases?.hard ?? [])
-      const funnel = await api.reportEvents(days)
-      setEvents(funnel?.events ?? [])
-      setRead(true)
-    } catch (error) {
-      setFailure(error instanceof ApiError ? error.message : 'Отчёты не построены')
+  // Оба отчёта одним чтением: порознь они дали бы две полосы отказа на
+  // одном экране, а составителю и одной достаточно, чтобы понять, что
+  // отчётов сегодня не будет.
+  const read = useCallback(async () => {
+    const cases = await api.reportCases()
+    const funnel = await api.reportEvents(days)
+    return {
+      floor: cases?.floor ?? 0,
+      easy: cases?.easy ?? [],
+      hard: cases?.hard ?? [],
+      events: funnel?.events ?? [],
     }
   }, [days])
-
-  useEffect(() => {
-    void reload()
-  }, [reload])
+  const report = useResource(read, 'Отчёты не построены')
 
   return (
     <div>
@@ -53,63 +44,71 @@ export function Reports({ me }: { me: Me }) {
       {!canRead && (
         <p className="hint">Отчёты читает тот, кому выдано право «отчёты».</p>
       )}
-      {failure && <p className="banner error">{failure}</p>}
 
-      <div className="page-section">
-        <h3>Крайние задачи</h3>
-        <p className="hint">
-          Задачи, которые разбирают все подряд, и те, которых не разбирает
-          никто. Доле верят начиная с {счётом(floor, 'попытки', 'попыток', 'попыток')}:
-          три попытки — это не приговор задаче, а три человека.
-        </p>
+      <Loaded from={report} while="Строим отчёты…">
+        {({ floor, easy, hard, events }) => (
+          <>
+            <div className="page-section">
+              <h3>Крайние задачи</h3>
+              <p className="hint">
+                Задачи, которые разбирают все подряд, и те, которых не разбирает
+                никто. Доле верят начиная с{' '}
+                {счётом(floor, 'попытки', 'попыток', 'попыток')}: три попытки —
+                это не приговор задаче, а три человека.
+              </p>
 
-        <h4 className="group-title">Слишком лёгкие</h4>
-        <StatsList list={easy} empty="Слишком лёгких задач нет." />
+              <h4 className="group-title">Слишком лёгкие</h4>
+              <StatsList list={easy} empty="Слишком лёгких задач нет." />
 
-        <h4 className="group-title">Почти неразрешимые</h4>
-        <StatsList
-          list={hard}
-          empty="Неразрешимых задач нет."
-          hint="Сначала проверьте разметку: задача, у которой верным помечен не тот вариант, выглядит ровно так."
-        />
-      </div>
+              <h4 className="group-title">Почти неразрешимые</h4>
+              <StatsList
+                list={hard}
+                empty="Неразрешимых задач нет."
+                hint="Сначала проверьте разметку: задача, у которой верным помечен не тот вариант, выглядит ровно так."
+              />
+            </div>
 
-      <div className="page-section">
-        <h3>Что делают в приложении</h3>
-        <div className="form-actions">
-          {[7, 30, 90].map((n) => (
-            <button
-              key={n}
-              className={n === days ? 'tab tab-here' : 'tab'}
-              onClick={() => setDays(n)}
-            >
-              {счётом(n, 'день', 'дня', 'дней')}
-            </button>
-          ))}
-        </div>
-        {events === null ? (
-          <p className="empty">Читаем…</p>
-        ) : events.length === 0 ? (
-          <p className="empty">
-            {read
-              ? 'За этот срок событий нет: либо приложением ещё никто не пользовался, либо телеметрия до сервера не доезжает.'
-              : 'Читаем…'}
-          </p>
-        ) : (
-          <div className="list">
-            {events.map((one) => (
-              <div key={one.name} className="list-row">
-                <span>{one.title || one.name}</span>
-                <span className="muted">
-                  {/* Голое число слева нечитаемо: «4 · 4 врача» не
-                      говорит, что первое — это разы, а не что-то ещё. */}
-                  {one.count} всего · {счётом(one.accounts, 'врач', 'врача', 'врачей')}
-                </span>
+            <div className="page-section">
+              <h3>Что делают в приложении</h3>
+              <div className="form-actions">
+                {[7, 30, 90].map((n) => (
+                  <button
+                    key={n}
+                    className={n === days ? 'tab tab-here' : 'tab'}
+                    onClick={() => setDays(n)}
+                  >
+                    {счётом(n, 'день', 'дня', 'дней')}
+                  </button>
+                ))}
               </div>
-            ))}
-          </div>
+              {/* Пустой список здесь — это ответ, а не ожидание: прежде
+                  экран говорил «Читаем…» и тогда, когда прочитал, и
+                  тогда, когда читать не смог. Теперь «читаем» живёт
+                  снаружи, и пусто здесь значит ровно пусто. */}
+              {events.length === 0 ? (
+                <p className="empty">
+                  За этот срок событий нет: либо приложением ещё никто не
+                  пользовался, либо телеметрия до сервера не доезжает.
+                </p>
+              ) : (
+                <div className="list">
+                  {events.map((one) => (
+                    <div key={one.name} className="list-row">
+                      <span>{one.title || one.name}</span>
+                      <span className="muted">
+                        {/* Голое число слева нечитаемо: «4 · 4 врача» не
+                            говорит, что первое — это разы, а не что-то ещё. */}
+                        {one.count} всего ·{' '}
+                        {счётом(one.accounts, 'врач', 'врача', 'врачей')}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
         )}
-      </div>
+      </Loaded>
     </div>
   )
 }
