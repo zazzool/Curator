@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -169,21 +170,45 @@ func TestPgПравилоСоставителяДействуетСразуИН�
 func TestPgИсточникПравилаНеНазываетсяИзвне(t *testing.T) {
 	// Назови правило «встроенным» — и оно получило бы чужое старшинство
 	// при споре правил, то есть выиграло бы у написанного другим
-	// составителем.
+	// составителем. Опознаватель «builtin:show-dont-name» сделал бы то же
+	// грубее: правило встало бы на место встроенного.
+	//
+	// Дверей тут две, и проверяются обе. Прежде здесь проверялась одна, и
+	// не та: запрос с лишними полями до присваивания не доезжает вовсе, а
+	// проверка читала источник из тела ОТКАЗА и видела там пустоту.
 	srv, token, _ := newDesk(t, studio.PermPrompts)
 
-	_, body := call(t, srv, token, "POST", "/admin/api/rules", map[string]any{
+	// Первая дверь — разбор тела. Лишнее поле редакционному API отказ, а
+	// не тихо отброшенное поле: отброшенное молча, оно вернуло бы
+	// пославшему успех на запрос, который сервер исполнил не так.
+	status, _ := call(t, srv, token, "POST", "/admin/api/rules", map[string]any{
 		"title":  "Правило с чужим старшинством",
 		"text":   "Текст этого правила ничем не примечателен.",
 		"kind":   string(KindStructure),
 		"source": string(Builtin),
 		"id":     "builtin:show-dont-name",
 	})
-	if body["source"] != string(FromCurator) {
-		t.Fatalf("источник назван извне: %v", body["source"])
+	if status != http.StatusBadRequest {
+		t.Fatalf("источник и опознаватель приняты извне: %d", status)
 	}
-	if body["id"] == "builtin:show-dont-name" {
-		t.Fatal("правило встало на место встроенного")
+
+	// Вторая — само заведение. Исправный запрос источника не называет
+	// вовсе, и ставит его сервер; опознаватель он даёт свой, с приставкой
+	// составителя, и встать на место встроенного правила таким нельзя.
+	status, body := call(t, srv, token, "POST", "/admin/api/rules", ruleRequest{
+		Title: "Правило без чужого старшинства",
+		Text:  "Текст этого правила ничем не примечателен.",
+		Kind:  string(KindStructure),
+	})
+	if status != http.StatusOK {
+		t.Fatalf("правило не записалось: %d %v", status, body)
+	}
+	if body["source"] != string(FromCurator) {
+		t.Fatalf("источник правила «%v» вместо составителя", body["source"])
+	}
+	id, _ := body["id"].(string)
+	if !strings.HasPrefix(id, "curator:") {
+		t.Fatalf("опознаватель «%s» дан не сервером", id)
 	}
 }
 
