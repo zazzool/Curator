@@ -49,7 +49,7 @@ describe('адреса студии', () => {
   })
 
   it('адрес складывается обратно из разобранного', () => {
-    for (const path of ['/sources', '/sources/12', '/packs', '/sales', '/reports', '/workshop']) {
+    for (const path of ['/sources', '/sources/12', '/packs', '/sales', '/audiences', '/reports', '/workshop']) {
       expect(routePath(readRoute(path))).toBe(path)
     }
   })
