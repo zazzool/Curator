@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { Generate } from './Generate'
-import type { Check, Draft, Job, Me, Source, Unit } from './api'
+import type { Check, Draft, Job, Me, SiblingCheck, Source, Unit } from './api'
 
 const SOURCE: Source = {
   id: 1,
@@ -380,6 +380,100 @@ describe('слепая сверка и повтор', () => {
     fireEvent.click(await screen.findByText('Открыть'))
 
     expect(await screen.findByText(/задачу не проверял никто/)).toBeTruthy()
+  })
+
+  /** То же задание, но со своими итогами различающей сверки. */
+  function сСоседями(siblings?: SiblingCheck[]) {
+    const draft = siblings === undefined ? ЧЕРНОВИК : { ...ЧЕРНОВИК, siblings }
+    return {
+      ...ОБЫЧНО,
+      '/admin/api/sources/1/jobs': { jobs: [job({ status: 'done' })] },
+      '/admin/api/jobs/7': job({ status: 'done', drafts: [draft] }),
+    }
+  }
+
+  it('подтвердившийся сосед показан тревогой, а не подсказкой', async () => {
+    // Слепая сверка тут СОШЛАСЬ — и этого мало: условие подтверждает и
+    // соседа, то есть решивший задачу правильно получит «неверно».
+    // Покажи мы это тихой строкой, составитель принял бы задачу, глядя
+    // на зелёную слепую сверку.
+    serve(
+      сСоседями([
+        {
+          label: '3.2',
+          title: 'Отказ',
+          confirms: true,
+          check: { done: true, verdict: { answer: 'confirms', why: 'и там срок', sure: true, agrees: false } },
+          remark: 'условие подтверждает и «3.2 (Отказ)» — у задачи выходит второй верный ответ: и там срок',
+        },
+      ]),
+    )
+    render(<Generate me={СОСТАВИТЕЛЬ} source={1} />)
+    fireEvent.click(await screen.findByText('Открыть'))
+
+    const тревога = await screen.findByText(/второй верный ответ/)
+    expect(тревога.getAttribute('role')).toBe('alert')
+    expect(тревога.textContent).toMatch(/3\.2 \(Отказ\)/)
+  })
+
+  it('несверенный вариант говорит о себе, а не молчит', async () => {
+    // Молчание составитель примет за «соседи чисты» и отпустит задачу
+    // врачу непроверенной — та же ошибка, что и у несостоявшейся слепой
+    // сверки, и ровно так же дорого стоящая.
+    serve(
+      сСоседями([
+        {
+          label: '3.2',
+          title: 'Отказ',
+          confirms: false,
+          check: { done: false, note: 'у единицы нет положений — сверить не с чем' },
+          remark: 'вариант «3.2 (Отказ)» не сверен: у единицы нет положений — сверить не с чем',
+        },
+      ]),
+    )
+    render(<Generate me={СОСТАВИТЕЛЬ} source={1} />)
+    fireEvent.click(await screen.findByText('Открыть'))
+
+    const сказано = await screen.findByText(/не сверен/)
+    expect(сказано.textContent).toMatch(/нет положений/)
+    // Тревога у непроверенного приучает не верить тревоге: здесь
+    // предупреждение, и оно не перебивает диктора.
+    expect(сказано.getAttribute('role')).toBe('status')
+  })
+
+  it('чистый круг не выглядит тревогой', async () => {
+    serve(
+      сСоседями([
+        {
+          label: '3.2',
+          title: 'Отказ',
+          confirms: false,
+          check: { done: true, verdict: { answer: 'contradicts', why: 'о сроке не говорит', sure: true, agrees: false } },
+        },
+      ]),
+    )
+    render(<Generate me={СОСТАВИТЕЛЬ} source={1} />)
+    fireEvent.click(await screen.findByText('Открыть'))
+
+    expect(await screen.findByText(/ни один неверный вариант условие не подтверждает/)).toBeTruthy()
+    expect(screen.queryByText(/второй верный ответ/)).toBeNull()
+  })
+
+  it('отсутствие сверки и пустая сверка сказаны разными словами', async () => {
+    // Поля нет вовсе — на второй верный ответ задачу не смотрел никто;
+    // пустой список — смотреть было не на что. Слей их в одно, и первое
+    // читалось бы как второе, то есть непроверенное как проверенное.
+    serve(сСоседями())
+    const { unmount } = render(<Generate me={СОСТАВИТЕЛЬ} source={1} />)
+    fireEvent.click(await screen.findByText('Открыть'))
+    expect(await screen.findByText(/не смотрел никто/)).toBeTruthy()
+    unmount()
+
+    serve(сСоседями([]))
+    render(<Generate me={СОСТАВИТЕЛЬ} source={1} />)
+    fireEvent.click(await screen.findByText('Открыть'))
+    expect(await screen.findByText(/нечего было смотреть/)).toBeTruthy()
+    expect(screen.queryByText(/не смотрел никто/)).toBeNull()
   })
 
   it('отказавшее задание можно повторить', async () => {

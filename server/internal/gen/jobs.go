@@ -535,7 +535,18 @@ func (j *Jobs) SaveSiblingChecks(ctx context.Context, draftID int64, checks []Si
 	if checks == nil {
 		checks = []SiblingCheck{}
 	}
-	body, err := json.Marshal(checks)
+	// Слова составителю не хранятся, а считаются при чтении: перепиши мы
+	// формулировку замечания, и записанные прежде черновики остались бы со
+	// старой — то есть два места для одних слов, расходящихся молча.
+	// Чистится здесь, а не у вызывающего: записать сюда можно и то, что
+	// только что прочитали (повтор задания), и тогда слова приехали бы
+	// обратно в базу сами собой.
+	plain := make([]SiblingCheck, len(checks))
+	for i, c := range checks {
+		c.Remark = ""
+		plain[i] = c
+	}
+	body, err := json.Marshal(plain)
 	if err != nil {
 		return fmt.Errorf("итоги различающей сверки не записаны: %w", err)
 	}
@@ -601,6 +612,9 @@ func (j *Jobs) Drafts(ctx context.Context, jobID int64) ([]Stored, error) {
 				// «различающей сверки нет».
 				log.Printf("черновик %d: итоги различающей сверки не разобраны: %v", id, err)
 			} else {
+				for i := range checks {
+					checks[i].Remark = checks[i].Note()
+				}
 				stored.Siblings = &checks
 			}
 		}

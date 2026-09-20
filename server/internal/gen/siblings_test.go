@@ -284,3 +284,59 @@ func TestPgРазличающаяСверкаВидитТолькоСвоего�
 		}
 	}
 }
+
+func TestPgЗамечаниеСчитаетсяПриЧтенииИНеХранится(t *testing.T) {
+	// Слова составителю живут в одном месте — в Note(). Запишись они в
+	// базу, и правка формулировки не достала бы черновиков, записанных
+	// вчера: составитель читал бы про один порок задачи, а сверка нашла бы
+	// другой.
+	ctx := context.Background()
+	gate := testGate(t)
+	sourceID := источник(t, gate)
+	order := Order{SourceID: sourceID, UnitLabel: "3.1"}
+	plan, err := NewResolver(gate).Resolve(ctx, order)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs := NewJobs(gate)
+	job, err := jobs.Place(ctx, order, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	draftID, err := jobs.SaveDraft(ctx, job, черновик())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Слово приходит вместе с итогами — так их отдаёт чтение, и так их
+	// вернёт повтор задания.
+	if err := jobs.SaveSiblingChecks(ctx, draftID, []SiblingCheck{{
+		Label: "3.2", Title: "Отказ",
+		Check:    Check{Done: true, Verdict: &Verdict{Answer: verdictConfirms, Why: "и там срок"}},
+		Confirms: true,
+		Remark:   "слово из прошлой выкатки",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	var raw string
+	if err := gate.QueryRow(ctx,
+		`SELECT sibling_checks::text FROM case_drafts WHERE id = $1`, draftID).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(raw, "слово из прошлой выкатки") {
+		t.Fatalf("слова составителю осели в базе:\n%s", raw)
+	}
+
+	drafts, err := jobs.Drafts(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if drafts[0].Siblings == nil || len(*drafts[0].Siblings) != 1 {
+		t.Fatalf("итоги не прочитались: %+v", drafts[0].Siblings)
+	}
+	remark := (*drafts[0].Siblings)[0].Remark
+	if !strings.Contains(remark, "второй верный ответ") || !strings.Contains(remark, "3.2 (Отказ)") {
+		t.Fatalf("замечание не посчиталось при чтении: %q", remark)
+	}
+}
