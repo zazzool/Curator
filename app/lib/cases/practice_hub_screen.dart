@@ -66,14 +66,34 @@ class _PracticeHubScreenState extends State<PracticeHubScreen> {
     setState(() => _reading = true);
     final scope = AppScope.of(context);
 
-    var onDevice = 0;
-    for (final slug in await scope.packs.installed()) {
-      onDevice += (await scope.packs.have(slug)).length;
+    // Числа считаются с устройства, а устройство отказывает: диск
+    // переполнен, файл набора испорчен, база не открылась. Ловился здесь
+    // только отказ сети, и любой другой уходил необработанным — признак
+    // чтения оставался поднятым, и отметка над плитками крутилась вечно,
+    // не говоря врачу ничего.
+    //
+    // Непосчитанное остаётся непосчитанным (`null`), а не подменяется
+    // нулём: «0 задач на устройстве» врач принимает за правду и идёт
+    // качать набор, который у него уже стоит.
+    int? onDevice;
+    try {
+      var count = 0;
+      for (final slug in await scope.packs.installed()) {
+        count += (await scope.packs.have(slug)).length;
+      }
+      onDevice = count;
+    } catch (error) {
+      debugPrint('наборы на устройстве не сосчитались: $error');
     }
     final schedule = scope.schedule;
-    final due = schedule == null
-        ? null
-        : (await schedule.due(DateTime.now(), limit: 1000)).length;
+    int? due;
+    try {
+      due = schedule == null
+          ? null
+          : (await schedule.due(DateTime.now(), limit: 1000)).length;
+    } catch (error) {
+      debugPrint('повторение с устройства не прочлось: $error');
+    }
 
     var catalog = const <ShelfPack>[];
     try {
@@ -81,6 +101,11 @@ class _PracticeHubScreenState extends State<PracticeHubScreen> {
     } on ApiFailure {
       // Молча: витрина — не то, ради чего сюда пришли, и отказ сети
       // здесь не новость, а обычное состояние в метро.
+    } catch (error) {
+      // Витрина смотрит и на устройство — что уже установлено, — и его
+      // отказ сюда доходит тоже. Молча по той же причине, но в журнал
+      // пишется: молчание не должно становиться незнанием.
+      debugPrint('витрина не прочлась: $error');
     }
 
     if (!mounted) return;

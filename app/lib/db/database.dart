@@ -40,7 +40,33 @@
 /// что выглядит всё одинаково зелёным.
 library;
 
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
+
+/// База на устройстве новее приложения.
+///
+/// Своим родом, а не `StateError` с текстом: отличать этот случай от
+/// испорченного файла приходится в подъёме приложения, и отличать его
+/// разбором сообщения — значит сломать различение первой же правкой
+/// текста. Разница тут дорогая: испорченный файл незачем беречь, а этот
+/// — это данные врача, положенные более новой сборкой, и поэтапная
+/// выкладка вернёт ему её через день-другой.
+class LocalDatabaseTooNew implements Exception {
+  const LocalDatabaseTooNew(this.have, this.want);
+
+  /// Версия схемы, лежащая на устройстве.
+  final int have;
+
+  /// Версия схемы, которую знает эта сборка.
+  final int want;
+
+  @override
+  String toString() =>
+      'база устройства новее приложения ($have против $want): '
+      'обновите приложение';
+}
 
 /// Шаги наката. Порядок — это и есть версия базы.
 ///
@@ -190,10 +216,7 @@ Future<Database> openLocalDatabase({
       // выкладки, либо чужой файл. Ни в том, ни в другом случае трогать
       // данные нельзя, и отказ здесь честнее молчаливой порчи.
       onDowngrade: (db, from, to) async {
-        throw StateError(
-          'база устройства новее приложения ($from против $to): '
-          'обновите приложение',
-        );
+        throw LocalDatabaseTooNew(from, to);
       },
     ),
   );
@@ -203,4 +226,79 @@ Future<void> _grow(Database db, int from, int to) async {
   for (var step = from; step < to && step < migrations.length; step++) {
     await db.execute(migrations[step]);
   }
+}
+
+/// Открывает базу, а испорченный файл отводит в сторону и пробует снова.
+///
+/// # Зачем
+///
+/// База не открывается по двум разным причинам, и лечатся они
+/// противоположно. Файл, положенный более новой сборкой, трогать нельзя:
+/// это прогресс врача, и поэтапная выкладка вернёт ему новую сборку сама.
+/// А испорченный файл не станет целым ни от перезапуска, ни от ожидания —
+/// пока он лежит, повторение без сети и справочник не работают вовсе, и
+/// врач об этом даже не узнает: приложение поднимается молча.
+///
+/// # Почему в сторону, а не насовсем
+///
+/// Переименование, а не удаление: «испорчена» — это наше суждение по
+/// словам SQLite, и ошибись мы, удалёнными окажутся месяцы занятий.
+/// Имя у отведённого файла одно и то же: копии с отметками времени
+/// копились бы на устройстве, и последней бедой врача стало бы место.
+///
+/// Спутники `-wal` и `-shm` убираются вместе с файлом: без своей базы они
+/// бессмысленны, а оставь их рядом — новая база подхватила бы чужой
+/// журнал и испортилась бы следом.
+Future<Database> openLocalDatabaseRecovering({
+  DatabaseFactory? factory,
+  String path = 'curator.db',
+}) async {
+  final open = factory ?? databaseFactory;
+  try {
+    return await openLocalDatabase(factory: open, path: path);
+  } catch (error) {
+    if (!looksCorrupt(error)) rethrow;
+    debugPrint('база устройства испорчена, отводим в сторону: $error');
+    await _setAside(open, path);
+    return openLocalDatabase(factory: open, path: path);
+  }
+}
+
+/// Испорчен ли файл базы — по словам самой SQLite.
+///
+/// Узнаётся положительно, по названным словам отказа, а не как «всё
+/// остальное». Отвести в сторону можно только то, что уже негодно: отказ
+/// бывает и «нет места», и «файл занят», и база при этом цела — а
+/// отведённая в сторону целая база это стёртый прогресс.
+bool looksCorrupt(Object error) {
+  final said = error.toString().toLowerCase();
+  // «не база», а не «file is not a database» целиком: у разных выпусков
+  // SQLite этот отказ звучит ещё и как «file is encrypted or is not a
+  // database», и точное совпадение пропустило бы половину случаев.
+  return said.contains('not a database') ||
+      said.contains('database disk image is malformed') ||
+      said.contains('sqlite_corrupt') ||
+      said.contains('sqlite_notadb');
+}
+
+Future<void> _setAside(DatabaseFactory open, String path) async {
+  final full = await _fullPath(open, path);
+  final file = File(full);
+  if (await file.exists()) await file.rename('$full.broken');
+  for (final tail in const ['-wal', '-shm']) {
+    final spare = File('$full$tail');
+    if (await spare.exists()) await spare.delete();
+  }
+}
+
+/// Полный путь к файлу базы.
+///
+/// Разделитель один, и это не упущение: приложение выкладывается под
+/// Android, а проверки идут на Linux. Появится вторая платформа — сюда же
+/// приедет и её разделитель, а тянуть ради одной строки ещё одну
+/// зависимость незачем.
+Future<String> _fullPath(DatabaseFactory open, String path) async {
+  if (path.startsWith('/')) return path;
+  final dir = await open.getDatabasesPath();
+  return dir.endsWith('/') ? '$dir$path' : '$dir/$path';
 }

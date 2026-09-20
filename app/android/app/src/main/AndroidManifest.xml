@@ -4,9 +4,18 @@
          не запасной режим, а обычный. -->
     <uses-permission android:name="android.permission.INTERNET"/>
 
+    <!-- Копии выключены: токен устройства сервер выдаёт один раз, и
+         уехавшая копия означает одну учётную запись на двух устройствах.
+         Вместе с токеном уезжала бы и местная база — а восстановленная
+         база, оказавшаяся новее приложения, не открывается вовсе.
+         Android считает android:allowBackup истинным по умолчанию, то
+         есть молчание здесь было согласием. Разбор — в
+         res/xml/data_extraction_rules.xml. -->
     <application
         android:label="Куратор"
         android:name="${applicationName}"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"

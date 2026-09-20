@@ -77,6 +77,17 @@ class _ShelfScreenState extends State<ShelfScreen> {
         _failure = failure.message;
         _loading = false;
       });
+    } catch (error) {
+      // Витрина читает и устройство: какие наборы уже лежат. Отказ файлов
+      // ловился здесь только у сети, а любой другой уходил необработанным
+      // — и отметка «витрина читается» оставалась на экране навсегда,
+      // потому что признак чтения никто не опускал.
+      debugPrint('витрина не прочлась: $error');
+      if (!mounted) return;
+      setState(() {
+        _failure = 'Не вышло прочитать наборы на устройстве';
+        _loading = false;
+      });
     }
   }
 
@@ -109,6 +120,14 @@ class _ShelfScreenState extends State<ShelfScreen> {
       failed = failure.message;
     } on ContentFailure catch (failure) {
       failed = failure.message;
+    } catch (error) {
+      // Закачка пишет набор на устройство, а место на нём кончается.
+      // Необработанный отказ записи оставлял набор в состоянии «качается»
+      // до перезапуска, и врач ждал закачки, которой уже не было.
+      debugPrint('набор не записался на устройство: $error');
+      failed =
+          'Не вышло записать набор на устройство. '
+          'Проверьте, есть ли на нём место';
     } finally {
       if (mounted) setState(() => _busy = null);
     }
@@ -120,8 +139,17 @@ class _ShelfScreenState extends State<ShelfScreen> {
   }
 
   Future<void> _remove(ShelfPack pack) async {
-    await widget.store.remove(pack.slug);
+    String? failed;
+    try {
+      await widget.store.remove(pack.slug);
+    } catch (error) {
+      debugPrint('набор не убрался с устройства: $error');
+      failed = 'Не вышло убрать «${pack.title}» с устройства';
+    }
     await _load();
+    if (failed != null && mounted) {
+      setState(() => _failure = failed);
+    }
   }
 
   @override

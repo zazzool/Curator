@@ -144,6 +144,33 @@ void main() {
     expect(find.textContaining('их не отбирают'), findsOneWidget);
   });
 
+  testWidgets('на отозванном токене экран даёт вернуть запись', (
+    tester,
+  ) async {
+    // Экран, на который врача ведёт отказ «устройство не опознано», сам
+    // читает запись — и сам получает тот же отказ. Прежде он кончался на
+    // «Ещё раз», которое давало ровно то же: возврат по почте жил НИЖЕ
+    // отказа и потому не рисовался вовсе. Единственный выход был закрыт
+    // ровно тем случаем, ради которого заведён.
+    await openScreen(
+      tester,
+      StubAccount(
+        profileOf(),
+        failure: ApiFailure(
+          'Устройство не опознано',
+          status: 401,
+          lostDevice: true,
+        ),
+      ),
+    );
+
+    expect(find.text('Устройство не опознано'), findsOneWidget);
+    expect(find.textContaining('прежней записи'), findsOneWidget);
+    expect(find.text('Прислать код'), findsOneWidget);
+    // Привязки здесь нет: она идёт запросом с токеном и отказала бы.
+    expect(find.textContaining('при смене телефона'), findsNothing);
+  });
+
   testWidgets('непоказанные права названы числом', (tester) async {
     // Молча выброшенное право выглядит как «у вас его и не было».
     await openScreen(tester, StubAccount(profileOf(dropped: 2)));

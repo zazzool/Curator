@@ -144,6 +144,33 @@ class _AccountScreenState extends State<AccountScreen> {
 
     final failure = _failure;
     if (failure != null) {
+      // Отозванный токен — это не «не загрузилось», и «Ещё раз» на нём
+      // означает тот же отказ. Прежде экран на этом и кончался: врач
+      // упирался в тупик, а возврат по почте жил НИЖЕ отказа и потому не
+      // рисовался вовсе — то есть единственный выход был закрыт ровно
+      // тем случаем, ради которого он заведён.
+      if (failure.lostDevice) {
+        return ListView(
+          padding: const EdgeInsets.only(bottom: Gap.xxl),
+          children: [
+            EmptyState(
+              icon: const Icon(Icons.no_accounts_outlined),
+              title: 'Устройство не опознано',
+              description: failure.message,
+            ),
+            EmailCard(
+              account: widget.account,
+              email: '',
+              recoveryOnly: true,
+              // Привязывать нечего: записи на руках нет. Сюда мы не
+              // попадём, но довод оставлен — перечитать после возврата
+              // всё равно надо, и делает это `_recovered`.
+              onBound: (_) => _load(),
+              onRecovered: _recovered,
+            ),
+          ],
+        );
+      }
       return EmptyState(
         icon: const Icon(Icons.cloud_off_outlined),
         title: 'Запись не загрузилась',
