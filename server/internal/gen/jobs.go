@@ -561,6 +561,28 @@ func (j *Jobs) SaveSiblingChecks(ctx context.Context, draftID int64, checks []Si
 	return nil
 }
 
+// SaveProofread записывает итог вычитки в черновик.
+//
+// Слова составителю (Remark) чистятся перед записью по тому же доводу,
+// что у SaveSiblingChecks: считаются они при чтении, и записанные в базу
+// пережили бы правку формулировки.
+func (j *Jobs) SaveProofread(ctx context.Context, draftID int64, report Proofread) error {
+	report.Remark = ""
+	body, err := json.Marshal(report)
+	if err != nil {
+		return fmt.Errorf("итог вычитки не записан: %w", err)
+	}
+	res, err := j.gate.Exec(ctx,
+		`UPDATE case_drafts SET proofread = $2 WHERE id = $1`, draftID, body)
+	if err != nil {
+		return fmt.Errorf("итог вычитки не сохранён: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("черновик %d не найден: итог вычитки не сохранён", draftID)
+	}
+	return nil
+}
+
 // Drafts — черновики, написанные по заданию.
 //
 // Списком, а не одним: перегенерация пишет второй черновик по тому же
@@ -568,7 +590,7 @@ func (j *Jobs) SaveSiblingChecks(ctx context.Context, draftID int64, checks []Si
 // а затёртый черновик сравнить не с чем.
 func (j *Jobs) Drafts(ctx context.Context, jobID int64) ([]Stored, error) {
 	rows, err := j.gate.Query(ctx,
-		`SELECT id, body, blind_check, sibling_checks
+		`SELECT id, body, blind_check, sibling_checks, proofread
 		   FROM case_drafts WHERE job_id = $1 ORDER BY id`, jobID)
 	if err != nil {
 		return nil, fmt.Errorf("черновики задания %d не прочитаны: %w", jobID, err)
@@ -578,8 +600,8 @@ func (j *Jobs) Drafts(ctx context.Context, jobID int64) ([]Stored, error) {
 	out := []Stored{}
 	for rows.Next() {
 		var id int64
-		var raw, rawCheck, rawSiblings []byte
-		if err := rows.Scan(&id, &raw, &rawCheck, &rawSiblings); err != nil {
+		var raw, rawCheck, rawSiblings, rawProofread []byte
+		if err := rows.Scan(&id, &raw, &rawCheck, &rawSiblings, &rawProofread); err != nil {
 			return nil, fmt.Errorf("строка черновика не разобрана: %w", err)
 		}
 		var draft Draft
@@ -616,6 +638,16 @@ func (j *Jobs) Drafts(ctx context.Context, jobID int64) ([]Stored, error) {
 					checks[i].Remark = checks[i].Note()
 				}
 				stored.Siblings = &checks
+			}
+		}
+		if len(rawProofread) > 0 {
+			var report Proofread
+			if err := json.Unmarshal(rawProofread, &report); err != nil {
+				// И здесь роняется только пометка, а не черновик.
+				log.Printf("черновик %d: итог вычитки не разобран: %v", id, err)
+			} else {
+				report.Remark = report.Remarks()
+				stored.Proofread = &report
 			}
 		}
 		out = append(out, stored)

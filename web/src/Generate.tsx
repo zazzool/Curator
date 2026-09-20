@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError, api } from './api'
 import { Loaded, useResource } from './useResource'
 import { go } from './router'
-import type { Check, Draft, Job, Me, SiblingCheck, Source, Unit } from './api'
+import type { Check, Draft, Job, Me, Proofread, SiblingCheck, Source, Unit } from './api'
 import { Banner } from './components/Banner'
 
 /**
@@ -414,6 +414,7 @@ function JobCard({ me, job, onClose }: { me: Me; job: Job; onClose: () => void }
             <p className="hint">{draft.explanationMd}</p>
             <CheckNote check={draft.check} />
             <SiblingNote siblings={draft.siblings} />
+            <ProofreadNote proofread={draft.proofread} />
             {accepted[draft.id] ? (
               // Выход к заведённой задаче даётся здесь же: принявший
               // черновик пришёл её выпускать, и искать её в списке
@@ -568,6 +569,67 @@ function SiblingNote({ siblings }: { siblings?: SiblingCheck[] }) {
           варианты сами, прежде чем принимать.
         </Banner>
       )}
+    </>
+  )
+}
+
+/**
+ * Что сделала вычитка — и, главное, чего она сделать не смогла.
+ *
+ * Принятые правки перечислять незачем: они уже в условии, которое
+ * составитель видит выше. Ценность здесь в отклонённом — редактор
+ * предложил правку, заслон её не пропустил (изменились числа, фрагмент
+ * вырос вдвое), и текст остался прежним. Такая правка часто верна по
+ * сути, и составитель применит её рукой — если увидит «было», «стало» и
+ * причину. Показанная одной строкой «правки отклонены», она пропадает
+ * так же, как пропадала до этого.
+ */
+function ProofreadNote({ proofread }: { proofread?: Proofread }) {
+  if (!proofread) {
+    return <p className="hint">Вычитки у этого черновика не было: язык задачи не смотрел никто.</p>
+  }
+  if (!proofread.done) {
+    return (
+      <Banner kind="warning">
+        Условие не вычитано: {proofread.note || 'причина не записана'}. Задача
+        написана и проверена, но язык её никто не смотрел.
+      </Banner>
+    )
+  }
+  const отклонено = proofread.rejected ?? []
+  const принято = proofread.changed ?? []
+  if (отклонено.length === 0) {
+    return (
+      <p className="hint">
+        {принято.length === 0
+          ? 'Вычитка прошла: замечаний к языку нет.'
+          : `Вычитка прошла, правок принято: ${принято.length}.`}
+      </p>
+    )
+  }
+  // Список стоит РЯДОМ с полосой, а не внутри неё: `Banner` — это
+  // абзац, и вложенный в абзац список браузер выносит наружу сам,
+  // разрывая разметку. Полоса при этом остаётся полосой — она и
+  // объявляется диктору, — а список читается следом.
+  return (
+    <>
+      <Banner kind="warning">
+        Правки редактора отклонены заслоном: посмотрите их глазами и примените
+        рукой, если они верны.
+      </Banner>
+      <ul className="proofread-rejected">
+        {отклонено.map((r, i) => (
+          <li key={i}>
+            <span className="hint">
+              {r.field} — {r.reason}
+            </span>
+            <br />
+            Было: «{r.before}»
+            <br />
+            Стало: «{r.after}»
+          </li>
+        ))}
+      </ul>
     </>
   )
 }

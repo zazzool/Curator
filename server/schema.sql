@@ -542,6 +542,15 @@ CREATE TABLE IF NOT EXISTS case_drafts (
                    CHECK (sibling_checks IS NULL
                           OR jsonb_typeof(sibling_checks) = 'array'),
 
+    -- Итог вычитки: что правлено редактором и что отклонено заслоном.
+    -- NULL значит «вычитки не было вовсе» — узел не дошёл; заполненное с
+    -- done: false значит «попытка была и не удалась». Разные вещи:
+    -- второе называет причину, а первое означает, что язык задачи не
+    -- смотрел никто.
+    proofread      JSONB   NULL
+                   CHECK (proofread IS NULL
+                          OR jsonb_typeof(proofread) = 'object'),
+
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
