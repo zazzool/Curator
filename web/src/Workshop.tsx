@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 
 import { датой } from './words'
-import { ПРАВА, правоСловами } from './permissions'
+import { ПРАВА, праваСловами } from './permissions'
 import { ApiError, api } from './api'
 import type { AppKey, Me, Prompt, StudioUser } from './api'
 
@@ -142,11 +142,7 @@ function Users({ me }: { me: Me }) {
                       )}
                     </span>
                   </div>
-                  <div className="muted">
-                    {user.permissions.length === 0
-                      ? 'прав нет: войти сможет, а разделов не увидит'
-                      : user.permissions.map(правоСловами).join(', ')}
-                  </div>
+                  <div className="muted">{праваСловами(user.permissions)}</div>
                   {open === user.login && canWorkshop && (
                     <ul className="units">
                       {ПРАВА.map((right) => (

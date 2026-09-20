@@ -35,6 +35,16 @@ const ПОЛЬЗОВАТЕЛИ = {
       createdAt: '2026-09-01T10:00:00Z',
     },
     {
+      login: 'всевластный',
+      displayName: 'Владелец',
+      permissions: [
+        'source:read', 'source:accept', 'case:read', 'case:write',
+        'generate', 'prompts', 'packs', 'clients', 'sales', 'analytics', 'workshop',
+      ],
+      disabled: false,
+      createdAt: '2026-07-01T10:00:00Z',
+    },
+    {
       login: 'уволенный',
       displayName: 'Бывший составитель',
       permissions: [],
@@ -172,6 +182,10 @@ describe('мастерская', () => {
     expect(screen.getByText(/задания моделям, мастерская/)).toBeTruthy()
     expect(screen.getByText('вход закрыт')).toBeTruthy()
     expect(screen.getByText(/прав нет: войти сможет, а разделов не увидит/)).toBeTruthy()
+    // Полный набор сворачивается: перечисленный целиком, он одинаков у
+    // каждого такого человека, и список превращается в стену, по которой
+    // не видно, чем люди отличаются.
+    expect(screen.getByText('все права')).toBeTruthy()
   })
 
   it('секрет аутентификатора показывается целиком и один раз', async () => {

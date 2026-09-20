@@ -28,3 +28,15 @@ export const ПРАВА: { code: string; title: string; about: string }[] = [
 export function правоСловами(code: string): string {
   return ПРАВА.find((one) => one.code === code)?.title ?? code
 }
+
+/** Права строкой, какой её читают глазами в списке.
+ *
+ *  Полный набор сворачивается в «все права» намеренно: перечисленный
+ *  целиком, он занимает две строки и у каждого такого человека одинаков —
+ *  список превращается в стену, по которой не видно, чем люди
+ *  отличаются, а это единственное, ради чего на него смотрят. */
+export function праваСловами(codes: string[]): string {
+  if (codes.length === 0) return 'прав нет: войти сможет, а разделов не увидит'
+  if (ПРАВА.every((one) => codes.includes(one.code))) return 'все права'
+  return codes.map(правоСловами).join(', ')
+}
