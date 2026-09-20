@@ -11,6 +11,11 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../core/design/palette.dart';
+import '../core/design/tokens.dart';
+import '../core/design/typography.dart';
+import '../core/ui/bars.dart';
+import '../core/ui/surface.dart';
 import '../api/client.dart';
 import 'download.dart';
 import 'manifest.dart';
@@ -121,8 +126,18 @@ class _ShelfScreenState extends State<ShelfScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Наборы')),
-      body: SafeArea(child: _body(context)),
+      body: SafeArea(
+        child: Padding(
+          padding: Gap.screenH,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const ScreenHeader(title: 'Наборы'),
+              Expanded(child: _body(context)),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -133,11 +148,11 @@ class _ShelfScreenState extends State<ShelfScreen> {
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.only(bottom: Gap.xxl),
         children: [
           if (failure != null) ...[
-            Text(failure, textAlign: TextAlign.center),
-            const SizedBox(height: 16),
+            NoteBanner(text: failure, icon: Icons.cloud_off_outlined),
+            const SizedBox(height: Gap.lg),
           ],
           for (final pack in _packs)
             PackRow(
@@ -150,8 +165,15 @@ class _ShelfScreenState extends State<ShelfScreen> {
             ),
           if (_packs.isEmpty && failure == null)
             // Свежая установка без наборов — исправный случай, и поначалу
-            // единственный.
-            const Text('Наборов пока нет', textAlign: TextAlign.center),
+            // единственный. Потому это пустое состояние, а не отказ:
+            // строка посреди белого экрана читается как поломка.
+            const EmptyState(
+              icon: Icon(Icons.inventory_2_outlined),
+              title: 'Наборов пока нет',
+              description:
+                  'Купленные наборы появятся здесь и лягут на устройство '
+                  'целиком — задачи из них решаются без сети',
+            ),
         ],
       ),
     );
@@ -179,37 +201,36 @@ class PackRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        // Волосяная граница, а не тень.
-        border: Border.all(color: theme.colorScheme.outlineVariant),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(pack.title, style: theme.textTheme.titleMedium),
-          const SizedBox(height: 4),
-          Text(
-            '${pack.cases} задач · ${rubles(pack.kopecks)}',
-            style: theme.textTheme.bodySmall,
-          ),
-          if (pack.summaryMd.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text(pack.summaryMd, style: theme.textTheme.bodyMedium),
+    final p = context.palette;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: Gap.md),
+      child: Surface(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(pack.title, style: AppType.titleS.copyWith(color: p.ink)),
+            const SizedBox(height: Gap.xs),
+            Text(
+              '${pack.cases} задач · ${rubles(pack.kopecks)}',
+              style: AppType.caption.copyWith(color: p.inkFaint),
+            ),
+            if (pack.summaryMd.isNotEmpty) ...[
+              const SizedBox(height: Gap.sm),
+              Text(
+                pack.summaryMd,
+                style: AppType.body.copyWith(color: p.inkMuted),
+              ),
+            ],
+            const SizedBox(height: Gap.md),
+            _action(context),
           ],
-          const SizedBox(height: 12),
-          _action(context),
-        ],
+        ),
       ),
     );
   }
 
   Widget _action(BuildContext context) {
+    final p = context.palette;
     if (busy) {
       // Число, а не одна полоса: набор качается минутами, и врач должен
       // видеть, что дело идёт, а не гадать, не завис ли телефон.
@@ -217,12 +238,16 @@ class PackRow extends StatelessWidget {
         children: [
           SizedBox(
             width: 120,
-            child: LinearProgressIndicator(
-              value: total > 0 ? done / total : null,
+            // Тот же градиент, что и на прочих шкалах: «сколько
+            // пройдено» читается везде одним движением.
+            child: ProgressBar(
+              value: total > 0 ? done / total : 0,
+              gradient: p.energyGradient,
+              shimmer: true,
             ),
           ),
-          const SizedBox(width: 12),
-          Text('$done из $total'),
+          const SizedBox(width: Gap.md),
+          Text('$done из $total', style: AppType.label.copyWith(color: p.ink)),
         ],
       );
     }
@@ -231,7 +256,7 @@ class PackRow extends StatelessWidget {
       // Цена уже показана строкой выше; здесь — что с этим делать.
       return Text(
         'Набор ещё не открыт. Он появится, как только будет оплачен',
-        style: Theme.of(context).textTheme.bodySmall,
+        style: AppType.caption.copyWith(color: p.inkFaint),
       );
     }
 
@@ -239,11 +264,16 @@ class PackRow extends StatelessWidget {
       return Row(
         children: [
           FilledButton(onPressed: onDownload, child: const Text('Обновить')),
-          const SizedBox(width: 12),
+          const SizedBox(width: Gap.md),
           // Занимает остаток строки и переносится: на узком экране, а тем
           // более при крупном системном шрифте, подпись рядом с кнопкой не
           // умещается — и вместо переноса Flutter рисует полосу отказа.
-          Expanded(child: Text('на устройстве выпуск ${pack.installed}')),
+          Expanded(
+            child: Text(
+              'на устройстве выпуск ${pack.installed}',
+              style: AppType.caption.copyWith(color: p.inkFaint),
+            ),
+          ),
         ],
       );
     }
@@ -251,8 +281,8 @@ class PackRow extends StatelessWidget {
     if (pack.isInstalled) {
       return Row(
         children: [
-          const Icon(Icons.check, size: 18),
-          const SizedBox(width: 8),
+          Icon(Icons.check, size: 18, color: p.success),
+          const SizedBox(width: Gap.sm),
           // Обещание точное: без сети работают и лента, и повторение по
           // расписанию — расписание лежит в местной базе. Пока его там не
           // было, здесь стояло «задачи открываются без сети», и это было
@@ -261,7 +291,12 @@ class PackRow extends StatelessWidget {
           // позволяет подписи перенестись. Со Spacer подпись оставалась
           // неограниченной, и на узком экране строка упиралась в край —
           // вместе с кнопкой, которой врач убирает набор.
-          const Expanded(child: Text('Скачан, работает без сети')),
+          Expanded(
+            child: Text(
+              'Скачан, работает без сети',
+              style: AppType.caption.copyWith(color: p.inkMuted),
+            ),
+          ),
           TextButton(onPressed: onRemove, child: const Text('Убрать')),
         ],
       );

@@ -3,6 +3,11 @@
 /// Каталог показывается целиком, вместе с невыданными: знак, о котором
 /// врач не знает, не мотивирует никого. Доля пути к невыданному видна и
 /// без сети — её приложение считает само, и только её.
+///
+/// Экран начинается тёмной зоной — приём донора, и он там не украшение:
+/// это единственное место, где врач смотрит на себя, а не на задачу, и
+/// смену основы глаз замечает раньше, чем читает слова. Почему зона
+/// устроена так, а не иначе, — в `core/ui/surface.dart`.
 library;
 
 import 'package:flutter/material.dart';
@@ -10,6 +15,12 @@ import 'package:flutter/material.dart';
 import '../account/account.dart';
 import '../account/account_screen.dart';
 import '../api/client.dart';
+import '../core/design/palette.dart';
+import '../core/design/tokens.dart';
+import '../core/design/typography.dart';
+import '../core/ui/bars.dart';
+import '../core/ui/motion.dart';
+import '../core/ui/surface.dart';
 import 'metrics.dart';
 import 'state.dart';
 
@@ -58,53 +69,35 @@ class _ProgressScreenState extends State<ProgressScreen> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Знаки'),
-        actions: [
-          // Доступ шестым разделом полосы не стал: мерка полосы — «без
-          // него врач не может заниматься», и карточка ей не отвечает.
-          // Но узнать, дошли ли деньги, было нельзя нигде, и место для
-          // этого — там же, где врач смотрит на себя.
-          IconButton(
-            icon: const Icon(Icons.account_circle_outlined),
-            tooltip: 'Мой доступ',
-            onPressed: () async {
-              // «Да» в ответе означает, что доступ restored по почте и
-              // запись сменилась. Перечитываем: числа на этом экране
-              // считаны за прежнюю запись, и оставить их значило бы
-              // показать врачу чужой путь под его вернувшейся почтой.
-              final restored = await Navigator.of(context).push(
-                MaterialPageRoute<bool>(
-                  builder: (_) => AccountScreen(account: Account(widget.api)),
-                ),
-              );
-              if (restored == true) await _load();
-            },
-          ),
-        ],
+  Future<void> _openAccount() async {
+    // «Да» в ответе означает, что доступ вернули по почте и запись
+    // сменилась. Перечитываем: числа на этом экране считаны за прежнюю
+    // запись, и оставить их значило бы показать врачу чужой путь под его
+    // вернувшейся почтой.
+    final restored = await Navigator.of(context).push(
+      MaterialPageRoute<bool>(
+        builder: (_) => AccountScreen(account: Account(widget.api)),
       ),
-      body: SafeArea(child: _body(context)),
     );
+    if (restored == true) await _load();
   }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(body: _body(context));
 
   Widget _body(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
 
     final failure = _failure;
     if (failure != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(failure.message, textAlign: TextAlign.center),
-              const SizedBox(height: 16),
-              OutlinedButton(onPressed: _load, child: const Text('Ещё раз')),
-            ],
+      return SafeArea(
+        child: EmptyState(
+          icon: const Icon(Icons.cloud_off_outlined),
+          title: 'Знаки не загрузились',
+          description: failure.message,
+          action: OutlinedButton(
+            onPressed: _load,
+            child: const Text('Ещё раз'),
           ),
         ),
       );
@@ -113,63 +106,153 @@ class _ProgressScreenState extends State<ProgressScreen> {
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView(
-        padding: const EdgeInsets.all(16),
+        // Отступа сверху нет намеренно: тёмная зона заходит под системную
+        // полосу состояния, и собственный отступ она считает сама.
+        padding: EdgeInsets.zero,
         children: [
-          StandingCard(standing: _standing),
-          const SizedBox(height: 16),
-          for (final sign in _signs) SignRow(sign: sign),
-          if (_signs.isEmpty)
-            const Text('Знаков пока нет', textAlign: TextAlign.center),
+          StandingCard(
+            standing: _standing,
+            trailing: ScreenHeaderAction(
+              icon: Icons.account_circle_outlined,
+              // Доступ шестым разделом полосы не стал: мерка полосы —
+              // «без него врач не может заниматься», и карточка ей не
+              // отвечает. Но узнать, дошли ли деньги, было нельзя нигде,
+              // и место для этого — там же, где врач смотрит на себя.
+              label: 'Мой доступ',
+              onTap: _openAccount,
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, Gap.xl, 16, Gap.xxl),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const SectionLabel('Знаки отличия'),
+                if (_signs.isEmpty)
+                  EmptyState(
+                    icon: const Icon(Icons.military_tech_outlined),
+                    title: 'Знаков пока нет',
+                    description:
+                        'Первый придёт за решённые задачи — считает их '
+                        'сервер, и показать его раньше нечем.',
+                  )
+                else
+                  // Каскадом, а не все разом: глаз успевает пройти список
+                  // сверху вниз, а не получает готовую стену строк.
+                  for (var i = 0; i < _signs.length; i++)
+                    PopIn(
+                      delay: PopIn.stagger(i),
+                      child: SignRow(sign: _signs[i]),
+                    ),
+              ],
+            ),
+          ),
         ],
       ),
     );
   }
 }
 
-/// Опыт, уровень и величины.
+/// Опыт, уровень и величины — тёмной зоной в начале экрана.
+///
+/// Зона входит в сам блок, а не оборачивает его снаружи: чернила здесь
+/// свои ([AppPalette.heroInk]), и блок, отданный на светлую бумагу,
+/// оказался бы нечитаемым ровно у того, кто его открыл.
 class StandingCard extends StatelessWidget {
-  const StandingCard({super.key, required this.standing});
+  const StandingCard({super.key, required this.standing, this.trailing});
 
   final Standing standing;
 
+  /// Значок-действие в правом верхнем углу зоны. Цвет ему задаёт зона:
+  /// приглушённые чернила на этой подложке не читаются.
+  final Widget? trailing;
+
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        // Волосяная граница, а не тень.
-        border: Border.all(color: theme.colorScheme.outlineVariant),
-        borderRadius: BorderRadius.circular(8),
-      ),
+    final p = context.palette;
+    return HeroZone(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Уровень ${standing.level}', style: theme.textTheme.titleLarge),
-          Text('${standing.xp} опыта', style: theme.textTheme.bodyMedium),
-          if (standing.due > 0) ...[
-            const SizedBox(height: 8),
-            Text('Ждут повторения: ${standing.due}'),
-          ],
-          const SizedBox(height: 12),
-          // Величины показываются все, включая нулевые: у врача, ещё
-          // ничего не решавшего, они нули, а не отсутствующие строки —
-          // иначе не видно, к чему вообще можно идти.
-          for (final metric in Metrics.catalog)
-            Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(metric.title, style: theme.textTheme.bodySmall),
-                  Text(
-                    '${standing.metrics[metric.key] ?? 0}',
-                    style: theme.textTheme.bodySmall,
-                  ),
-                ],
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Заголовок объявлен заголовком для служб
+                    // доступности: иначе экран читается как ровный поток
+                    // текста, и понять, где он начинается, на слух нельзя.
+                    Semantics(
+                      header: true,
+                      child: Text(
+                        'Уровень ${standing.level}',
+                        style: AppType.display.copyWith(color: p.heroInk),
+                      ),
+                    ),
+                    Text(
+                      '${standing.xp} опыта',
+                      style: AppType.caption.copyWith(color: p.heroInkMuted),
+                    ),
+                  ],
+                ),
               ),
+              if (trailing != null) ...[
+                const SizedBox(width: Gap.sm),
+                IconTheme.merge(
+                  data: IconThemeData(color: p.heroInk),
+                  child: trailing!,
+                ),
+              ],
+            ],
+          ),
+          if (standing.due > 0) ...[
+            const SizedBox(height: Gap.lg),
+            Pill(
+              label: 'Ждут повторения: ${standing.due}',
+              icon: const Icon(Icons.replay),
+              color: p.heroInk,
+              background: p.heroGlass,
             ),
+          ],
+          const SizedBox(height: Gap.xl),
+          HeroTile(
+            child: Column(
+              children: [
+                // Величины показываются все, включая нулевые: у врача,
+                // ещё ничего не решавшего, они нули, а не отсутствующие
+                // строки — иначе не видно, к чему вообще можно идти.
+                for (final metric in Metrics.catalog)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 3),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            metric.title,
+                            style: AppType.caption.copyWith(
+                              color: p.heroInkMuted,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: Gap.md),
+                        // Число набегает от нуля, а не появляется готовым:
+                        // врач открывает этот экран посмотреть, сколько
+                        // прибавилось, и движение — единственное, что
+                        // отличает «115» от «было 115».
+                        //
+                        // Начертание цифровое: в нём цифры одной ширины,
+                        // и колонка не дёргается по ходу счёта.
+                        CountUp(
+                          value: standing.metrics[metric.key] ?? 0,
+                          style: AppType.numeral.copyWith(color: p.heroInk),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -184,31 +267,38 @@ class SignRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final p = context.palette;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
+      padding: const EdgeInsets.symmetric(vertical: Gap.md),
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(
-            width: 36,
-            height: 36,
-            child: CircularProgressIndicator(
-              value: sign.progress,
-              strokeWidth: 3,
-              backgroundColor: theme.colorScheme.surfaceContainerHighest,
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  sign.title,
+                  style: AppType.bodyStrong.copyWith(color: p.ink),
+                ),
+              ),
+              const SizedBox(width: Gap.md),
+              Text(
+                '${(sign.progress * 100).round()}%',
+                style: AppType.label.copyWith(color: p.inkMuted),
+              ),
+            ],
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(sign.title, style: theme.textTheme.titleSmall),
-                Text(_words(), style: theme.textTheme.bodySmall),
-              ],
-            ),
+          const SizedBox(height: Gap.sm),
+          // Тот же градиент, что и везде, где что-то заполняется: так
+          // «доля пройденного» читается как одна величина, а не как пять
+          // разных шкал на пяти экранах.
+          ProgressBar(
+            value: sign.progress,
+            height: 8,
+            gradient: p.energyGradient,
           ),
+          const SizedBox(height: Gap.sm),
+          Text(_words(), style: AppType.caption.copyWith(color: p.inkFaint)),
         ],
       ),
     );

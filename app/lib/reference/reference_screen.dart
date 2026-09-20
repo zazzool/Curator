@@ -22,6 +22,10 @@ library;
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
+import '../core/design/palette.dart';
+import '../core/design/tokens.dart';
+import '../core/design/typography.dart';
+import '../core/ui/surface.dart';
 import '../db/reference_store.dart';
 import '../text/plural.dart';
 import '../text/prose.dart';
@@ -144,9 +148,21 @@ class _ReferenceScreenState extends State<ReferenceScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Шапка в потоке содержимого, как на прочих корневых экранах: полоса
+    // `AppBar` стоила бы вертикальной полосы там, где её занимает список.
     return Scaffold(
-      appBar: AppBar(title: const Text('Справочник')),
-      body: SafeArea(child: _body(context)),
+      body: SafeArea(
+        child: Padding(
+          padding: Gap.screenH,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const ScreenHeader(title: 'Справочник'),
+              Expanded(child: _body(context)),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -154,14 +170,15 @@ class _ReferenceScreenState extends State<ReferenceScreen> {
     if (widget.store == null) {
       return const _Note(
         icon: Icons.sd_card_alert_outlined,
+        title: 'Справочник недоступен',
         text:
-            'Справочник живёт на устройстве, а местная база не открылась. '
+            'Он живёт на устройстве, а местная база не открылась. '
             'Перезапустите приложение',
       );
     }
     if (_loading) return const Center(child: CircularProgressIndicator());
 
-    final theme = Theme.of(context);
+    final p = context.palette;
     // Предлагается только то, чего нет или чей выпуск разошёлся: строка
     // «скачать» под уже скачанным читается как «оно не скачалось».
     final fresh = {for (final one in _mine) one.slug: one.version};
@@ -172,24 +189,22 @@ class _ReferenceScreenState extends State<ReferenceScreen> {
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.only(bottom: Gap.xxl),
         children: [
           if (_note.isNotEmpty) ...[
-            _Banner(text: _note),
-            const SizedBox(height: 16),
+            NoteBanner(text: _note),
+            const SizedBox(height: Gap.lg),
           ],
 
           if (_mine.isEmpty && offers.isEmpty && _offerFailure.isEmpty)
             const _Note(
               icon: Icons.menu_book_outlined,
-              text:
-                  'Справочников пока нет. Они появятся здесь, '
-                  'когда составитель их выпустит',
+              title: 'Справочников пока нет',
+              text: 'Они появятся здесь, когда составитель их выпустит',
             ),
 
           if (_mine.isNotEmpty) ...[
-            Text('На устройстве', style: theme.textTheme.titleSmall),
-            const SizedBox(height: 10),
+            const SectionLabel('На устройстве'),
             for (final one in _mine)
               _MineTile(
                 source: one,
@@ -212,9 +227,8 @@ class _ReferenceScreenState extends State<ReferenceScreen> {
           ],
 
           if (offers.isNotEmpty) ...[
-            if (_mine.isNotEmpty) const SizedBox(height: 24),
-            Text('Можно скачать', style: theme.textTheme.titleSmall),
-            const SizedBox(height: 10),
+            if (_mine.isNotEmpty) const SizedBox(height: Gap.xl),
+            const SectionLabel('Можно скачать'),
             for (final one in offers)
               _OfferTile(
                 source: one,
@@ -226,21 +240,15 @@ class _ReferenceScreenState extends State<ReferenceScreen> {
           ],
 
           if (_offerFailure.isNotEmpty) ...[
-            const SizedBox(height: 16),
+            const SizedBox(height: Gap.lg),
             Row(
               children: [
-                Icon(
-                  Icons.cloud_off_outlined,
-                  size: 16,
-                  color: theme.colorScheme.outline,
-                ),
-                const SizedBox(width: 8),
+                Icon(Icons.cloud_off_outlined, size: 16, color: p.inkFaint),
+                const SizedBox(width: Gap.sm),
                 Expanded(
                   child: Text(
                     _offerFailure,
-                    style: theme.textTheme.labelMedium?.copyWith(
-                      color: theme.colorScheme.outline,
-                    ),
+                    style: AppType.caption.copyWith(color: p.inkFaint),
                   ),
                 ),
               ],
@@ -287,13 +295,13 @@ class _MineTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final p = context.palette;
     return _Card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _Head(source: source),
-          const SizedBox(height: 10),
+          const SizedBox(height: Gap.md),
           Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -341,12 +349,10 @@ class _MineTile extends StatelessWidget {
             ),
           if (stale && !busy)
             Padding(
-              padding: const EdgeInsets.only(top: 6),
+              padding: const EdgeInsets.only(top: Gap.sm),
               child: Text(
                 'Вышел новый выпуск',
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: theme.colorScheme.primary,
-                ),
+                style: AppType.caption.copyWith(color: p.accent),
               ),
             ),
         ],
@@ -422,19 +428,17 @@ class _Head extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final p = context.palette;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Prose(source.title, style: theme.textTheme.titleMedium),
+        Prose(source.title, style: AppType.titleS.copyWith(color: p.ink)),
         if (source.edition.isNotEmpty)
           Padding(
-            padding: const EdgeInsets.only(top: 2),
+            padding: const EdgeInsets.only(top: Gap.xs),
             child: Text(
               source.edition,
-              style: theme.textTheme.labelMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
+              style: AppType.caption.copyWith(color: p.inkFaint),
             ),
           ),
       ],
@@ -457,12 +461,12 @@ class _Progress extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final p = context.palette;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const LinearProgressIndicator(),
-        const SizedBox(height: 8),
+        const SizedBox(height: Gap.sm),
         Text(
           // Двигающееся число вместо крутящегося кружка: закачка
           // справочника идёт десятки секунд, и кружок всё это время
@@ -473,13 +477,18 @@ class _Progress extends StatelessWidget {
           // проверить нечем.
           '${counted(units, unitWord)}, '
           '${counted(statements, statementWord).toLowerCase()}',
-          style: theme.textTheme.labelMedium,
+          style: AppType.caption.copyWith(color: p.inkMuted),
         ),
       ],
     );
   }
 }
 
+/// Число со значком: сколько в источнике единиц и положений.
+///
+/// Таблетка из общего набора, а не голый ряд «значок + текст»: те же
+/// числа под задачей показаны таблетками, и два вида одной и той же
+/// мелочи на соседних экранах читаются как два приложения.
 class _Fact extends StatelessWidget {
   const _Fact({required this.icon, required this.text});
 
@@ -487,86 +496,40 @@ class _Fact extends StatelessWidget {
   final String text;
 
   @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 15, color: theme.colorScheme.onSurfaceVariant),
-        const SizedBox(width: 6),
-        Text(text, style: theme.textTheme.labelMedium),
-      ],
-    );
-  }
+  Widget build(BuildContext context) => Pill(label: text, icon: Icon(icon));
 }
 
+/// Карточка источника.
+///
+/// Плоскость из общего набора, а не своя: карточка, свёрстанная по месту,
+/// разъезжается с остальными по радиусу и отступам — и разъезд этот врач
+/// видит раньше нас.
 class _Card extends StatelessWidget {
   const _Card({required this.child});
 
   final Widget child;
 
   @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        // Волосяная граница, а не тень: карточка лежит на странице.
-        border: Border.all(color: theme.colorScheme.outlineVariant),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: child,
-    );
-  }
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: Gap.md),
+    child: Surface(child: child),
+  );
 }
 
-class _Banner extends StatelessWidget {
-  const _Banner({required this.text});
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Text(text, style: theme.textTheme.bodyMedium),
-    );
-  }
-}
-
+/// Пустое состояние справочника.
+///
+/// Заголовок и пояснение врозь: одной длинной строкой экран читается как
+/// отказ, хотя чаще это исправный случай — справочников просто ещё нет.
 class _Note extends StatelessWidget {
-  const _Note({required this.icon, required this.text});
+  const _Note({required this.icon, required this.title, required this.text});
 
   final IconData icon;
+  final String title;
   final String text;
 
   @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 48, horizontal: 8),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 40, color: theme.colorScheme.outline),
-          const SizedBox(height: 12),
-          Text(
-            text,
-            textAlign: TextAlign.center,
-            style: theme.textTheme.bodyMedium?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) =>
+      EmptyState(icon: Icon(icon), title: title, description: text);
 }
 
 /// День закачки словами, без часов.

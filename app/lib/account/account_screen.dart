@@ -10,6 +10,11 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../core/design/palette.dart';
+import '../core/design/tokens.dart';
+import '../core/design/typography.dart';
+import '../core/ui/leading_glyph.dart';
+import '../core/ui/surface.dart';
 import '../api/client.dart';
 import 'account.dart';
 import 'email_card.dart';
@@ -99,8 +104,21 @@ class _AccountScreenState extends State<AccountScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Мой доступ')),
-      body: SafeArea(child: _body(context)),
+      body: SafeArea(
+        child: Padding(
+          padding: Gap.screenH,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ScreenHeader(
+                title: 'Мой доступ',
+                onBack: () => Navigator.of(context).pop(),
+              ),
+              Expanded(child: _body(context)),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -109,18 +127,11 @@ class _AccountScreenState extends State<AccountScreen> {
 
     final failure = _failure;
     if (failure != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(failure.message, textAlign: TextAlign.center),
-              const SizedBox(height: 16),
-              OutlinedButton(onPressed: _load, child: const Text('Ещё раз')),
-            ],
-          ),
-        ),
+      return EmptyState(
+        icon: const Icon(Icons.cloud_off_outlined),
+        title: 'Запись не загрузилась',
+        description: failure.message,
+        action: OutlinedButton(onPressed: _load, child: const Text('Ещё раз')),
       );
     }
 
@@ -128,29 +139,27 @@ class _AccountScreenState extends State<AccountScreen> {
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.only(bottom: Gap.xxl),
         children: [
           _RightsCard(profile: profile),
-          const SizedBox(height: 24),
-          Text('Как вас звать', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
+          const SizedBox(height: Gap.xxl),
+          const SectionLabel('Как вас звать'),
           Text(
             'Имя видно только вам и нам. В таблицах соперничества оно не '
             'показывается.',
-            style: Theme.of(context).textTheme.bodySmall,
+            style: AppType.caption.copyWith(color: context.palette.inkFaint),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: Gap.sm),
           TextField(
             // Метка проверке: полей на экране теперь несколько, и «первое
             // попавшееся» однажды окажется полем почты — молча, потому
             // что вводится туда тоже текст.
             key: const Key('поле имени'),
             controller: _name,
-            decoration: const InputDecoration(border: OutlineInputBorder()),
             textInputAction: TextInputAction.done,
             onSubmitted: (_) => _rename(),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: Gap.sm),
           Align(
             alignment: Alignment.centerRight,
             child: FilledButton(
@@ -158,7 +167,7 @@ class _AccountScreenState extends State<AccountScreen> {
               child: const Text('Сохранить'),
             ),
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: Gap.xxl),
           EmailCard(
             account: widget.account,
             email: profile.email,
@@ -168,10 +177,12 @@ class _AccountScreenState extends State<AccountScreen> {
             onBound: (_) => _load(),
             onRecovered: _recovered,
           ),
-          const SizedBox(height: 24),
-          Text('Запись', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Text('Номер: ${profile.accountId}'),
+          const SizedBox(height: Gap.xxl),
+          const SectionLabel('Запись'),
+          Text(
+            'Номер: ${profile.accountId}',
+            style: AppType.body.copyWith(color: context.palette.inkMuted),
+          ),
         ],
       ),
     );
@@ -185,24 +196,23 @@ class _RightsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final p = context.palette;
     final rights = profile.rights;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Что у вас есть', style: theme.textTheme.titleMedium),
-        const SizedBox(height: 8),
+        const SectionLabel('Что у вас есть'),
         if (rights.isEmpty)
           Text(
             'Платного доступа сейчас нет. Задачи из скачанных наборов '
             'остаются с вами — их не отбирают.',
-            style: theme.textTheme.bodyMedium,
+            style: AppType.body.copyWith(color: p.inkMuted),
           )
         else
           for (final right in rights) _RightRow(right: right),
         if (profile.dropped > 0) ...[
-          const SizedBox(height: 8),
+          const SizedBox(height: Gap.sm),
           // Считается и показывается: молча выброшенное право выглядит
           // как «у вас его и не было», и объяснить это врачу нечем.
           // Число стоит ПОСЛЕ слова — по тому же доводу, что и в
@@ -211,7 +221,7 @@ class _RightsCard extends StatelessWidget {
           Text(
             'Прав, которых это приложение показать не умеет: '
             '${profile.dropped}. Обновите его.',
-            style: theme.textTheme.bodySmall,
+            style: AppType.caption.copyWith(color: p.inkFaint),
           ),
         ],
       ],
@@ -226,21 +236,24 @@ class _RightRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final p = context.palette;
     final until = right.until;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.symmetric(vertical: Gap.sm),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            right.kind == 'subscription'
-                ? Icons.all_inclusive_outlined
-                : Icons.inventory_2_outlined,
-            size: 20,
-            color: theme.colorScheme.primary,
+          LeadingGlyph(
+            lineStyle: AppType.body,
+            child: Icon(
+              right.kind == 'subscription'
+                  ? Icons.all_inclusive_outlined
+                  : Icons.inventory_2_outlined,
+              size: 20,
+              color: p.accent,
+            ),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: Gap.md),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -249,7 +262,7 @@ class _RightRow extends StatelessWidget {
                   right.kind == 'subscription'
                       ? 'Подписка на весь корпус'
                       : 'Набор «${right.pack}»',
-                  style: theme.textTheme.bodyLarge,
+                  style: AppType.bodyStrong.copyWith(color: p.ink),
                 ),
                 Text(
                   right.forever
@@ -257,7 +270,7 @@ class _RightRow extends StatelessWidget {
                       : until == null
                       ? 'Срок не разобрался'
                       : 'До ${asDay(until)}',
-                  style: theme.textTheme.bodySmall,
+                  style: AppType.caption.copyWith(color: p.inkFaint),
                 ),
               ],
             ),

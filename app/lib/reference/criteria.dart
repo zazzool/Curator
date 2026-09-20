@@ -41,6 +41,11 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../core/design/palette.dart';
+import '../core/design/tokens.dart';
+import '../core/design/typography.dart';
+import '../core/ui/leading_glyph.dart';
+import '../core/ui/surface.dart';
 import '../text/plural.dart';
 import '../text/prose.dart';
 import 'model.dart';
@@ -160,33 +165,14 @@ class _Chip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        // Волосяная граница, а не тень: полоска лежит на странице, а не
-        // висит над ней.
-        border: Border.all(color: theme.colorScheme.outlineVariant),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 15, color: theme.colorScheme.onSurfaceVariant),
-          const SizedBox(width: 6),
-          // Полоска компактна по замыслу, и длинное название рода в ней
-          // обрезается, а не растягивает её за край экрана. Целиком род
-          // назван заголовком ниже — здесь он только счётчик.
-          Flexible(
-            child: Text(
-              text,
-              style: theme.textTheme.labelMedium,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ],
-      ),
-    );
+    // Таблетка из общего набора: те же счётчики под задачей и в
+    // справочнике выглядят одинаково, а две редакции одной мелочи на
+    // соседних экранах читаются как два приложения.
+    //
+    // Полоска компактна по замыслу, и длинное название рода в ней
+    // обрезается, а не растягивает её за край экрана. Целиком род назван
+    // заголовком ниже — здесь он только счётчик.
+    return Pill(label: text, icon: Icon(icon));
   }
 }
 
@@ -217,7 +203,7 @@ class CriteriaList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final p = context.palette;
     final groups = byKind(statements);
     if (groups.isEmpty) return const SizedBox.shrink();
 
@@ -230,18 +216,14 @@ class CriteriaList extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         for (var g = 0; g < groups.length; g++) ...[
-          if (g > 0) const SizedBox(height: 20),
+          if (g > 0) const SizedBox(height: Gap.xl),
           if (titled)
             Padding(
-              padding: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.only(bottom: Gap.md),
               child: Row(
                 children: [
-                  Icon(
-                    statementIcon(groups[g].key),
-                    size: 18,
-                    color: theme.colorScheme.primary,
-                  ),
-                  const SizedBox(width: 8),
+                  Icon(statementIcon(groups[g].key), size: 18, color: p.accent),
+                  const SizedBox(width: Gap.sm),
                   // Занимает остаток строки и переносится: род зовётся
                   // словом источника, а источник любой — «дифференциальный
                   // диагноз» уже длиннее узкого экрана при крупном шрифте.
@@ -255,9 +237,7 @@ class CriteriaList extends StatelessWidget {
                       groups[g].key.isEmpty
                           ? pluralWord(statementWord)
                           : groups[g].key,
-                      style: theme.textTheme.titleSmall?.copyWith(
-                        color: theme.colorScheme.primary,
-                      ),
+                      style: AppType.titleS.copyWith(color: p.accent),
                     ),
                   ),
                 ],
@@ -295,14 +275,14 @@ class StatementTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final p = context.palette;
     final body = withoutDesignation(one.body, one.designation);
 
     // Ссылка занимает всю ширину, а не колонку в сорок четыре точки:
     // название рубрики туда не влезает, а ради него ссылка и делается.
     if (linkTitle.isNotEmpty) {
       return Padding(
-        padding: const EdgeInsets.only(bottom: 16),
+        padding: const EdgeInsets.only(bottom: Gap.lg),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -311,8 +291,10 @@ class StatementTile extends StatelessWidget {
               title: linkTitle,
               onTap: onLink == null ? null : () => onLink!(one.designation),
             ),
-            const SizedBox(height: 6),
-            Prose(body, style: theme.textTheme.bodyLarge),
+            const SizedBox(height: Gap.sm),
+            // Увеличенный интерлиньяж: положения источника читают
+            // подолгу, и обычный кегль на длинном тексте утомляет.
+            Prose(body, style: AppType.reading.copyWith(color: p.ink)),
             if (one.placeRef.isNotEmpty) _Place(text: one.placeRef),
           ],
         ),
@@ -320,32 +302,29 @@ class StatementTile extends StatelessWidget {
     }
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.only(bottom: Gap.md),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Обозначение стоит колонкой слева: по нему критерий ищут
-          // глазами, а внутри текста оно теряется.
-          SizedBox(
+          // глазами, а внутри текста оно теряется. Колонка общей ширины —
+          // так обозначения выстраиваются по одной левой линии, а тексты
+          // начинаются с одного места.
+          LeadingGlyph(
             width: 44,
+            lineStyle: AppType.reading,
             child: one.designation.isEmpty
-                ? Icon(
-                    statementIcon(one.kind),
-                    size: 16,
-                    color: theme.colorScheme.outline,
-                  )
+                ? Icon(statementIcon(one.kind), size: 16, color: p.inkFaint)
                 : Text(
                     one.designation,
-                    style: theme.textTheme.labelLarge?.copyWith(
-                      color: theme.colorScheme.primary,
-                    ),
+                    style: AppType.bodyStrong.copyWith(color: p.accent),
                   ),
           ),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Prose(body, style: theme.textTheme.bodyLarge),
+                Prose(body, style: AppType.reading.copyWith(color: p.ink)),
                 if (one.placeRef.isNotEmpty) _Place(text: one.placeRef),
               ],
             ),
@@ -366,49 +345,34 @@ class _LinkChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final p = context.palette;
     final chip = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: Gap.md, vertical: Gap.sm),
       decoration: BoxDecoration(
         // Волосяная граница, а не тень: ссылка лежит в тексте, а не висит
         // над ним.
-        border: Border.all(color: theme.colorScheme.outlineVariant),
-        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: p.hairline),
+        borderRadius: Radii.controlAll,
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            Icons.compare_arrows_outlined,
-            size: 15,
-            color: theme.colorScheme.primary,
+          Icon(Icons.compare_arrows_outlined, size: 15, color: p.accent),
+          const SizedBox(width: Gap.sm),
+          Text(label, style: AppType.bodyStrong.copyWith(color: p.accent)),
+          const SizedBox(width: Gap.sm),
+          Flexible(
+            child: Prose(title, style: AppType.body.copyWith(color: p.ink)),
           ),
-          const SizedBox(width: 8),
-          Text(
-            label,
-            style: theme.textTheme.labelLarge?.copyWith(
-              color: theme.colorScheme.primary,
-            ),
-          ),
-          const SizedBox(width: 8),
-          Flexible(child: Prose(title, style: theme.textTheme.bodyMedium)),
           if (onTap != null) ...[
-            const SizedBox(width: 6),
-            Icon(
-              Icons.chevron_right,
-              size: 16,
-              color: theme.colorScheme.outlineVariant,
-            ),
+            const SizedBox(width: Gap.sm),
+            Icon(Icons.chevron_right, size: 16, color: p.inkFaint),
           ],
         ],
       ),
     );
     if (onTap == null) return chip;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: chip,
-    );
+    return InkWell(onTap: onTap, borderRadius: Radii.controlAll, child: chip);
   }
 }
 
@@ -420,24 +384,21 @@ class _Place extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final p = context.palette;
     return Padding(
-      padding: const EdgeInsets.only(top: 4),
+      padding: const EdgeInsets.only(top: Gap.xs),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            Icons.bookmark_border,
-            size: 13,
-            color: theme.colorScheme.outline,
+          LeadingGlyph(
+            lineStyle: AppType.caption,
+            child: Icon(Icons.bookmark_border, size: 13, color: p.inkFaint),
           ),
-          const SizedBox(width: 4),
+          const SizedBox(width: Gap.xs),
           Flexible(
             child: Text(
               text,
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: theme.colorScheme.outline,
-              ),
+              style: AppType.caption.copyWith(color: p.inkFaint),
             ),
           ),
         ],
