@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { SourceScreen } from './SourceScreen'
@@ -102,6 +102,60 @@ describe('экран источника', () => {
     render(<SourceScreen me={РЕДАКТОР} id={1} onBack={() => {}} />)
     const hint = await screen.findByText(/PDF/)
     expect(hint.textContent).not.toMatch(/позже|пока|скоро/)
+  })
+
+  it('разбор показывается до принятия, а не после', async () => {
+    // Принятый разбор — решение о том, что теперь считается истиной
+    // источника, и жалось оно вслепую: ни единиц, ни положений
+    // составителю не показывалось, хотя ручки были написаны. Пояснение к
+    // экрану при этом обещало «посмотреть куски».
+    const ДОКУМЕНТ = {
+      id: 5,
+      sourceId: 1,
+      filename: 'prikaz.docx',
+      mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      byteSize: 40960,
+      uploadedBy: 'редактор',
+    }
+    const принятые: number[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if (init?.method === 'POST' && path.includes('/accept')) {
+          принятые.push(5)
+          return Promise.resolve(new Response(JSON.stringify({ accepted: 2 }), { status: 200 }))
+        }
+        if (path.startsWith('/admin/api/documents/5/draft')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ units: UNITS, statements: [] }), { status: 200 }),
+          )
+        }
+        if (path.startsWith('/admin/api/sources/1/documents')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ documents: [ДОКУМЕНТ] }), { status: 200 }),
+          )
+        }
+        if (path.startsWith('/admin/api/sources/1/units')) {
+          return Promise.resolve(new Response(JSON.stringify({ units: [] }), { status: 200 }))
+        }
+        return Promise.resolve(new Response(JSON.stringify(SOURCE), { status: 200 }))
+      }),
+    )
+    render(<SourceScreen me={РЕДАКТОР} id={1} onBack={() => {}} />)
+
+    // Принять сразу нечем: сперва показ.
+    expect(await screen.findByText('Посмотреть разбор')).toBeTruthy()
+    expect(screen.queryByText('Принять разбор')).toBeNull()
+
+    fireEvent.click(screen.getByText('Посмотреть разбор'))
+    expect(await screen.findByText(/Вычитано единиц: 2/)).toBeTruthy()
+    // Единица без положений названа прямо: по ней нельзя заказать задачу.
+    expect(screen.getByText(/положений нет/)).toBeTruthy()
+    expect(принятые).toEqual([])
+
+    fireEvent.click(screen.getByText('Принять разбор'))
+    await waitFor(() => expect(screen.getByText(/Разбор принят/)).toBeTruthy())
+    expect(принятые).toEqual([5])
   })
 
   it('человеку без права приёмки не показывает действие и говорит, почему', async () => {

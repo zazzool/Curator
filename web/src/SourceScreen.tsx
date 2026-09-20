@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState, type ChangeEvent } from 'react'
 import { Cases } from './Cases'
 import { Generation } from './Generation'
 import { ApiError, api } from './api'
-import type { Document, Me, Source, Unit } from './api'
+import type { Document, Me, Source, Statement, Unit } from './api'
 
 // Экран источника: путь первого этапа целиком и в том же порядке, в каком
 // его проходят, — принести документ, посмотреть куски, принять разбор,
@@ -21,6 +21,8 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
   const [failure, setFailure] = useState('')
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
+  /** Разбор какого документа открыт на просмотр. */
+  const [looking, setLooking] = useState<Document | null>(null)
 
   const canAccept = me.permissions.includes('source:accept')
 
@@ -74,6 +76,7 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
     try {
       const result = await api.accept(documentId)
       setNote(`Разбор принят. Единиц в источнике стало больше на ${result.accepted}.`)
+      setLooking(null)
       await reload(path)
     } catch (error) {
       setFailure(error instanceof ApiError ? error.message : 'Разбор не принят')
@@ -174,8 +177,19 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
                   {document.uploadedBy && ` · принёс ${document.uploadedBy}`}
                 </span>
                 {canAccept && (
-                  <button onClick={() => accept(document.id)} disabled={busy}>
-                    Принять разбор
+                  // Смотреть, а не принимать. Принятый разбор — это
+                  // решение о том, что теперь считается истиной
+                  // источника, и принималось оно вслепую: ни кусков, ни
+                  // разобранных единиц составителю не показывалось.
+                  // Пояснение к этому файлу обещало «посмотреть куски» —
+                  // и обещало это годом раньше, чем появилось.
+                  <button
+                    onClick={() =>
+                      setLooking(looking?.id === document.id ? null : document)
+                    }
+                    disabled={busy}
+                  >
+                    {looking?.id === document.id ? 'Закрыть разбор' : 'Посмотреть разбор'}
                   </button>
                 )}
               </div>
@@ -188,6 +202,14 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
             принимать: принятый разбор — это решение о том, что теперь
             считается истиной источника.
           </p>
+        )}
+
+        {looking && (
+          <DraftView
+            document={looking}
+            busy={busy}
+            onAccept={() => void accept(looking.id)}
+          />
         )}
       </section>
 
@@ -233,6 +255,99 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
       <Generation me={me} source={source} units={units} />
 
       <Cases me={me} source={source} path={path} />
+    </div>
+  )
+}
+
+/**
+ * Что даст принятие разбора: единицы и положения, вычитанные из документа.
+ *
+ * Показывается ДО принятия и только перед ним. Принятый разбор меняет то,
+ * что источник считает истиной, и по нему потом отбираются задачи; принять
+ * его, не посмотрев, значит согласиться с чужим чтением документа не
+ * читая. Ручки для показа были написаны и не звались ниоткуда.
+ *
+ * Принятие живёт здесь же, а не на строке документа, и это не дробность:
+ * кнопка, стоящая рядом с тем, что она примет, не даёт принять вслепую.
+ */
+function DraftView({
+  document,
+  busy,
+  onAccept,
+}: {
+  document: Document
+  busy: boolean
+  onAccept: () => void
+}) {
+  const [units, setUnits] = useState<Unit[] | null>(null)
+  const [statements, setStatements] = useState<Statement[]>([])
+  const [failure, setFailure] = useState('')
+
+  useEffect(() => {
+    let живы = true
+    void (async () => {
+      setFailure('')
+      setUnits(null)
+      try {
+        const loaded = await api.draft(document.id)
+        if (!живы) return
+        // Список без списка — пустой список, а не падение раздела.
+        setUnits(loaded?.units ?? [])
+        setStatements(loaded?.statements ?? [])
+      } catch (error) {
+        if (!живы) return
+        setUnits([])
+        setFailure(error instanceof ApiError ? error.message : 'Разбор не прочитан')
+      }
+    })()
+    return () => {
+      живы = false
+    }
+  }, [document.id])
+
+  const положенийУ = (label: string) =>
+    statements.filter((one) => one.unitLabel === label).length
+
+  return (
+    <div className="page-section">
+      <div className="page-head">
+        <h3>Разбор файла «{document.filename}»</h3>
+      </div>
+      {failure && <p className="banner error">{failure}</p>}
+      {units === null ? (
+        <p className="empty">Читаем…</p>
+      ) : units.length === 0 ? (
+        <p className="empty">
+          Из этого файла не вычиталось ни одной единицы. Принимать нечего:
+          проверьте, тот ли это файл и тем ли способом он переведён в текст.
+        </p>
+      ) : (
+        <>
+          <p className="hint">
+            Вычитано единиц: {units.length}, положений: {statements.length}.
+            Принятое станет истиной источника, и по нему пойдёт подбор задач.
+          </p>
+          <ul className="units">
+            {units.map((unit) => (
+              <li key={unit.label} style={{ paddingLeft: `${unit.depth * 16}px` }}>
+                <span className="mono">{unit.label}</span> {unit.title}
+                {unit.kind === 'group' && <span className="tag">раздел</span>}
+                {/* Единица без положений видна сразу: по ней нельзя
+                    заказать задачу, и узнать об этом лучше здесь, чем в
+                    генерации отказом. */}
+                {unit.kind !== 'group' && положенийУ(unit.label) === 0 && (
+                  <span className="muted"> — положений нет</span>
+                )}
+              </li>
+            ))}
+          </ul>
+          <div className="form-actions">
+            <button className="primary" onClick={onAccept} disabled={busy}>
+              Принять разбор
+            </button>
+          </div>
+        </>
+      )}
     </div>
   )
 }
