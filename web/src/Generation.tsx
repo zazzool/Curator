@@ -126,7 +126,7 @@ export function Generation({
         )}
       </div>
 
-      {failure && <p className="alarm">{failure}</p>}
+      {failure && <p className="banner error">{failure}</p>}
 
       {canOrder ? (
         <p className="hint">
@@ -155,7 +155,7 @@ export function Generation({
           {jobs.map((job) => (
             <div key={job.id} className="list-row">
               <span>
-                <span className="label">{job.unitLabel}</span> {job.unitTitle}
+                <span className="mono">{job.unitLabel}</span> {job.unitTitle}
               </span>
               <span className="muted">{statusWord(job)}</span>
               <button onClick={() => show(job.id)}>Открыть</button>
@@ -205,7 +205,7 @@ function JobCard({ job, onClose }: { job: Job; onClose: () => void }) {
         </h2>
         <button onClick={onClose}>Закрыть</button>
       </div>
-      {job.error && <p className="alarm">{job.error}</p>}
+      {job.error && <p className="banner error">{job.error}</p>}
       {drafts.length === 0 ? (
         <p className="empty">Написанного пока нет.</p>
       ) : (
@@ -221,7 +221,7 @@ function JobCard({ job, onClose }: { job: Job; onClose: () => void }) {
                       подтверждает, — и сноска под текстом заставила бы его
                       считать фрагменты глазами. */}
                   {segment.statements && segment.statements.length > 0 && (
-                    <sup className="label"> {segment.statements.join(', ')}</sup>
+                    <sup className="mono"> {segment.statements.join(', ')}</sup>
                   )}{' '}
                 </span>
               ))}
@@ -229,7 +229,7 @@ function JobCard({ job, onClose }: { job: Job; onClose: () => void }) {
             <ul className="units">
               {draft.options.map((option, j) => (
                 <li key={j}>
-                  {option.label && <span className="label">{option.label}</span>} {option.text}
+                  {option.label && <span className="mono">{option.label}</span>} {option.text}
                   {(option.label || option.text) === draft.answer && (
                     <span className="muted"> — заказанный ответ</span>
                   )}

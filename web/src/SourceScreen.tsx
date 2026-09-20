@@ -107,7 +107,7 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
         <div className="page-head">
           <button onClick={onBack}>К источникам</button>
         </div>
-        {failure ? <p className="alarm">{failure}</p> : <p className="empty">Читаем источник…</p>}
+        {failure ? <p className="banner error">{failure}</p> : <p className="empty">Читаем источник…</p>}
       </div>
     )
   }
@@ -123,8 +123,8 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
         единица зовётся «{source.unitWord}», положение — «{source.statementWord}»
       </p>
 
-      {failure && <p className="alarm">{failure}</p>}
-      {note && <p className="done">{note}</p>}
+      {failure && <p className="banner error">{failure}</p>}
+      {note && <p className="banner success">{note}</p>}
 
       <section className="page-section">
         <div className="page-head">
@@ -197,6 +197,7 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
           <label className="form-row">
             <span className="fld-label">Срез по пути</span>
             <input
+              className="fld-medium"
               value={path}
               onChange={(e) => setPath(e.target.value)}
               placeholder="например, 3 или F3"
@@ -217,12 +218,12 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
           <ul className="units">
             {units.map((unit) => (
               <li key={unit.label} style={{ paddingLeft: `${unit.depth * 16}px` }}>
-                <span className="label">{unit.label}</span> {unit.title}
+                <span className="mono">{unit.label}</span> {unit.title}
                 {/* Род показывается только у раздела: по нему не спрашивают, и
                     составитель, не видя этого, ищет пропавшие задачи в
                     генерации, а не в разборе. У записи род — умолчание, и
                     метка у каждой строки была бы шумом. */}
-                {unit.kind === 'group' && <span className="kind">раздел</span>}
+                {unit.kind === 'group' && <span className="tag">раздел</span>}
               </li>
             ))}
           </ul>

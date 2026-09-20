@@ -7,30 +7,45 @@ import { Sales } from './Sales'
 import { Workshop } from './Workshop'
 import { SourceList } from './SourceList'
 import { SourceScreen } from './SourceScreen'
+import { Sidebar } from './components/Sidebar'
+import { StatusBar, WhoCells } from './components/StatusBar'
+import { Toolbar } from './components/Toolbar'
+import { readSidebarCollapsed, writeSidebarCollapsed } from './sidebarState'
+import type { SectionId } from './sections'
 import { api, setToken } from './api'
 import type { Me } from './api'
 
-// Разделы студии.
-//
-// Вкладка видна всем, а закрывает раздел право на сервере. Спрятанная
-// вкладка при открытой ручке — подсказка, где искать, а не запрет:
-// человек, открывший инструменты разработчика, увидит и адрес, и ответ.
-// Поэтому прячется здесь только действие, которое всё равно отказало бы, и
-// рядом сказано, почему его нет.
-const SECTIONS = [
-  { id: 'sources', title: 'Источники' },
-  { id: 'packs', title: 'Наборы' },
-  { id: 'sales', title: 'Продажи' },
-  { id: 'reports', title: 'Отчёты' },
-  { id: 'workshop', title: 'Мастерская' },
-] as const
-
-type Section = (typeof SECTIONS)[number]['id']
-
+/**
+ * Каркас студии: колонка разделов слева и три полосы справа от неё —
+ * полоса действий, рабочая область, строка состояния.
+ *
+ * Устроено как в настольных редакторах и по той же причине: инструменты и
+ * состояние не должны уезжать вместе с содержимым. Заголовок раздела
+ * уезжает вверх с первой же прокруткой, а «где я» и «кто я» нужны в любой
+ * момент работы.
+ *
+ * Разделов в верхней полосе нет намеренно. Строкой вкладок они и стояли,
+ * и строка держит их, пока их полдюжины; колонка не упирается в это, а
+ * платы за неё нет — она сворачивается в полосу значков, и свёрнутой её
+ * помнят между заходами.
+ *
+ * Перечень разделов сюда не переписан: он лежит в `sections.ts`, откуда
+ * его читают и колонка, и верхняя полоса. Две редакции имён разошлись бы
+ * молча.
+ */
 export function App() {
   const [me, setMe] = useState<Me | null>(null)
-  const [section, setSection] = useState<Section>('sources')
-  const [openSource, setOpenSource] = useState<number | null>(null)
+  const [section, setSection] = useState<SectionId>('sources')
+  // Открытый источник: опознаватель нужен экрану, название — верхней
+  // полосе. Спрашивать название у экрана нельзя: он читает источник сам и
+  // отвечает позже, чем полоса рисуется.
+  const [openSource, setOpenSource] = useState<{ id: number; title: string } | null>(null)
+  /**
+   * Свёрнута ли колонка. Начальное значение читается из браузера один раз,
+   * при первом построении: составитель, свернувший колонку, не должен
+   * сворачивать её заново на каждой странице.
+   */
+  const [navCollapsed, setNavCollapsed] = useState(readSidebarCollapsed)
 
   if (!me) return <Login onEnter={setMe} />
 
@@ -46,43 +61,47 @@ export function App() {
   }
 
   return (
-    <div className="app">
-      <header className="app-head">
-        <h1>Куратор — студия составителя</h1>
-        <span>
-          {me.displayName || me.login} <button onClick={leave}>Выйти</button>
-        </span>
-      </header>
+    <div className="app-frame">
+      <Sidebar
+        section={section}
+        onGo={(to) => {
+          setSection(to)
+          setOpenSource(null)
+        }}
+        collapsed={navCollapsed}
+        onCollapsed={(next) => {
+          setNavCollapsed(next)
+          writeSidebarCollapsed(next)
+        }}
+      />
 
-      <nav className="tabs">
-        {SECTIONS.map((one) => (
-          <button
-            key={one.id}
-            className={one.id === section ? 'tab tab-here' : 'tab'}
-            aria-current={one.id === section ? 'page' : undefined}
-            onClick={() => {
-              setSection(one.id)
-              setOpenSource(null)
-            }}
-          >
-            {one.title}
-          </button>
-        ))}
-      </nav>
+      <div className="app">
+        <Toolbar
+          section={section}
+          crumb={section === 'sources' ? openSource?.title : undefined}
+          onSignOut={leave}
+        />
 
-      {section === 'packs' ? (
-        <Packs me={me} />
-      ) : section === 'sales' ? (
-        <Sales me={me} />
-      ) : section === 'reports' ? (
-        <Reports me={me} />
-      ) : section === 'workshop' ? (
-        <Workshop me={me} />
-      ) : openSource === null ? (
-        <SourceList me={me} onOpen={setOpenSource} />
-      ) : (
-        <SourceScreen me={me} id={openSource} onBack={() => setOpenSource(null)} />
-      )}
+        <main className="main stack">
+          {section === 'packs' ? (
+            <Packs me={me} />
+          ) : section === 'sales' ? (
+            <Sales me={me} />
+          ) : section === 'reports' ? (
+            <Reports me={me} />
+          ) : section === 'workshop' ? (
+            <Workshop me={me} />
+          ) : openSource === null ? (
+            <SourceList me={me} onOpen={(id, title) => setOpenSource({ id, title })} />
+          ) : (
+            <SourceScreen me={me} id={openSource.id} onBack={() => setOpenSource(null)} />
+          )}
+        </main>
+
+        <StatusBar
+          cells={<WhoCells who={me.displayName || me.login} permissions={me.permissions} />}
+        />
+      </div>
     </div>
   )
 }

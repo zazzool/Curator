@@ -92,6 +92,7 @@ export function Packs({ me }: { me: Me }) {
           <label className="form-row">
             <span className="fld-label">Метка</span>
             <input
+              className="fld-medium"
               value={draft.slug}
               onChange={(e) => setDraft({ ...draft, slug: e.target.value })}
               placeholder="cardio-basics"
@@ -100,6 +101,7 @@ export function Packs({ me }: { me: Me }) {
           <label className="form-row">
             <span className="fld-label">Название</span>
             <input
+              className="fld-long"
               value={draft.title}
               onChange={(e) => setDraft({ ...draft, title: e.target.value })}
               placeholder="Кардиология: основы"
@@ -125,7 +127,7 @@ export function Packs({ me }: { me: Me }) {
         </form>
       )}
 
-      {failure && <p className="alarm">{failure}</p>}
+      {failure && <p className="banner error">{failure}</p>}
 
       <div className="page-section">
         {packs === null ? (
@@ -141,7 +143,9 @@ export function Packs({ me }: { me: Me }) {
               <button key={pack.slug} className="list-row" onClick={() => setOpen(pack.slug)}>
                 <span>
                   {pack.title}
-                  <span className="kind">{STATUS[pack.status] ?? pack.status}</span>
+                  {/* Цвет метки — от состояния: слово и цвет говорят об одном,
+                      и на бегу читается цвет. */}
+                  <span className={`tag ${pack.status}`}>{STATUS[pack.status] ?? pack.status}</span>
                 </span>
                 <span className="muted">
                   {счётом(pack.cases, 'задача', 'задачи', 'задач')} ·{' '}
@@ -257,7 +261,7 @@ function PackCard({ me, slug, onBack }: { me: Me; slug: string; onBack: () => vo
           <h2>Набор</h2>
           <button onClick={onBack}>К наборам</button>
         </div>
-        {failure ? <p className="alarm">{failure}</p> : <p className="empty">Читаем набор…</p>}
+        {failure ? <p className="banner error">{failure}</p> : <p className="empty">Читаем набор…</p>}
       </div>
     )
   }
@@ -275,8 +279,8 @@ function PackCard({ me, slug, onBack }: { me: Me; slug: string; onBack: () => vo
           : 'ни одного выпуска: на устройствах этого набора нет'}
       </p>
 
-      {failure && <p className="alarm">{failure}</p>}
-      {note && <p className="done">{note}</p>}
+      {failure && <p className="banner error">{failure}</p>}
+      {note && <p className="banner success">{note}</p>}
 
       <div className="page-section">
         <h3>Состав</h3>
@@ -289,8 +293,8 @@ function PackCard({ me, slug, onBack }: { me: Me; slug: string; onBack: () => vo
             {items.map((one, index) => (
               <li key={one.id} className="row-line">
                 <span>
-                  <span className="label">{one.unitLabel}</span> {one.title}
-                  {one.status !== 'published' && <span className="kind">не раздаётся</span>}
+                  <span className="mono">{one.unitLabel}</span> {one.title}
+                  {one.status !== 'published' && <span className="tag">не раздаётся</span>}
                 </span>
                 {canPack && (
                   <span className="row-tools">
@@ -351,6 +355,7 @@ function PackCard({ me, slug, onBack }: { me: Me; slug: string; onBack: () => vo
             <label className="form-row">
               <span className="fld-label">Название</span>
               <input
+                className="fld-long"
                 value={card.title}
                 onChange={(e) => setCard({ ...card, title: e.target.value })}
               />
@@ -429,7 +434,7 @@ function Picker({ chosen, onAdd }: { chosen: string[]; onAdd: (one: Case) => voi
 
   return (
     <div className="page-section">
-      {failure && <p className="alarm">{failure}</p>}
+      {failure && <p className="banner error">{failure}</p>}
       {found === null ? (
         <p className="empty">Читаем задачи…</p>
       ) : free.length === 0 ? (
@@ -443,7 +448,7 @@ function Picker({ chosen, onAdd }: { chosen: string[]; onAdd: (one: Case) => voi
           {free.map((one) => (
             <button key={one.id} className="list-row" onClick={() => onAdd(one)}>
               <span>
-                <span className="label">{one.unitLabel}</span> {one.body.title}
+                <span className="mono">{one.unitLabel}</span> {one.body.title}
               </span>
               <span className="muted">добавить</span>
             </button>

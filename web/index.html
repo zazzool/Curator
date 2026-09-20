@@ -3,6 +3,23 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Служебный раздел индексировать незачем: чем меньше он находится
+         поиском, тем меньше к нему приходят просто так. -->
+    <meta name="robots" content="noindex, nofollow" />
+    <!-- Интерфейс кириллический, и кириллический сабсет нужен на первом
+         же кадре: без предзагрузки форма входа мигает системным шрифтом. -->
+    <link
+      rel="preload"
+      href="/fonts/golos-text-cyrillic.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <!-- Тема одна, светлая: заявлена и странице, и браузеру, иначе
+         встроенные органы (полосы прокрутки, календари) темнеют от
+         системной настройки. -->
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#f6f7f9" />
     <title>Куратор — студия составителя</title>
   </head>
   <body>

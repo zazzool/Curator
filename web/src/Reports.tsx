@@ -53,7 +53,7 @@ export function Reports({ me }: { me: Me }) {
       {!canRead && (
         <p className="hint">Отчёты читает тот, кому выдано право «отчёты».</p>
       )}
-      {failure && <p className="alarm">{failure}</p>}
+      {failure && <p className="banner error">{failure}</p>}
 
       <div className="page-section">
         <h3>Крайние задачи</h3>
@@ -63,10 +63,10 @@ export function Reports({ me }: { me: Me }) {
           три попытки — это не приговор задаче, а три человека.
         </p>
 
-        <h4 className="sub">Слишком лёгкие</h4>
+        <h4 className="group-title">Слишком лёгкие</h4>
         <StatsList list={easy} empty="Слишком лёгких задач нет." />
 
-        <h4 className="sub">Почти неразрешимые</h4>
+        <h4 className="group-title">Почти неразрешимые</h4>
         <StatsList
           list={hard}
           empty="Неразрешимых задач нет."
@@ -131,11 +131,11 @@ function StatsList({
         {list.map((one) => (
           <div key={one.caseId} className="list-row">
             <span>
-              <span className="label">{one.caseId}</span>
+              <span className="mono">{one.caseId}</span>
               {/* Ненадёжной доле стоит метка, а не звёздочка внизу: сноску
                   внизу списка читают не глядя на строку, ради которой она
                   и поставлена. */}
-              {!one.enough && <span className="kind">попыток мало</span>}
+              {!one.enough && <span className="tag">попыток мало</span>}
             </span>
             <span className="muted">
               {долей(one.solveRate)} верных из{' '}
