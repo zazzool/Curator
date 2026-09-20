@@ -71,11 +71,18 @@ class _ProgressScreenState extends State<ProgressScreen> {
           IconButton(
             icon: const Icon(Icons.account_circle_outlined),
             tooltip: 'Мой доступ',
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => AccountScreen(account: Account(widget.api)),
-              ),
-            ),
+            onPressed: () async {
+              // «Да» в ответе означает, что доступ restored по почте и
+              // запись сменилась. Перечитываем: числа на этом экране
+              // считаны за прежнюю запись, и оставить их значило бы
+              // показать врачу чужой путь под его вернувшейся почтой.
+              final restored = await Navigator.of(context).push(
+                MaterialPageRoute<bool>(
+                  builder: (_) => AccountScreen(account: Account(widget.api)),
+                ),
+              );
+              if (restored == true) await _load();
+            },
           ),
         ],
       ),

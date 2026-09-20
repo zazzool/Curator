@@ -29,13 +29,59 @@ class StubAccount implements Account {
 
   @override
   Future<void> rename(String name) async {
-    renamedTo = name.trim();
+    renamedTo = name;
+  }
+
+  /// Что попросили и чем ответили. Записывается ДОСЛОВНО: обрезка пробелов
+  /// живёт в Account, и заглушка, обрезающая сама, проверяла бы себя.
+  /// Обрезка проверена в test/api_test.dart против настоящего сокета.
+  String? bindAsked;
+  String? bindConfirmed;
+  String? recoveryAsked;
+  List<String>? recoveryConfirmed;
+
+  /// Чем отвечать. Отказ здесь — это отказ сервера, и экран обязан
+  /// показать его словами, а не промолчать.
+  ApiFailure? bindFailure;
+  ApiFailure? recoveryFailure;
+
+  @override
+  Future<void> startBind(String email) async {
+    final one = bindFailure;
+    if (one != null) throw one;
+    bindAsked = email;
+  }
+
+  @override
+  Future<String> confirmBind(String code) async {
+    final one = bindFailure;
+    if (one != null) throw one;
+    bindConfirmed = code;
+    return bindAsked ?? '';
+  }
+
+  @override
+  Future<void> startRecovery(String email) async {
+    final one = recoveryFailure;
+    if (one != null) throw one;
+    recoveryAsked = email;
+  }
+
+  @override
+  Future<void> confirmRecovery(String email, String code) async {
+    final one = recoveryFailure;
+    if (one != null) throw one;
+    recoveryConfirmed = [email, code];
   }
 }
 
-Profile profileOf({List<Right> rights = const [], int dropped = 0}) => Profile(
+Profile profileOf({
+  List<Right> rights = const [],
+  int dropped = 0,
+  String email = '',
+}) => Profile(
   accountId: 7,
-  email: '',
+  email: email,
   displayName: 'Иванов',
   createdAt: '2026-09-01T10:00:00Z',
   rights: rights,
@@ -104,23 +150,39 @@ void main() {
     expect(find.textContaining('показать не умеет: 2'), findsOneWidget);
   });
 
-  testWidgets('про почту сказано то, что есть, без обещаний', (tester) async {
-    // Привязки почты нет ни здесь, ни на сервере. Обещание «позже»
-    // отправило бы врача ждать того, чего никто не делает.
+  testWidgets('непривязанная почта зовёт привязать, а не обещает', (
+    tester,
+  ) async {
+    // Обещание «позже» отправило бы врача ждать. Здесь привязка есть, и
+    // сказано именно это — вместе с тем, ради чего она нужна.
     await openScreen(tester, StubAccount(profileOf()));
-    final mail = tester.widget<Text>(find.textContaining('Почта не привязана'));
-    expect(mail.data, isNot(contains('позже')));
-    expect(mail.data, isNot(contains('скоро')));
+    expect(find.text('Прислать код'), findsOneWidget);
+    final why = tester.widget<Text>(find.textContaining('при смене телефона'));
+    expect(why.data, isNot(contains('позже')));
+    expect(why.data, isNot(contains('скоро')));
   });
 
-  testWidgets('имя сохраняется обрезанным', (tester) async {
-    // Пробел, уехавший на сервер, вернулся бы оттуда именем с пробелом.
+  testWidgets('привязанная почта показана вместе с тем, зачем она', (
+    tester,
+  ) async {
+    await openScreen(tester, StubAccount(profileOf(email: 'vn@example.com')));
+    expect(find.text('vn@example.com'), findsOneWidget);
+    // Поля ввода нет вовсе: привязанное не переспрашивают.
+    expect(find.text('Прислать код'), findsNothing);
+  });
+
+  testWidgets('набранное имя уходит на сохранение как есть', (tester) async {
+    // Экран отдаёт набранное, не мудря: обрезка — дело Account, и проверена
+    // она там, где живёт (test/api_test.dart).
     final account = StubAccount(profileOf());
     await openScreen(tester, account);
-    await tester.enterText(find.byType(TextField), '  Пётр Петрович  ');
+    await tester.enterText(
+      find.byKey(const Key('поле имени')),
+      '  Пётр Петрович  ',
+    );
     await tester.tap(find.text('Сохранить'));
     await tester.pumpAndSettle();
-    expect(account.renamedTo, 'Пётр Петрович');
+    expect(account.renamedTo, '  Пётр Петрович  ');
   });
 
   testWidgets('отказ показывается словами сервера и даёт повторить', (

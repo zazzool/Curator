@@ -125,6 +125,53 @@ class Api {
     await enroll(platform: platform, appVersion: appVersion);
   }
 
+  /// Просит код возврата доступа на привязанный адрес.
+  ///
+  /// Без токена и с ключом программы: врач приходит сюда ровно тогда,
+  /// когда токена у него уже нет — телефон сменился, приложение поставлено
+  /// заново.
+  Future<void> startRecovery(String email) async {
+    await _send(
+      'POST',
+      '/v1/recovery',
+      headers: {'X-App-Key': appKey},
+      body: {'email': email.trim()},
+      authorized: false,
+    );
+  }
+
+  /// Возвращает доступ по коду и запоминает новый токен.
+  ///
+  /// Токен пишется тем же путём, что и при заведении устройства: сервер
+  /// отдаёт его ровно один раз, и «напомнить» его нельзя. Прежний токен
+  /// перезаписывается — на новом устройстве его всё равно нет, а на том же
+  /// самом врач получил бы два входа в одну запись и один потерял бы
+  /// молча.
+  Future<void> confirmRecovery(
+    String email,
+    String code, {
+    String? platform,
+    String? appVersion,
+  }) async {
+    final body = await _send(
+      'POST',
+      '/v1/recovery/confirm',
+      headers: {'X-App-Key': appKey},
+      body: {
+        'email': email.trim(),
+        'code': code.trim(),
+        'platform': ?platform,
+        'appVersion': ?appVersion,
+      },
+      authorized: false,
+    );
+    final token = body['token'];
+    if (token is! String || token.isEmpty) {
+      throw ApiFailure('Не вышло вернуть доступ. Попробуйте ещё раз');
+    }
+    await tokens.write(token);
+  }
+
   Future<Map<String, dynamic>> get(String path, {Map<String, String>? query}) =>
       _send('GET', path, query: query);
 
