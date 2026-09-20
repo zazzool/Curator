@@ -4,6 +4,7 @@ import { Cases } from './Cases'
 import { Generation } from './Generation'
 import { ApiError, api } from './api'
 import { Loaded, useResource } from './useResource'
+import { confirmed } from './confirm'
 import type { Document, Me, Unit } from './api'
 
 // Экран источника: путь первого этапа целиком и в том же порядке, в каком
@@ -85,6 +86,19 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
   }
 
   async function setStatus(status: string) {
+    // Спрашивается только снятие: объявить источник действующим обратно
+    // можно той же кнопкой, и подтверждение у обратимого приучает
+    // отвечать «да» не читая.
+    if (
+      status === 'retired' &&
+      !confirmed(
+        `Снять источник «${source?.title ?? ''}» с раздачи?`,
+        'В справочнике приложения его больше не будет — у всех врачей сразу. ' +
+          'Задачи по нему останутся, но врач не увидит, откуда они.',
+      )
+    ) {
+      return
+    }
     setBusy(true)
     setFailure('')
     setNote('')

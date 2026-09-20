@@ -138,6 +138,34 @@ describe('задачи источника', () => {
     await waitFor(() => expect(screen.getByText(/не удалена/)).toBeTruthy())
   })
 
+  it('снятие с раздачи спрашивают, и отказ его останавливает', async () => {
+    // Снятая задача пропадает у врачей из ленты и из повторения сразу, а
+    // кнопка выглядела ровно как «Открыть». Отказ обязан останавливать
+    // действие ДО сервера: остановка после отказа — это уже не вопрос.
+    const запросы: string[] = []
+    vi.stubGlobal('confirm', vi.fn(() => false))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string) => {
+        запросы.push(path)
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ cases: [задача({ status: 'published', statusWord: 'раздаётся' })] }),
+            { status: 200 },
+          ),
+        )
+      }),
+    )
+    render(<Cases me={СОСТАВИТЕЛЬ} source={SOURCE} path="" />)
+
+    await waitFor(() => expect(screen.getByText('Снять с раздачи')).toBeTruthy())
+    fireEvent.click(screen.getByText('Снять с раздачи'))
+
+    expect(window.confirm).toHaveBeenCalled()
+    await new Promise((done) => setTimeout(done, 0))
+    expect(запросы.some((one) => one.includes('/withdraw'))).toBe(false)
+  })
+
   it('разметку показывает прямо в условии, а не сноской под ним', async () => {
     serve({
       '/admin/api/cases/': задача(),

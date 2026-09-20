@@ -2,9 +2,10 @@ import { Fragment, useCallback, useState, type FormEvent } from 'react'
 
 import { датой, датойИвременем } from './words'
 import { dropDraft, readDraft, writeDraft } from './draftStore'
-import { ПРАВА, праваСловами } from './permissions'
+import { ПРАВА, правоСловами, праваСловами } from './permissions'
 import { ApiError, api } from './api'
 import { Loaded, useResource } from './useResource'
+import { confirmed } from './confirm'
 import type { Me, Prompt, StudioUser } from './api'
 
 // Мастерская: пользователи студии, задания моделям и ключи программ.
@@ -63,9 +64,24 @@ function Users({ me }: { me: Me }) {
   async function togglePermission(user: StudioUser, code: string) {
     setFailure('')
     setMade(null)
-    const next = user.permissions.includes(code)
+    const taking = user.permissions.includes(code)
+    const next = taking
       ? user.permissions.filter((one) => one !== code)
       : [...user.permissions, code]
+    // Флажок применяется сразу, без шага сохранения, и это остаётся так:
+    // шаг сохранения на одиннадцати флажках — это одиннадцать поводов
+    // забыть нажать. Но СНЯТИЕ права спрашивается: выдача исправляется
+    // тем же флажком, а снятие человек замечает не здесь, а когда у него
+    // пропал раздел, и объяснить это будет некому.
+    if (
+      taking &&
+      !confirmed(
+        `Снять право «${правоСловами(code)}» у «${user.login}»?`,
+        'Раздел, который это право открывает, у него закроется сразу.',
+      )
+    ) {
+      return
+    }
     try {
       await api.setUserPermissions(user.login, next)
       await reload()
@@ -80,6 +96,18 @@ function Users({ me }: { me: Me }) {
   async function setDisabled(user: StudioUser, disabled: boolean) {
     setFailure('')
     setMade(null)
+    // Спрашивается только закрытие: открыть вход обратно можно той же
+    // кнопкой, и подтверждение у обратимого приучает отвечать «да» не
+    // читая — а вместе с ним перестают читать и остальные вопросы.
+    if (
+      disabled &&
+      !confirmed(
+        `Закрыть вход «${user.login}»${user.displayName ? ` (${user.displayName})` : ''}?`,
+        'Войти в студию этим именем станет нельзя. Работа, сделанная им, остаётся на месте.',
+      )
+    ) {
+      return
+    }
     try {
       await api.setUserDisabled(user.login, disabled)
       await reload()
@@ -148,7 +176,12 @@ function Users({ me }: { me: Me }) {
                             <button onClick={() => setOpen(open === user.login ? null : user.login)}>
                               {open === user.login ? 'Свернуть' : 'Права'}
                             </button>
-                            <button onClick={() => setDisabled(user, !user.disabled)}>
+                            {/* Красным только закрытие: открыть вход
+                                обратно — не опасное действие. */}
+                            <button
+                              className={user.disabled ? undefined : 'danger'}
+                              onClick={() => setDisabled(user, !user.disabled)}
+                            >
                               {user.disabled ? 'Открыть вход' : 'Закрыть вход'}
                             </button>
                           </span>
@@ -474,6 +507,19 @@ function AppKeys({ me }: { me: Me }) {
   async function disable(keyId: string) {
     setFailure('')
     setIssued(null)
+    // Самое дорогое действие в этом разделе, и по виду кнопки этого
+    // прежде было не понять: ключ зашит в СОБРАННЫЕ сборки, стоящие у
+    // врачей на телефонах. Закрыть его — значит отрезать их все разом, и
+    // починка займёт столько, сколько занимает выкладка в магазин.
+    if (
+      !confirmed(
+        `Закрыть ключ программы «${keyId}»?`,
+        'Все уже поставленные сборки с этим ключом перестанут подключаться к серверу. ' +
+          'Починить это можно только новой выкладкой в магазин.',
+      )
+    ) {
+      return
+    }
     try {
       await api.disableAppKey(keyId)
       await reload()
@@ -521,7 +567,9 @@ function AppKeys({ me }: { me: Me }) {
                 <span className="row-tools">
                   <span className="muted">заведён {датой(key.createdAt)}</span>
                   {canWorkshop && !key.disabled && (
-                    <button onClick={() => disable(key.keyId)}>Закрыть</button>
+                    <button className="danger" onClick={() => disable(key.keyId)}>
+                      Закрыть
+                    </button>
                   )}
                 </span>
               </div>
