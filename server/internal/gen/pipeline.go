@@ -73,6 +73,9 @@ type Result struct {
 	// код, и менять его ради переименования значит править то, что
 	// работает, ради красоты.
 	Check Check
+
+	// Siblings — итоги различающей сверки по каждому неверному варианту.
+	Siblings []SiblingCheck
 }
 
 // Check — что известно о слепой сверке черновика.
@@ -175,7 +178,32 @@ func (r *Runner) run(ctx context.Context, job Job) (Result, error) {
 	result.Check = Check{Done: true, Verdict: verdict}
 	result.Verdict = verdict
 	r.keepCheck(ctx, job.ID, draftID, result.Check)
+
+	r.runSiblings(ctx, job, draftID, draft, &result)
 	return result, nil
+}
+
+// runSiblings — узел различающей сверки.
+//
+// Идёт ПОСЛЕ слепой и отдельным узлом, а не внутри неё: вопросы разные, и
+// стоят они разных денег. Слепая спрашивает «ведёт ли условие к
+// заказанному ответу», эта — «не ведёт ли оно с тем же успехом к соседу»;
+// у задачи с двумя верными ответами первая сходится, и без второй никто
+// не спросит.
+//
+// Отказ узла задание не роняет: задача написана и сверена, а не
+// состоявшаяся различающая сверка — это пометка, а не брак.
+func (r *Runner) runSiblings(ctx context.Context, job Job, draftID int64, draft Draft, result *Result) {
+	if err := r.jobs.Step(ctx, job.ID, NodeSiblings); err != nil {
+		log.Printf("задание %d: шаг различающей сверки не записан: %v", job.ID, err)
+		return
+	}
+	checks := r.checkSiblings(ctx, job, draft)
+	result.Siblings = checks
+	if err := r.jobs.SaveSiblingChecks(ctx, draftID, checks); err != nil {
+		log.Printf("задание %d: итоги различающей сверки не записаны в черновик %d: %v",
+			job.ID, draftID, err)
+	}
 }
 
 // keepCheck записывает итог сверки в черновик.
