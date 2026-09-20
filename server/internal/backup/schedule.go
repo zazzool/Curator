@@ -2,7 +2,10 @@ package backup
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -66,6 +69,9 @@ func (k *Keeper) once(ctx context.Context) {
 	}
 	log.Printf("снимок базы снят: %s, %d байт", snap.Path, snap.Bytes)
 
+	// Сошёлся ли снимок — отдельно от «была ли сверка»: вывозить можно
+	// только сошедшийся, а несверявшийся не verified.
+	verified := false
 	if k.VerifyDSN != "" {
 		// Сверка идёт после съёмки, а не вместо: снимок уже лежит, и
 		// отказ сверки не отменяет его — он означает «этому файлу верить
@@ -73,7 +79,8 @@ func (k *Keeper) once(ctx context.Context) {
 		if err := k.Verify(ctx, snap.Path); err != nil {
 			log.Printf("снимку %s ВЕРИТЬ НЕЛЬЗЯ: %v", snap.Path, err)
 		} else {
-			log.Printf("снимок %s развёрнут и сошёлся по строкам", snap.Path)
+			verified = true
+			log.Printf("снимок %s развёрнут и verified по строкам", snap.Path)
 		}
 	} else {
 		// Тоже вслух: снимок, который никто не восстанавливал, — не
@@ -81,9 +88,44 @@ func (k *Keeper) once(ctx context.Context) {
 		log.Print("снимок не сверялся: не задана отдельная база под разворачивание")
 	}
 
+	// Вывоз идёт после сверки и ТОЛЬКО за сошедшимся снимком: вывезенный
+	// негодный файл — это вторая копия того, чему верить нельзя, и хуже
+	// отсутствия второй копии, потому что выглядит защитой.
+	//
+	// Отказ вывоза звучит так же громко, как отказ съёмки, и не отменяет
+	// самого снимка: он лежит, просто пока в одном месте.
+	if k.Offsite.Ready() {
+		if !verified {
+			log.Print("снимок НЕ вывезен: он не прошёл сверку, а вывозить непроверенное нельзя")
+		} else if err := k.carry(ctx, snap); err != nil {
+			log.Printf("снимок %s НЕ вывезен с хоста: %v", snap.Path, err)
+		} else {
+			log.Printf("снимок %s вывезен в хранилище запечатанным", snap.Path)
+		}
+	} else {
+		// Вслух и на каждой съёмке: снимок рядом с базой переживает
+		// контейнер и не переживает хост, и молчание здесь читалось бы
+		// как «вторая копия есть».
+		log.Print("снимок никуда не вывезен: второе хранилище не настроено, " +
+			"и один отказавший диск унесёт и базу, и все её снимки")
+	}
+
 	if removed, err := k.Prune(); err != nil {
 		log.Printf("старые снимки не убраны: %v", err)
 	} else if removed > 0 {
 		log.Printf("старых снимков убрано: %d", removed)
 	}
+}
+
+// carry вывозит снимок во второе хранилище.
+//
+// Имя в хранилище — имя файла, и не больше: путь на нашем хосте в имя не
+// уезжает. Восстанавливающему он не нужен, а хранилищу и подавно.
+func (k *Keeper) carry(ctx context.Context, snap Snapshot) error {
+	file, err := os.Open(snap.Path)
+	if err != nil {
+		return fmt.Errorf("снимок не открыт: %w", err)
+	}
+	defer file.Close()
+	return k.Offsite.Put(ctx, filepath.Base(snap.Path), file)
 }
