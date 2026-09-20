@@ -14,8 +14,8 @@ import (
 // Право стоит первым доводом у каждой: заказать задачу и читать промпты —
 // разные права, потому что править задание модели значит решать, какими
 // будут все будущие задачи, а заказать одну задачу — нет.
-func Routes(desk *studio.Desk, jobs *Jobs, resolver *Resolver, prompts *Prompts) {
-	r := &routes{jobs: jobs, resolver: resolver, prompts: prompts}
+func Routes(desk *studio.Desk, jobs *Jobs, resolver *Resolver, prompts *Prompts, models ModelLister) {
+	r := &routes{jobs: jobs, resolver: resolver, prompts: prompts, models: models}
 
 	desk.Handle(studio.PermGenerate, "POST /admin/api/sources/{id}/orders", r.place)
 	desk.Handle(studio.PermGenerate, "GET /admin/api/sources/{id}/jobs", r.list)
@@ -33,12 +33,17 @@ func Routes(desk *studio.Desk, jobs *Jobs, resolver *Resolver, prompts *Prompts)
 
 	desk.Handle(studio.PermPrompts, "GET /admin/api/prompts", r.listPrompts)
 	desk.Handle(studio.PermPrompts, "PUT /admin/api/prompts/{id}", r.savePrompt)
+	// Список моделей закрыт тем же правом, что и задания: он существует
+	// ради одного поля в них. Права без раздела не бывает — раздел
+	// мастерской закрыт правом на сервере, а не спрятан в студии.
+	desk.Handle(studio.PermPrompts, "GET /admin/api/models", r.listModels)
 }
 
 type routes struct {
 	jobs     *Jobs
 	resolver *Resolver
 	prompts  *Prompts
+	models   ModelLister
 }
 
 type orderRequest struct {
@@ -238,6 +243,11 @@ func (r *routes) listPrompts(w http.ResponseWriter, req *http.Request, _ studio.
 		out = append(out, map[string]any{
 			"id": p.ID, "name": p.Name, "node": p.Node, "nodeWord": NodeWord(p.Node),
 			"systemMd": p.SystemMd, "userMd": p.UserMd, "revision": p.Revision,
+			// Модель уезжает как есть, пустой в том числе: пустая означает
+			// «моделью поставщика», и подставь мы сюда её имя, студия
+			// показала бы выбор там, где выбора не делали, — а значит
+			// перестала бы показывать, где его сделали.
+			"model": p.Model,
 		})
 	}
 	studio.WriteJSON(w, http.StatusOK, map[string]any{"prompts": out})
@@ -247,7 +257,16 @@ type promptRequest struct {
 	Name     string `json:"name"`
 	SystemMd string `json:"systemMd"`
 	UserMd   string `json:"userMd"`
-	Revision int    `json:"revision"`
+
+	// Model — модель узла; пустая строка означает «моделью поставщика».
+	//
+	// Список моделей здесь НЕ сверяется, и это решение, а не недосмотр:
+	// словарь моделей ведём не мы. Новая модель появляется у поставщика
+	// раньше, чем в нашем прайсе, и сверка по прайсу отказывала бы ровно
+	// в тот день, когда составителю понадобилось её попробовать.
+	Model string `json:"model"`
+
+	Revision int `json:"revision"`
 }
 
 // savePrompt правит задание модели.
@@ -263,14 +282,15 @@ func (r *routes) savePrompt(w http.ResponseWriter, req *http.Request, user studi
 	}
 	saved, err := r.prompts.Save(req.Context(), Prompt{
 		ID: req.PathValue("id"), Name: body.Name,
-		SystemMd: body.SystemMd, UserMd: body.UserMd, Revision: body.Revision,
+		SystemMd: body.SystemMd, UserMd: body.UserMd,
+		Model: body.Model, Revision: body.Revision,
 	}, user.Login)
 	if err != nil {
 		studio.WriteError(w, http.StatusConflict, studio.Sentence(err.Error()))
 		return
 	}
 	studio.WriteJSON(w, http.StatusOK, map[string]any{
-		"id": saved.ID, "revision": saved.Revision,
+		"id": saved.ID, "revision": saved.Revision, "model": saved.Model,
 	})
 }
 

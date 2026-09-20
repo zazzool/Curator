@@ -450,7 +450,28 @@ export type Prompt = {
   nodeWord: string
   systemMd: string
   userMd: string
+
+  /**
+   * Модель этого узла. Пустая строка — моделью поставщика.
+   *
+   * Обязательное поле, а не `model?`: пустая строка это ВЫБОР «моделью
+   * поставщика», и необязательность смешала бы его с «сервер поля не
+   * прислал». Различать их приходится ровно там, где решают, менять ли
+   * модель узла.
+   */
+  model: string
+
   revision: number
+}
+
+/** Модель, о которой что-то известно: для подсказки при выборе. */
+export type ModelChoice = {
+  provider: string
+  model: string
+
+  /** Цена одного токена в нанодолларах. Ноль — цена неизвестна. */
+  promptNanoUsd: number
+  completionNanoUsd: number
 }
 
 // Набор задач в списке: столько, сколько нужно, чтобы выбрать нужный.
@@ -885,13 +906,22 @@ export const api = {
 
   prompts: () => request<{ prompts: Prompt[] }>('GET', '/admin/api/prompts'),
 
-  savePrompt: (prompt: Pick<Prompt, 'id' | 'name' | 'systemMd' | 'userMd' | 'revision'>) =>
-    request<{ id: string; revision: number }>('PUT', `/admin/api/prompts/${prompt.id}`, {
-      name: prompt.name,
-      systemMd: prompt.systemMd,
-      userMd: prompt.userMd,
-      revision: prompt.revision,
-    }),
+  savePrompt: (
+    prompt: Pick<Prompt, 'id' | 'name' | 'systemMd' | 'userMd' | 'model' | 'revision'>,
+  ) =>
+    request<{ id: string; revision: number; model: string }>(
+      'PUT',
+      `/admin/api/prompts/${prompt.id}`,
+      {
+        name: prompt.name,
+        systemMd: prompt.systemMd,
+        userMd: prompt.userMd,
+        model: prompt.model,
+        revision: prompt.revision,
+      },
+    ),
+
+  models: () => request<{ models: ModelChoice[] }>('GET', '/admin/api/models'),
 
   cases: (
     query: {

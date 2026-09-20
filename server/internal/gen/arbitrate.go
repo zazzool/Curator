@@ -166,7 +166,7 @@ func (r *Runner) arbitrate(ctx context.Context, job Job, draft Draft) (*Arbitrat
 	user = strings.ReplaceAll(user, "{условие}", draft.Condition())
 	user = strings.ReplaceAll(user, "{соседи}", neighbours)
 
-	answer, err := r.ask(ctx, job, NodeArbitrate, llm.Prompt{
+	answer, err := r.ask(ctx, job, prompt, llm.Prompt{
 		System: Render(prompt.SystemMd, plan),
 		User:   user,
 		// Спор решается сличением текстов — разброс здесь не нужен.

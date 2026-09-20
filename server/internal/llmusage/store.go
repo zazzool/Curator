@@ -287,3 +287,54 @@ func nullable(id int64) any {
 	}
 	return id
 }
+
+// ModelPrice — одна строка прайса моделей.
+type ModelPrice struct {
+	Provider string
+	Model    string
+
+	// PromptNanoUSD и CompletionNanoUSD — цена ОДНОГО токена в
+	// нанодолларах. За токен, а не за тысячу: тысяча — привычная единица
+	// прайс-листов, но она заставляет делить при каждом расчёте, и
+	// однажды разделят не там.
+	PromptNanoUSD     int64
+	CompletionNanoUSD int64
+}
+
+// Catalog — модели, о которых что-то известно, для выбора в студии.
+//
+// Берётся из прайса, а не спрашивается у поставщика при каждом открытии
+// экрана: список у шлюза бывает в сотни строк, ходит он секунды, а
+// выбирают модель раз в месяц. Прайс же обновляется своим чередом и несёт
+// вдобавок цену — то, по чему модель для узла и выбирают.
+//
+// Список НЕ закрытый, и это важно для того, кто его читает: новая модель
+// появляется у поставщика раньше, чем в нашем прайсе, и отсутствие в
+// этом списке ничего не запрещает.
+func (s *Store) Catalog(ctx context.Context) ([]ModelPrice, error) {
+	rows, err := s.gate.Query(ctx,
+		`SELECT provider, model, prompt_nano_usd, completion_nano_usd
+		   FROM model_prices
+		  ORDER BY provider, model`)
+	if err != nil {
+		return nil, fmt.Errorf("прайс моделей не прочитан: %w", err)
+	}
+	defer rows.Close()
+
+	// Пустой список — [], а не nil: он уедет в ответ ручки, и null вместо
+	// списка роняет студию на исправном случае — на свежей установке, где
+	// прайса ещё нет.
+	out := []ModelPrice{}
+	for rows.Next() {
+		var one ModelPrice
+		if err := rows.Scan(&one.Provider, &one.Model,
+			&one.PromptNanoUSD, &one.CompletionNanoUSD); err != nil {
+			return nil, fmt.Errorf("строка прайса моделей не разобрана: %w", err)
+		}
+		out = append(out, one)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("прайс моделей дочитан не до конца: %w", err)
+	}
+	return out, nil
+}

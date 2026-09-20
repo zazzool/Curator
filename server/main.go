@@ -417,7 +417,14 @@ func housekeeping(ctx context.Context, sessions *studio.Sessions, ledger *llmusa
 func generation(ctx context.Context, gate *dbgate.Gate, desk *studio.Desk, sources *source.Store) {
 	jobs := gen.NewJobs(gate)
 	prompts := gen.NewPrompts(gate)
-	gen.Routes(desk, jobs, gen.NewResolver(gate), prompts)
+
+	// Учёт расхода заводится ДО проверки поставщика: список моделей для
+	// выбора берётся из его прайса, и нужен он студии независимо от того,
+	// настроен ли ключ. Экран без списка моделей человек принимает за
+	// поломку студии и идёт искать её в студии — тот же довод, по
+	// которому и сами ручки объявляются всегда.
+	ledger := llmusage.NewStore(gate)
+	gen.Routes(desk, jobs, gen.NewResolver(gate), prompts, modelChoices(ledger))
 
 	// Затравки кладутся при подъёме и только недостающие: правленое в
 	// студии задание затирать накатом нельзя. Отказ здесь не валит
@@ -448,7 +455,6 @@ func generation(ctx context.Context, gate *dbgate.Gate, desk *studio.Desk, sourc
 		return
 	}
 
-	ledger := llmusage.NewStore(gate)
 	prices, err := ledger.Prices(seedCtx)
 	if err != nil {
 		// Прайс — про оценку цены, а не про работу: без него обращения
@@ -637,4 +643,27 @@ func studioFiles(dir string) http.Handler {
 		w.Header().Set("Cache-Control", "no-cache")
 		http.ServeFile(w, r, index)
 	})
+}
+
+// modelChoices — переходник от прайса моделей к списку выбора в студии.
+//
+// Нужен потому, что конвейер про учёт расхода не знает и знать не должен:
+// пакет, знающий и задания, и учёт, стал бы вторым местом, где живут оба.
+// Переходник же виден в одном месте — здесь, где их и сводят.
+func modelChoices(ledger *llmusage.Store) gen.ModelLister {
+	return func(ctx context.Context) ([]gen.ModelChoice, error) {
+		list, err := ledger.Catalog(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]gen.ModelChoice, 0, len(list))
+		for _, one := range list {
+			out = append(out, gen.ModelChoice{
+				Provider: one.Provider, Model: one.Model,
+				PromptNanoUSD:     one.PromptNanoUSD,
+				CompletionNanoUSD: one.CompletionNanoUSD,
+			})
+		}
+		return out, nil
+	}
 }

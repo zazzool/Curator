@@ -97,6 +97,19 @@ type Prompt struct {
 	Node     string
 	SystemMd string
 	UserMd   string
+
+	// Model — модель ЭТОГО узла. Пусто — модель поставщика по умолчанию.
+	//
+	// Узлы стоят разных денег и требуют разного: написание условия —
+	// самая дорогая работа конвейера, а слепая сверка отвечает одним
+	// словом из списка. Одна модель на весь конвейер оставляла выбор
+	// между «дорого везде» и «плохо везде».
+	//
+	// Живёт рядом с заданием, а не отдельной настройкой, потому что
+	// правят их вместе: задание, написанное под рассуждающую модель,
+	// на отвечающей сразу работает иначе.
+	Model string
+
 	Revision int
 }
 
@@ -116,11 +129,12 @@ func NewPrompts(gate *dbgate.Gate) *Prompts { return &Prompts{gate: gate} }
 func (p *Prompts) ForNode(ctx context.Context, node string) (Prompt, error) {
 	var out Prompt
 	err := p.gate.QueryRow(ctx,
-		`SELECT id, name, node, system_md, user_md, revision
+		`SELECT id, name, node, system_md, user_md, model, revision
 		   FROM prompts
 		  WHERE node = $1 AND is_default
 		  LIMIT 1`, node).
-		Scan(&out.ID, &out.Name, &out.Node, &out.SystemMd, &out.UserMd, &out.Revision)
+		Scan(&out.ID, &out.Name, &out.Node, &out.SystemMd, &out.UserMd,
+			&out.Model, &out.Revision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Prompt{}, fmt.Errorf("у узла «%s» нет задания по умолчанию", NodeWord(node))
 	}
@@ -427,7 +441,7 @@ func seeds() []Prompt {
 // сбила бы его с того, что за чем идёт.
 func (p *Prompts) All(ctx context.Context) ([]Prompt, error) {
 	rows, err := p.gate.Query(ctx,
-		`SELECT id, name, node, system_md, user_md, revision
+		`SELECT id, name, node, system_md, user_md, model, revision
 		   FROM prompts
 		  ORDER BY node, id`)
 	if err != nil {
@@ -439,7 +453,7 @@ func (p *Prompts) All(ctx context.Context) ([]Prompt, error) {
 	for rows.Next() {
 		var one Prompt
 		if err := rows.Scan(&one.ID, &one.Name, &one.Node, &one.SystemMd,
-			&one.UserMd, &one.Revision); err != nil {
+			&one.UserMd, &one.Model, &one.Revision); err != nil {
 			return nil, fmt.Errorf("задание не прочитано: %w", err)
 		}
 		byNode[one.Node] = append(byNode[one.Node], one)
@@ -507,15 +521,22 @@ func (p *Prompts) Save(ctx context.Context, edit Prompt, login string) (Prompt, 
 		}
 
 		name := strings.TrimSpace(edit.Name)
+		// Модель пишется КАК ЕСТЬ, включая пустую: пустая означает
+		// «моделью поставщика», и это законный выбор, а не пропущенное
+		// поле. Сохрани мы её через COALESCE, как имя, — снятую в студии
+		// модель было бы нельзя снять: форма вернула бы пустую строку, а
+		// база оставила бы прежнюю, и выглядело бы это как несохранение.
 		err = tx.QueryRow(ctx,
 			`UPDATE prompts
 			    SET name = COALESCE(NULLIF($2, ''), name),
-			        system_md = $3, user_md = $4,
+			        system_md = $3, user_md = $4, model = $5,
 			        revision = revision + 1, updated_at = NOW()
-			  WHERE id = $1 AND revision = $5
-			 RETURNING id, name, node, system_md, user_md, revision`,
-			edit.ID, name, edit.SystemMd, edit.UserMd, prevRevision).
-			Scan(&out.ID, &out.Name, &out.Node, &out.SystemMd, &out.UserMd, &out.Revision)
+			  WHERE id = $1 AND revision = $6
+			 RETURNING id, name, node, system_md, user_md, model, revision`,
+			edit.ID, name, edit.SystemMd, edit.UserMd,
+			strings.TrimSpace(edit.Model), prevRevision).
+			Scan(&out.ID, &out.Name, &out.Node, &out.SystemMd, &out.UserMd,
+				&out.Model, &out.Revision)
 		if err != nil {
 			return fmt.Errorf("задание %q не сохранено: %w", edit.ID, err)
 		}

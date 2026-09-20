@@ -281,7 +281,7 @@ func (r *ParseRunner) parsePart(ctx context.Context, job Job, plan ParsePlan,
 	user = strings.ReplaceAll(user, "{место}", placeLine(part, at, total))
 	user = strings.ReplaceAll(user, "{документ}", part.Body)
 
-	answer, err := r.ask(ctx, job, llm.Prompt{
+	answer, err := r.ask(ctx, job, prompt, llm.Prompt{
 		System: Render(prompt.SystemMd, vars),
 		User:   user,
 		// Разбор длинный: документ возвращается почти целиком,
@@ -300,10 +300,17 @@ func (r *ParseRunner) parsePart(ctx context.Context, job Job, plan ParsePlan,
 }
 
 // ask — одно обращение к модели с записью в учёт.
-func (r *ParseRunner) ask(ctx context.Context, job Job, prompt llm.Prompt) (string, error) {
+//
+// Узел приходит своим заданием по тому же доводу, что и у исполнителя
+// задач: имя узла и модель узла — два свойства одной строки, и спутать их
+// здесь нечем.
+func (r *ParseRunner) ask(ctx context.Context, job Job, node Prompt, prompt llm.Prompt) (string, error) {
+	model := modelFor(node, job.ParsePlan.Model)
 	started := time.Now()
-	answer, usage, err := r.talker.Generate(ctx, prompt, job.ParsePlan.Model)
-	record(ctx, r.ledger, r.prices, job.ID, NodeParse, job.ParsePlan.Model,
+	answer, usage, err := r.talker.Generate(ctx, prompt, model)
+	// В учёт уходит та модель, которой спросили: расход по узлам — то, по
+	// чему решают, где модель менять.
+	record(ctx, r.ledger, r.prices, job.ID, node.Node, model,
 		prompt, answer, usage, time.Since(started), err)
 	if err != nil {
 		if errors.Is(err, llm.ErrTruncated) {

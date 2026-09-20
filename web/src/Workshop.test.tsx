@@ -20,8 +20,16 @@ const ЗАДАНИЯ = {
       nodeWord: 'черновик',
       systemMd: 'Ты врач-методист.',
       userMd: 'Напиши задачу по {{unit}}.',
+      model: '',
       revision: 4,
     },
+  ],
+}
+
+const МОДЕЛИ = {
+  models: [
+    { provider: 'openrouter', model: 'дорогая/рассуждающая', promptNanoUsd: 3000, completionNanoUsd: 15000 },
+    { provider: 'openrouter', model: 'дешёвая/быстрая', promptNanoUsd: 100, completionNanoUsd: 400 },
   ],
 }
 
@@ -111,6 +119,10 @@ function ответ(path: string, prompts: unknown, keys: unknown, users: unknow
   if (path.startsWith('/admin/api/prompts')) return prompts
   if (path.startsWith('/admin/api/users')) return users
   if (path.startsWith('/admin/api/rules')) return rules
+  // Список моделей — пятый, и подставляется он здесь по тому же доводу,
+  // что и остальные четыре: экран, которому не ответили, остаётся в
+  // «Читаем…» и молча уводит проверку от её предмета.
+  if (path.startsWith('/admin/api/models')) return МОДЕЛИ
   return keys
 }
 
@@ -190,6 +202,109 @@ describe('мастерская', () => {
       const body = JSON.parse(String((sent![1] as { body?: string }).body))
       expect(body.revision).toBe(4)
     })
+  })
+
+  it('модель узла видна в списке, не открывая задание', async () => {
+    // Узлов больше пяти, и «какой узел какой моделью» — вопрос обо ВСЁМ
+    // конвейере сразу. Открывая задания по одному, ответить на него
+    // нельзя, а именно им и решают, где менять модель.
+    serve(
+      {
+        prompts: [
+          { ...ЗАДАНИЯ.prompts[0]!, model: 'дешёвая/быстрая' },
+          { ...ЗАДАНИЯ.prompts[0]!, id: 'verify', name: 'Слепая сверка', model: '' },
+        ],
+      },
+      КЛЮЧИ,
+    )
+    render(<Workshop me={МАСТЕР} />)
+    expect(await screen.findByText(/дешёвая\/быстрая/)).toBeTruthy()
+    // У узла без своей модели сказано словами, а не пусто: пустое место
+    // читается как «не прочиталось», и составитель пойдёт перезагружать
+    // экран, который работает.
+    expect(screen.getByText(/модель поставщика/)).toBeTruthy()
+  })
+
+  it('модель узла уезжает на сервер вместе с заданием', async () => {
+    // Поле, которое набирается и не отправляется, — худший вид отказа:
+    // сохранение отвечает успехом, редакция растёт, а конвейер ходит
+    // прежней моделью. Замечают это по счёту через месяц.
+    render(<Workshop me={МАСТЕР} />)
+    fireEvent.click(await screen.findByText('Черновик задачи'))
+    const поле = await screen.findByPlaceholderText('моделью поставщика')
+    fireEvent.change(поле, { target: { value: 'дорогая/рассуждающая' } })
+    fireEvent.click(screen.getByText('Сохранить задание'))
+
+    await waitFor(() => {
+      const sent = (globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.find(
+        (call) =>
+          String(call[0]).includes('/admin/api/prompts/draft') &&
+          (call[1] as { method?: string })?.method === 'PUT',
+      )
+      expect(sent).toBeTruthy()
+      const body = JSON.parse(String((sent![1] as { body?: string }).body))
+      expect(body.model).toBe('дорогая/рассуждающая')
+    })
+  })
+
+  it('снятая модель уезжает пустой, а не пропадает из запроса', async () => {
+    // Пустая строка — это ВЫБОР «моделью поставщика». Не отправь студия
+    // поля вовсе, и снять модель узла было бы нельзя: сервер оставил бы
+    // прежнюю, а выглядело бы это как несохранение.
+    serve({ prompts: [{ ...ЗАДАНИЯ.prompts[0]!, model: 'дорогая/рассуждающая' }] }, КЛЮЧИ)
+    render(<Workshop me={МАСТЕР} />)
+    fireEvent.click(await screen.findByText('Черновик задачи'))
+    const поле = await screen.findByDisplayValue('дорогая/рассуждающая')
+    fireEvent.change(поле, { target: { value: '' } })
+    fireEvent.click(screen.getByText('Сохранить задание'))
+
+    await waitFor(() => {
+      const sent = (globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.find(
+        (call) =>
+          String(call[0]).includes('/admin/api/prompts/draft') &&
+          (call[1] as { method?: string })?.method === 'PUT',
+      )
+      expect(sent).toBeTruthy()
+      const body = JSON.parse(String((sent![1] as { body?: string }).body))
+      expect(body).toHaveProperty('model')
+      expect(body.model).toBe('')
+    })
+  })
+
+  it('модель, которой нет в прайсе, из поля не пропадает', async () => {
+    // Список моделей — подсказка, а не словарь: новая модель появляется
+    // у поставщика раньше, чем в нашем прайсе. Окажись поле списком
+    // выбора, открытие задания молча сменило бы модель узла на первую
+    // известную — и узнали бы об этом по счёту.
+    serve({ prompts: [{ ...ЗАДАНИЯ.prompts[0]!, model: 'новейшая/которой-нет-в-прайсе' }] }, КЛЮЧИ)
+    render(<Workshop me={МАСТЕР} />)
+    fireEvent.click(await screen.findByText('Черновик задачи'))
+    expect(await screen.findByDisplayValue('новейшая/которой-нет-в-прайсе')).toBeTruthy()
+  })
+
+  it('отказ списка моделей не ломает правку задания', async () => {
+    // Список — подсказка. Без неё модель вписывается руками, и полоса
+    // отказа рядом с работающим полем отправила бы составителя чинить
+    // то, что не сломано.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string) => {
+        if (String(path).startsWith('/admin/api/models')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ error: 'Список моделей не прочитан' }), { status: 500 }),
+          )
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ, СВОД)), {
+            status: 200,
+          }),
+        )
+      }),
+    )
+    render(<Workshop me={МАСТЕР} />)
+    fireEvent.click(await screen.findByText('Черновик задачи'))
+    expect(await screen.findByPlaceholderText('моделью поставщика')).toBeTruthy()
+    expect(screen.queryByText(/Список моделей не прочитан/)).toBeNull()
   })
 
   it('набранное переживает закрытие вкладки', async () => {
