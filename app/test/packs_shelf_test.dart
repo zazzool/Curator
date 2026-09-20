@@ -109,5 +109,96 @@ void main() {
       server.replies.add(Reply(200, {'packs': <Object?>[]}));
       expect(await Shelf(api, store).list(), isEmpty);
     });
+
+    test('линейка и довод доезжают, незнакомые отбрасываются', () async {
+      // Незнакомое не подменяется умолчанием: старое приложение получит
+      // однажды линейку, которой не знает, и соврать про способ оплаты
+      // хуже, чем промолчать о нём.
+      server.replies.add(
+        Reply(200, {
+          'packs': [
+            {
+              'slug': 'cardio',
+              'title': 'Кардиология',
+              'version': 1,
+              'cases': 40,
+              'kopecks': 39000,
+              'owned': true,
+              'line': 'paid',
+              'openedBy': 'group',
+            },
+            {
+              'slug': 'neuro',
+              'title': 'Неврология',
+              'version': 1,
+              'cases': 10,
+              'kopecks': 0,
+              'owned': false,
+              'line': 'besplatno',
+              'openedBy': 'по знакомству',
+            },
+          ],
+        }),
+      );
+
+      final list = await Shelf(api, store).list();
+      expect(list.first.line, PackLine.paid);
+      expect(list.first.openedBy, OpenedBy.group);
+      expect(list.last.line, '');
+      expect(list.last.openedBy, '');
+    });
+
+    test('набор без линейки не врёт про способ оплаты', () async {
+      // Старый сервер линейки не присылает вовсе, и приложение обязано
+      // это пережить: строка на месте, набор в списке, способ не назван.
+      server.replies.add(
+        Reply(200, {
+          'packs': [
+            {
+              'slug': 'cardio',
+              'title': 'Кардиология',
+              'version': 1,
+              'cases': 40,
+              'kopecks': 0,
+              'owned': false,
+            },
+          ],
+        }),
+      );
+
+      final list = await Shelf(api, store).list();
+      expect(list.single.line, '');
+      expect(closedNote(list.single.line), 'Набор пока закрыт');
+    });
+  });
+
+  group('что сделать с закрытым набором', () {
+    test('каждая линейка говорит своё, и ни одна не молчит', () {
+      // Закрытый набор без причины — тупик: врач не знает, войти ему,
+      // привязать почту или ждать оператора, и одинаково часто не делает
+      // ничего.
+      expect(closedNote(PackLine.basic), contains('почту'));
+      expect(closedNote(PackLine.paid), contains('подпиской'));
+      expect(closedNote(PackLine.guest), isNotEmpty);
+      expect(closedNote(PackLine.sponsored), isNotEmpty);
+    });
+
+    test('про оплату говорит только платная линейка', () {
+      // Врачу, которому достаточно привязать почту, обещание «появится,
+      // как только будет оплачен» — прямая неправда. Она здесь и стояла,
+      // одна на все линейки сразу.
+      for (final line in [
+        PackLine.basic,
+        PackLine.guest,
+        PackLine.sponsored,
+        '',
+      ]) {
+        expect(
+          closedNote(line).toLowerCase(),
+          isNot(anyOf(contains('оплач'), contains('куп'))),
+          reason: 'линейка $line не продаётся, а обещает оплату',
+        );
+      }
+    });
   });
 }

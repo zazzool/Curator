@@ -55,6 +55,8 @@ ShelfPack pack({
   int installed = 0,
   int version = 1,
   String summaryMd = '',
+  String line = PackLine.guest,
+  String openedBy = OpenedBy.line,
 }) => ShelfPack(
   slug: 'cardio',
   title: 'Кардиология',
@@ -64,6 +66,8 @@ ShelfPack pack({
   kopecks: kopecks,
   owned: owned,
   installed: installed,
+  line: line,
+  openedBy: openedBy,
 );
 
 Widget screen(Shelf shelf, Download download, PackStore store) => MaterialApp(
@@ -78,7 +82,9 @@ void main() {
     // и решит, что приложение сломалось.
     await tester.pumpWidget(
       screen(
-        StubShelf([pack(kopecks: 39000, owned: false)]),
+        StubShelf([
+          pack(kopecks: 39000, owned: false, line: PackLine.paid, openedBy: ''),
+        ]),
         StubDownload(),
         MemoryPackStore(),
       ),
@@ -86,8 +92,70 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.textContaining('390 ₽'), findsOneWidget);
-    expect(find.textContaining('ещё не открыт'), findsOneWidget);
+    expect(find.textContaining('подпиской'), findsOneWidget);
     expect(find.text('Скачать'), findsNothing);
+  });
+
+  testWidgets('закрытый базовый зовёт привязать почту, а не платить', (
+    tester,
+  ) async {
+    // Прежде здесь на все линейки стояло одно «появится, как только будет
+    // оплачен», и врачу, которому достаточно привязать почту, это было
+    // прямой неправдой — она же отправляла его искать несуществующую
+    // кнопку покупки.
+    await tester.pumpWidget(
+      screen(
+        StubShelf([pack(owned: false, line: PackLine.basic, openedBy: '')]),
+        StubDownload(),
+        MemoryPackStore(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('почту'), findsOneWidget);
+    expect(find.textContaining('оплач'), findsNothing);
+  });
+
+  testWidgets('открытый группой набор говорит, что покупать не нужно', (
+    tester,
+  ) async {
+    // Такой доступ не навсегда: правило смотрит на живого врача, и
+    // попавший в группу «не заходил месяц» выйдет из неё, едва зайдя.
+    // Промолчи витрина — набор пропал бы без причины.
+    await tester.pumpWidget(
+      screen(
+        StubShelf([
+          pack(kopecks: 39000, line: PackLine.paid, openedBy: OpenedBy.group),
+        ]),
+        StubDownload(),
+        MemoryPackStore(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Открыт вам без покупки'), findsOneWidget);
+    expect(find.text('Скачать'), findsOneWidget);
+  });
+
+  testWidgets('купленный набор о группах не говорит', (tester) async {
+    // «Открыт вам без покупки» купившему — прямая неправда, и неправда
+    // тревожная: он прочтёт её как «доступ могут отобрать».
+    await tester.pumpWidget(
+      screen(
+        StubShelf([
+          pack(
+            kopecks: 39000,
+            line: PackLine.paid,
+            openedBy: OpenedBy.purchase,
+          ),
+        ]),
+        StubDownload(),
+        MemoryPackStore(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('без покупки'), findsNothing);
   });
 
   testWidgets('открытый и нескачанный набор предлагает скачать', (

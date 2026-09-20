@@ -90,24 +90,67 @@ type Rights struct {
 //
 // Незнакомая линейка закрыта, а не открыта: непонятое не применяется.
 func OpenTo(line string, r Rights) bool {
+	return Decide(line, r).Open
+}
+
+// Чем набор открыт — словарь закрытый, и в нём ровно те доводы, которые
+// перебирает Decide.
+//
+// Уезжает в приложение затем, чтобы открытый набор мог сказать, надолго
+// ли он открыт. Купленное не отбирают никогда; открытое группой держится
+// на правиле, а правило смотрит на живого врача — тот, кто попал в группу
+// «не заходил 30 дней», выйдет из неё, едва зайдя. Промолчи мы об этом,
+// набор пропал бы у врача без причины, и он прочёл бы это как поломку.
+const (
+	// ByPurchase — куплен или выдан оператором.
+	ByPurchase = "purchase"
+
+	// ByGroup — открыт группе, в которую попадает врач.
+	ByGroup = "group"
+
+	// ByLine — открыт своей линейкой: бесплатен, спонсорский, или врач
+	// привязал почту и подписался.
+	ByLine = "line"
+)
+
+// Verdict — открыт ли набор и чем именно.
+type Verdict struct {
+	Open bool
+
+	// By — довод, по которому набор открыт; у закрытого пусто.
+	By string
+}
+
+// Decide — тот же перебор, что и у OpenTo, но говорящий, на каком доводе
+// он остановился.
+//
+// Разделены они ровно настолько, насколько нужно витрине, и ни на сколько
+// больше: перебор ОДИН. Второй, считающий «почему», разошёлся бы с первым,
+// считающим «открыт ли», — и разошёлся бы молча, потому что «почему»
+// видно только врачу, а витрина при любом ответе выглядит исправной.
+func Decide(line string, r Rights) Verdict {
 	if r.Owns {
-		return true
+		return Verdict{Open: true, By: ByPurchase}
 	}
 	if r.Hidden {
-		return false
+		return Verdict{}
 	}
 	if r.Granted {
-		return true
+		return Verdict{Open: true, By: ByGroup}
 	}
 	switch line {
 	case LineGuest, LineSponsored:
-		return true
+		return Verdict{Open: true, By: ByLine}
 	case LineBasic:
-		return r.EmailBound
+		if r.EmailBound {
+			return Verdict{Open: true, By: ByLine}
+		}
 	case LinePaid:
-		return r.Subscribed
+		if r.Subscribed {
+			return Verdict{Open: true, By: ByLine}
+		}
 	}
-	return false
+	return Verdict{}
 }
 
 // KnownLine — есть ли такая линейка.

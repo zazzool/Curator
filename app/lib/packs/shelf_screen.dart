@@ -234,6 +234,23 @@ class PackRow extends StatelessWidget {
               '${pack.cases} задач · ${rubles(pack.kopecks)}',
               style: AppType.caption.copyWith(color: p.inkFaint),
             ),
+            if (pack.openedBy == OpenedBy.group) ...[
+              const SizedBox(height: Gap.xs),
+              // Сказано вслух, потому что этот доступ не навсегда.
+              // Купленное не отбирают, а открытое группой держится на
+              // правиле, и правило смотрит на живого врача: попавший в
+              // группу «не заходил месяц» выйдет из неё, едва зайдя.
+              // Промолчи витрина — набор однажды пропал бы без причины, и
+              // врач прочёл бы это как поломку приложения.
+              //
+              // Название группы не показывается: группы заводит
+              // составитель для себя («уснувшие плательщики»), и читать
+              // это врачу незачем и неприятно.
+              Text(
+                'Открыт вам без покупки',
+                style: AppType.caption.copyWith(color: p.success),
+              ),
+            ],
             if (pack.summaryMd.isNotEmpty) ...[
               const SizedBox(height: Gap.sm),
               Text(
@@ -275,7 +292,7 @@ class PackRow extends StatelessWidget {
     if (!pack.owned) {
       // Цена уже показана строкой выше; здесь — что с этим делать.
       return Text(
-        'Набор ещё не открыт. Он появится, как только будет оплачен',
+        closedNote(pack.line),
         style: AppType.caption.copyWith(color: p.inkFaint),
       );
     }
