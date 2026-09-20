@@ -43,8 +43,8 @@ func (s *Store) Portrait(ctx context.Context, accountID int64, now time.Time, be
 		       EXISTS (SELECT 1 FROM entitlements e
 		                WHERE e.account_id = a.id
 		                  AND e.origin IN ('purchase', 'subscription')),
-		       GREATEST(0, (EXTRACT(EPOCH FROM ($2 - a.created_at)) / 86400)::int),
-		       GREATEST(0, (EXTRACT(EPOCH FROM ($2 - coalesce(a.last_seen, a.created_at))) / 86400)::int)
+		       GREATEST(0, (EXTRACT(EPOCH FROM ($2::timestamptz - a.created_at)) / 86400)::int),
+		       GREATEST(0, (EXTRACT(EPOCH FROM ($2::timestamptz - coalesce(a.last_seen, a.created_at))) / 86400)::int)
 		  FROM accounts a WHERE a.id = $1`, accountID, now).
 		Scan(&p.EmailBound, &p.Subscribed, &p.EverPaid, &p.AgeDays, &p.IdleDays)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -64,26 +64,32 @@ func (s *Store) Portrait(ctx context.Context, accountID int64, now time.Time, be
 	// Окна берутся доводами, а не вписываются в текст запроса: собранный
 	// из чисел, взятых в базе, SQL перестаёт быть проверяемым глазами.
 	//
+	// Время и число суток приведены к типу прямо в запросе, и это не
+	// перестраховка. Без приведения Postgres выводит тип довода из того,
+	// как он употреблён, и в `$2 - make_interval(…)` выводит ИНТЕРВАЛ:
+	// разность двух интервалов — интервал, и сравнение с `happened_at`
+	// отказывает целиком. Сторож поймал это первым же прогоном.
+	//
 	// День считается по UTC, и это решение, а не недосмотр: врачи сидят в
 	// разных поясах, и «день занятий», посчитанный по поясу
 	// спрашивающего, давал бы разное число при одних и тех же попытках.
 	var s7, s30, s90, c0, c7, c30, c90, d0, d7, d30, d90, s0 int
 	err = s.gate.QueryRow(ctx, `
 		SELECT count(*),
-		       count(*) FILTER (WHERE happened_at > $2 - make_interval(days => $3)),
-		       count(*) FILTER (WHERE happened_at > $2 - make_interval(days => $4)),
-		       count(*) FILTER (WHERE happened_at > $2 - make_interval(days => $5)),
+		       count(*) FILTER (WHERE happened_at > $2::timestamptz - make_interval(days => $3::int)),
+		       count(*) FILTER (WHERE happened_at > $2::timestamptz - make_interval(days => $4::int)),
+		       count(*) FILTER (WHERE happened_at > $2::timestamptz - make_interval(days => $5::int)),
 		       count(*) FILTER (WHERE correct),
-		       count(*) FILTER (WHERE correct AND happened_at > $2 - make_interval(days => $3)),
-		       count(*) FILTER (WHERE correct AND happened_at > $2 - make_interval(days => $4)),
-		       count(*) FILTER (WHERE correct AND happened_at > $2 - make_interval(days => $5)),
+		       count(*) FILTER (WHERE correct AND happened_at > $2::timestamptz - make_interval(days => $3::int)),
+		       count(*) FILTER (WHERE correct AND happened_at > $2::timestamptz - make_interval(days => $4::int)),
+		       count(*) FILTER (WHERE correct AND happened_at > $2::timestamptz - make_interval(days => $5::int)),
 		       count(DISTINCT (happened_at AT TIME ZONE 'UTC')::date),
 		       count(DISTINCT (happened_at AT TIME ZONE 'UTC')::date)
-		           FILTER (WHERE happened_at > $2 - make_interval(days => $3)),
+		           FILTER (WHERE happened_at > $2::timestamptz - make_interval(days => $3::int)),
 		       count(DISTINCT (happened_at AT TIME ZONE 'UTC')::date)
-		           FILTER (WHERE happened_at > $2 - make_interval(days => $4)),
+		           FILTER (WHERE happened_at > $2::timestamptz - make_interval(days => $4::int)),
 		       count(DISTINCT (happened_at AT TIME ZONE 'UTC')::date)
-		           FILTER (WHERE happened_at > $2 - make_interval(days => $5))
+		           FILTER (WHERE happened_at > $2::timestamptz - make_interval(days => $5::int))
 		  FROM attempts WHERE account_id = $1`,
 		accountID, now, WindowDays[Window7], WindowDays[Window30], WindowDays[Window90]).
 		Scan(&s0, &s7, &s30, &s90, &c0, &c7, &c30, &c90, &d0, &d7, &d30, &d90)
@@ -356,8 +362,8 @@ func (s *Store) portraits(ctx context.Context, now time.Time, behaviour bool) (m
 		       EXISTS (SELECT 1 FROM entitlements e
 		                WHERE e.account_id = a.id
 		                  AND e.origin IN ('purchase', 'subscription')),
-		       GREATEST(0, (EXTRACT(EPOCH FROM ($1 - a.created_at)) / 86400)::int),
-		       GREATEST(0, (EXTRACT(EPOCH FROM ($1 - coalesce(a.last_seen, a.created_at))) / 86400)::int)
+		       GREATEST(0, (EXTRACT(EPOCH FROM ($1::timestamptz - a.created_at)) / 86400)::int),
+		       GREATEST(0, (EXTRACT(EPOCH FROM ($1::timestamptz - coalesce(a.last_seen, a.created_at))) / 86400)::int)
 		  FROM accounts a`, now)
 	if err != nil {
 		return nil, err
@@ -386,20 +392,20 @@ func (s *Store) portraits(ctx context.Context, now time.Time, behaviour bool) (m
 
 	deeds, err := s.gate.Query(ctx, `
 		SELECT account_id, count(*),
-		       count(*) FILTER (WHERE happened_at > $1 - make_interval(days => $2)),
-		       count(*) FILTER (WHERE happened_at > $1 - make_interval(days => $3)),
-		       count(*) FILTER (WHERE happened_at > $1 - make_interval(days => $4)),
+		       count(*) FILTER (WHERE happened_at > $1::timestamptz - make_interval(days => $2::int)),
+		       count(*) FILTER (WHERE happened_at > $1::timestamptz - make_interval(days => $3::int)),
+		       count(*) FILTER (WHERE happened_at > $1::timestamptz - make_interval(days => $4::int)),
 		       count(*) FILTER (WHERE correct),
-		       count(*) FILTER (WHERE correct AND happened_at > $1 - make_interval(days => $2)),
-		       count(*) FILTER (WHERE correct AND happened_at > $1 - make_interval(days => $3)),
-		       count(*) FILTER (WHERE correct AND happened_at > $1 - make_interval(days => $4)),
+		       count(*) FILTER (WHERE correct AND happened_at > $1::timestamptz - make_interval(days => $2::int)),
+		       count(*) FILTER (WHERE correct AND happened_at > $1::timestamptz - make_interval(days => $3::int)),
+		       count(*) FILTER (WHERE correct AND happened_at > $1::timestamptz - make_interval(days => $4::int)),
 		       count(DISTINCT (happened_at AT TIME ZONE 'UTC')::date),
 		       count(DISTINCT (happened_at AT TIME ZONE 'UTC')::date)
-		           FILTER (WHERE happened_at > $1 - make_interval(days => $2)),
+		           FILTER (WHERE happened_at > $1::timestamptz - make_interval(days => $2::int)),
 		       count(DISTINCT (happened_at AT TIME ZONE 'UTC')::date)
-		           FILTER (WHERE happened_at > $1 - make_interval(days => $3)),
+		           FILTER (WHERE happened_at > $1::timestamptz - make_interval(days => $3::int)),
 		       count(DISTINCT (happened_at AT TIME ZONE 'UTC')::date)
-		           FILTER (WHERE happened_at > $1 - make_interval(days => $4))
+		           FILTER (WHERE happened_at > $1::timestamptz - make_interval(days => $4::int))
 		  FROM attempts GROUP BY account_id`,
 		now, WindowDays[Window7], WindowDays[Window30], WindowDays[Window90])
 	if err != nil {
