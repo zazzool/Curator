@@ -189,7 +189,10 @@ describe('продажи', () => {
     const поле = await screen.findByPlaceholderText('1990')
     fireEvent.change(поле, { target: { value: 'тысяча' } })
     fireEvent.click(screen.getByRole('button', { name: 'Оформить приход' }))
-    await waitFor(() => expect(screen.getByText(/Сумма пишется рублями/)).toBeTruthy())
+    // Отказ стоит под полем суммы, а не полосой наверху страницы.
+    const отказ = await screen.findByRole('alert')
+    expect(отказ.textContent).toMatch(/Рублями и копейками/)
+    expect(поле.closest('.form-row')?.contains(отказ)).toBe(true)
     expect(posted).toBe(0)
   })
 
@@ -253,6 +256,37 @@ describe('продажи', () => {
     render(<Sales me={ОПЕРАТОР} />)
     const строка = (await screen.findByText('Врач № 7')).closest('.list-row')
     expect(строка?.textContent).toBe('Врач № 7прав: 1')
+  })
+
+  it('отказ по сумме стоит под полем суммы, а не полосой наверху', async () => {
+    // Полоса наверху страницы говорила «Сумма пишется рублями и
+    // копейками» над формой из трёх полей и не говорила, о котором из
+    // них речь: оператор перебирал их вслепую.
+    render(<Sales me={ОПЕРАТОР} />)
+    const поле = await screen.findByLabelText('Сколько, рублей')
+    fireEvent.change(поле, { target: { value: 'тысяча' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить цену' }))
+
+    const отказ = await screen.findByRole('alert')
+    expect(отказ.className).toContain('fld-error')
+    // Поле объявлено негодным и связано с отказом: читающий с экрана
+    // услышит его, встав на поле, а не только в момент отказа.
+    expect(поле.getAttribute('aria-invalid')).toBe('true')
+    expect(поле.getAttribute('aria-describedby')).toBe(отказ.id)
+    // И отказ стоит ВНУТРИ строки этого поля, а не где-то на странице.
+    expect(поле.closest('.form-row')?.contains(отказ)).toBe(true)
+  })
+
+  it('правка суммы убирает прежний отказ', async () => {
+    // Отказ, переживший исправление, читается как отказ на исправленное.
+    render(<Sales me={ОПЕРАТОР} />)
+    const поле = await screen.findByLabelText('Сколько, рублей')
+    fireEvent.change(поле, { target: { value: 'тысяча' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить цену' }))
+    await screen.findByRole('alert')
+
+    fireEvent.change(поле, { target: { value: '1990' } })
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it('пустая витрина сказана словами, а не пустым местом', async () => {
