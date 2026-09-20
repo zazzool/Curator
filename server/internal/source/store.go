@@ -59,6 +59,43 @@ func (s *Store) CreateSource(ctx context.Context, src Source) (int64, error) {
 	return id, nil
 }
 
+// UpdateSource правит паспорт источника, кроме краткого имени.
+//
+// Имя не правится, потому что по нему источник спрашивает приложение, и
+// сменённое оно означало бы для установленных сборок, что источника
+// больше нет. Довод целиком — у ручки `updateSource`.
+//
+// Прочитанное имя подставляется в проверку: она одна на заведение и на
+// правку, и вторая, «почти такая же», разошлась бы с первой молча — на
+// том поле, которое добавили последним.
+func (s *Store) UpdateSource(ctx context.Context, id int64, src Source) (Source, error) {
+	was, err := s.SourceByID(ctx, id)
+	if err != nil {
+		return Source{}, fmt.Errorf("источника %d нет", id)
+	}
+	src.ID = was.ID
+	src.Slug = was.Slug
+	src.Status = was.Status
+	if err := validateSource(src); err != nil {
+		return Source{}, err
+	}
+
+	tag, err := s.gate.Exec(ctx,
+		`UPDATE sources
+		    SET kind = $2, title = $3, unit_word = $4, statement_word = $5,
+		        purpose = $6, hierarchy = $7, completeness = $8, edition = $9
+		  WHERE id = $1`,
+		id, string(src.Kind), src.Title, src.UnitWord, src.StatementWord,
+		string(src.Purpose), string(src.Hierarchy), string(src.Completeness), src.Edition)
+	if err != nil {
+		return Source{}, fmt.Errorf("паспорт источника %d не записан: %w", id, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return Source{}, fmt.Errorf("источника %d нет", id)
+	}
+	return src, nil
+}
+
 // validateSource проверяет то, что база проверить не может.
 //
 // Словарь интерфейса пустым не бывает: интерфейс без слова покажет

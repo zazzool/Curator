@@ -5,7 +5,7 @@ import { CasePage } from './CasePage'
 import { Login } from './Login'
 import { NotFound } from './NotFound'
 import { SourceList } from './SourceList'
-import { SourceScreen } from './SourceScreen'
+import { SourceCard } from './SourceCard'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { Sidebar } from './components/Sidebar'
 import { IdentityBar } from './components/IdentityBar'
@@ -34,6 +34,7 @@ import type { Me } from './api'
  * отдельно значит задержать ровно тот экран, который открывается сразу
  * после входа. Источник открывают следом за ним, с той же частотой.
  */
+const SourceImport = lazy(() => import('./SourceImport').then((m) => ({ default: m.SourceImport })))
 const Generate = lazy(() => import('./Generate').then((m) => ({ default: m.Generate })))
 const Packs = lazy(() => import('./Packs').then((m) => ({ default: m.Packs })))
 const Reports = lazy(() => import('./Reports').then((m) => ({ default: m.Reports })))
@@ -198,7 +199,7 @@ export function App() {
       <div className="app">
         <Toolbar
           section={section}
-          crumb={route.name === 'source' ? crumb || undefined : undefined}
+          crumb={route.name === 'source' || route.name === 'import' ? crumb || undefined : undefined}
           onSignOut={leave}
         />
 
@@ -235,15 +236,9 @@ export function App() {
               ) : route.name === 'workshop' ? (
                 <Workshop me={me} />
               ) : route.name === 'source' ? (
-                <SourceScreen
-                  me={me}
-                  id={route.id}
-                  onTitle={setCrumb}
-                  onBack={() => {
-                    setCrumb('')
-                    go({ name: 'sources' })
-                  }}
-                />
+                <SourceCard me={me} id={route.id} onTitle={setCrumb} />
+              ) : route.name === 'import' ? (
+                <SourceImport me={me} id={route.id} onTitle={setCrumb} />
               ) : route.name === 'unknown' ? (
                 <NotFound path={route.path} />
               ) : (

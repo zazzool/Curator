@@ -486,6 +486,13 @@ export const api = {
 
   source: (id: number) => request<Source>('GET', `/admin/api/sources/${id}`),
 
+  // Паспорт без краткого имени: по нему источник спрашивает приложение, и
+  // сменённое оно означало бы для установленных сборок, что источника
+  // больше нет. Поле, принимаемое и молча отбрасываемое, хуже
+  // отсутствующего, поэтому его здесь нет вовсе.
+  updateSource: (id: number, card: Omit<Source, 'id' | 'slug' | 'status'>) =>
+    request<Source>('PUT', `/admin/api/sources/${id}`, card),
+
   // Объявление источника действующим: до него источника для устройства не
   // существует — ни в списке справочников, ни в раздаче.
   setSourceStatus: (id: number, status: string) =>
@@ -535,6 +542,27 @@ export const api = {
   // отдельным решением.
   parseDocument: (documentId: number) =>
     request<Job>('POST', `/admin/api/documents/${documentId}/parse`, {}),
+
+  // Черновик кладётся целиком, а не по единице: он — один ответ модели
+  // на один документ, и склейка двух ответов даёт разбор, которого не
+  // делал никто.
+  saveDraft: (
+    documentId: number,
+    draft: {
+      units: { label: string; parentLabel: string; title: string; kind: string }[]
+      statements: {
+        unitLabel: string
+        kind: string
+        designation: string
+        body: string
+        placeRef: string
+      }[]
+    },
+  ) => request<{ units: number; statements: number }>(
+    'PUT',
+    `/admin/api/documents/${documentId}/draft`,
+    draft,
+  ),
 
   placeOrder: (
     sourceId: number,
