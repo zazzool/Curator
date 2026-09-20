@@ -700,3 +700,104 @@ func TestPgПределСрезаСтоитВЗапросе(t *testing.T) {
 		t.Errorf("без предела прочитано %d единиц вместо двадцати", len(all))
 	}
 }
+
+func TestPgПравкаПаспортаНеТрогаетКраткоеИмя(t *testing.T) {
+	// По краткому имени источник спрашивает приложение
+	// (/v1/reference/sources/{slug}), и сменённое оно означало бы для
+	// установленных сборок, что источника больше нет — а узнали бы они
+	// об этом не сообщением, а пустым справочником.
+	ctx := context.Background()
+	s := NewStore(testGate(t))
+	id := newSource(t, s)
+	было, err := s.SourceByID(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	стало, err := s.UpdateSource(ctx, id, Source{
+		Slug:          "другое-имя",
+		Kind:          KindGuidelines,
+		Title:         "Клинические рекомендации",
+		UnitWord:      "диагноз",
+		StatementWord: "критерий",
+		Purpose:       PurposeTopic,
+		Hierarchy:     HierarchyIsA,
+		Completeness:  CompletenessComplete,
+		Edition:       "2026",
+	})
+	if err != nil {
+		t.Fatalf("паспорт не записан: %v", err)
+	}
+	if стало.Slug != было.Slug {
+		t.Fatalf("краткое имя сменилось: %q вместо %q", стало.Slug, было.Slug)
+	}
+
+	// Прочитанное из базы, а не возвращённое: возврат мог бы сойтись с
+	// ожиданием, не доехав до базы вовсе.
+	перечитанный, err := s.SourceByID(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if перечитанный.Slug != было.Slug {
+		t.Errorf("в базе краткое имя сменилось: %q", перечитанный.Slug)
+	}
+	if перечитанный.Title != "Клинические рекомендации" ||
+		перечитанный.UnitWord != "диагноз" ||
+		перечитанный.StatementWord != "критерий" ||
+		перечитанный.Kind != KindGuidelines ||
+		перечитанный.Purpose != PurposeTopic ||
+		перечитанный.Hierarchy != HierarchyIsA ||
+		перечитанный.Completeness != CompletenessComplete ||
+		перечитанный.Edition != "2026" {
+		t.Errorf("паспорт записан не весь: %+v", перечитанный)
+	}
+}
+
+func TestPgПравкаПаспортаПроверяетТоЖеСамое(t *testing.T) {
+	// Проверка одна на заведение и на правку: вторая, «почти такая же»,
+	// разошлась бы с первой молча — на том поле, которое добавили
+	// последним. Источник без словаря интерфейса не заводится, и стать
+	// таким правкой он тоже не должен.
+	ctx := context.Background()
+	s := NewStore(testGate(t))
+	id := newSource(t, s)
+
+	_, err := s.UpdateSource(ctx, id, Source{
+		Kind: KindDecree, Title: "Приказ", UnitWord: " ", StatementWord: "положение",
+		Purpose: PurposeLegal, Hierarchy: HierarchyPartOf, Completeness: CompletenessFragment,
+	})
+	if err == nil {
+		t.Error("словарь интерфейса стёрт правкой")
+	}
+
+	_, err = s.UpdateSource(ctx, id, Source{
+		Kind: KindDecree, Title: "Приказ", UnitWord: "пункт", StatementWord: "положение",
+		Purpose: PurposeLegal, Hierarchy: HierarchyPartOf, Completeness: "",
+	})
+	if err == nil {
+		t.Error("полнота стёрта правкой")
+	}
+
+	// Отказ не должен записать половину: паспорт с названием от новой
+	// редакции и словарём от прежней хуже непринятой правки.
+	перечитанный, err := s.SourceByID(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if перечитанный.Title != "Приказ для проверки" || перечитанный.UnitWord != "пункт" {
+		t.Errorf("отказ записал половину паспорта: %+v", перечитанный)
+	}
+}
+
+func TestPgПравкаНесуществующегоИсточникаОтказывает(t *testing.T) {
+	// Иначе правка «в никуда» отвечала бы успехом, и составитель решил
+	// бы, что записал.
+	s := NewStore(testGate(t))
+	_, err := s.UpdateSource(context.Background(), 0, Source{
+		Kind: KindDecree, Title: "Приказ", UnitWord: "пункт", StatementWord: "положение",
+		Purpose: PurposeLegal, Hierarchy: HierarchyPartOf, Completeness: CompletenessFragment,
+	})
+	if err == nil {
+		t.Fatal("правка несуществующего источника прошла")
+	}
+}
