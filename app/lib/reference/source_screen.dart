@@ -20,6 +20,7 @@ import '../core/design/palette.dart';
 import '../core/design/tokens.dart';
 import '../core/design/typography.dart';
 import '../core/ui/leading_glyph.dart';
+import '../core/ui/quiet_progress.dart';
 import '../core/ui/search_field.dart';
 import '../core/ui/surface.dart';
 import '../db/reference_store.dart';
@@ -121,8 +122,20 @@ class _SourceScreenState extends State<SourceScreen> {
                   ),
                 )
               else if (_loading)
+                // Отметка, а не кружок на весь экран: правило в
+                // app/CLAUDE.md, и справочник — худшее место его
+                // нарушить. Это экран, который врач открывает у
+                // постели, и загораживать его кружком ради чтения
+                // МЕСТНОЙ базы значит объявлять работу невозможной
+                // там, где всё нужное лежит на устройстве.
                 const Expanded(
-                  child: Center(child: CircularProgressIndicator()),
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: UpdatingLine(
+                      updating: true,
+                      label: 'Рубрики читаются',
+                    ),
+                  ),
                 )
               else
                 Expanded(
@@ -348,8 +361,15 @@ class _UnitScreenState extends State<UnitScreen> {
                 onBack: () => Navigator.of(context).pop(),
               ),
               if (_loading)
+                // Отметка, а не кружок: см. довод выше по файлу.
                 const Expanded(
-                  child: Center(child: CircularProgressIndicator()),
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: UpdatingLine(
+                      updating: true,
+                      label: 'Критерии читаются',
+                    ),
+                  ),
                 )
               else
                 Expanded(

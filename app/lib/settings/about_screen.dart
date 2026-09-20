@@ -8,20 +8,11 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../core/build_info.dart';
 import '../core/design/palette.dart';
 import '../core/design/tokens.dart';
 import '../core/design/typography.dart';
 import '../core/ui/surface.dart';
-
-/// Версия сборки, как её назвали при сборке.
-///
-/// Задаётся оттуда же, откуда адрес контура и ключи, — `--dart-define`.
-/// Плагина, читающего версию из пакета, здесь нет и заводиться ради одной
-/// строки он не будет: зависимость называется нуждой, а нужда тут не
-/// набралась. Пусто — строки о версии нет вовсе: «версия —» сообщает
-/// врачу ровно столько же, сколько её отсутствие, но занимает место и
-/// выглядит поломкой.
-const appVersion = String.fromEnvironment('CURATOR_VERSION');
 
 class AboutScreen extends StatelessWidget {
   const AboutScreen({super.key});
