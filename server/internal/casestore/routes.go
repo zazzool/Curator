@@ -81,12 +81,21 @@ func (r *routes) fromDraft(w http.ResponseWriter, req *http.Request, user studio
 		studio.WriteError(w, http.StatusBadRequest, "Запрос не разобран: "+err.Error())
 		return
 	}
-	one, err := r.store.FromDraft(req.Context(), body.DraftID, "generated:"+user.Login)
+	one, repeated, err := r.store.FromDraft(req.Context(), body.DraftID, "generated:"+user.Login)
 	if err != nil {
 		studio.WriteError(w, http.StatusBadRequest, studio.Sentence(err.Error()))
 		return
 	}
-	studio.WriteJSON(w, http.StatusCreated, caseJSON(one))
+	// Повтор отдаётся прежней задачей и кодом 200, а не 201: вторая
+	// задача не заведена, и сказать «создано» значит соврать студии,
+	// которая по этому коду решает, что показать составителю.
+	out := caseJSON(one)
+	out["repeated"] = repeated
+	if repeated {
+		studio.WriteJSON(w, http.StatusOK, out)
+		return
+	}
+	studio.WriteJSON(w, http.StatusCreated, out)
 }
 
 type saveRequest struct {

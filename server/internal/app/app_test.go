@@ -181,7 +181,7 @@ func задачаПоПути(t *testing.T, gate *dbgate.Gate, root string) (str
 	}
 
 	store := casestore.NewStore(gate)
-	one, err := store.FromDraft(ctx, draftID, "проверка")
+	one, _, err := store.FromDraft(ctx, draftID, "проверка")
 	if err != nil {
 		t.Fatal(err)
 	}

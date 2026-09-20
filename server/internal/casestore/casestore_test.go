@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -119,6 +120,88 @@ func черновик(t *testing.T, gate *dbgate.Gate, sourceID int64, body Body
 	return id
 }
 
+func TestPgЧерновикПринимаетсяОдинРаз(t *testing.T) {
+	// Составитель нажимает «Принять» дважды — при обрыве связи или просто
+	// дважды. Заведи вторую задачу с тем же условием, и обучающийся
+	// получит одну задачу дважды, а заметит это он, а не составитель.
+	ctx := context.Background()
+	gate := testGate(t)
+	store := NewStore(gate)
+	sourceID := источник(t, gate)
+	draftID := черновик(t, gate, sourceID, годноеТело())
+
+	first, repeated, err := store.FromDraft(ctx, draftID, "проверка")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repeated {
+		t.Fatal("первое принятие объявлено повтором")
+	}
+
+	second, repeated, err := store.FromDraft(ctx, draftID, "проверка")
+	if err != nil {
+		t.Fatalf("повтор отказал вместо того, чтобы отдать прежнюю: %v", err)
+	}
+	if !repeated {
+		t.Fatal("повтор не назван повтором")
+	}
+	if second.ID != first.ID {
+		t.Fatalf("черновик принят дважды: задачи %q и %q", first.ID, second.ID)
+	}
+
+	var сколько int
+	if err := gate.QueryRow(ctx,
+		`SELECT count(*) FROM cases WHERE draft_id = $1`, draftID).Scan(&сколько); err != nil {
+		t.Fatal(err)
+	}
+	if сколько != 1 {
+		t.Fatalf("по одному черновику заведено задач: %d", сколько)
+	}
+}
+
+func TestPgДваПринятияОдногоЧерновикаРазом(t *testing.T) {
+	// Проверкой перед вставкой это не удержать: между чтением и записью
+	// вклинивается соперник, и проверка «сперва прочитали — не было»
+	// пропускает ровно тот случай, ради которого заведена. Держит
+	// частичный указатель базы, и кругов здесь много — с одним парным
+	// заходом проверка проходила бы и на сломанном коде.
+	ctx := context.Background()
+	gate := testGate(t)
+	store := NewStore(gate)
+	sourceID := источник(t, gate)
+	const кругов = 20
+
+	for круг := range кругов {
+		draftID := черновик(t, gate, sourceID, годноеТело())
+
+		// Общий старт: без него горутины расходятся во времени, и
+		// соперничество, ради которого всё написано, не случается.
+		старт := make(chan struct{})
+		var wg sync.WaitGroup
+		for range 2 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-старт
+				if _, _, err := store.FromDraft(ctx, draftID, "проверка"); err != nil {
+					t.Errorf("круг %d: принятие отказало: %v", круг, err)
+				}
+			}()
+		}
+		close(старт)
+		wg.Wait()
+
+		var сколько int
+		if err := gate.QueryRow(ctx,
+			`SELECT count(*) FROM cases WHERE draft_id = $1`, draftID).Scan(&сколько); err != nil {
+			t.Fatal(err)
+		}
+		if сколько != 1 {
+			t.Fatalf("круг %d: по одному черновику заведено задач: %d", круг, сколько)
+		}
+	}
+}
+
 func TestPgЗадачаИзЧерновикаНесётПутьЕдиницы(t *testing.T) {
 	// Путь копируется при заведении и одним запросом даёт подбор по
 	// срезу, без соединения с деревом источника.
@@ -126,7 +209,7 @@ func TestPgЗадачаИзЧерновикаНесётПутьЕдиницы(t 
 	store := NewStore(gate)
 	sourceID := источник(t, gate)
 
-	one, err := store.FromDraft(context.Background(),
+	one, _, err := store.FromDraft(context.Background(),
 		черновик(t, gate, sourceID, годноеТело()), "проверка")
 	if err != nil {
 		t.Fatal(err)
@@ -151,7 +234,7 @@ func TestPgПубликацияРаскладываетРазметкуПоНо�
 	ctx := context.Background()
 	sourceID := источник(t, gate)
 
-	one, err := store.FromDraft(ctx, черновик(t, gate, sourceID, годноеТело()), "проверка")
+	one, _, err := store.FromDraft(ctx, черновик(t, gate, sourceID, годноеТело()), "проверка")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +272,7 @@ func TestPgФрагментНаДваПоложенияНеТеряетВтор�
 
 	body := годноеТело()
 	body.Segments[0].Statements = []string{"абз. 1", "абз. 2"}
-	one, err := store.FromDraft(ctx, черновик(t, gate, sourceID, body), "проверка")
+	one, _, err := store.FromDraft(ctx, черновик(t, gate, sourceID, body), "проверка")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +304,7 @@ func TestPgПубликацияНазываетВсеБедыРазом(t *testi
 	body.Title = ""
 	body.Explanation = ""
 	body.Answer = "такого варианта нет"
-	one, err := store.FromDraft(ctx, черновик(t, gate, sourceID, body), "проверка")
+	one, _, err := store.FromDraft(ctx, черновик(t, gate, sourceID, body), "проверка")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +329,7 @@ func TestPgСсылкаНаНесуществующееПоложениеНеР�
 
 	body := годноеТело()
 	body.Segments[0].Statements = []string{"абз. 7"}
-	one, err := store.FromDraft(ctx, черновик(t, gate, sourceID, body), "проверка")
+	one, _, err := store.FromDraft(ctx, черновик(t, gate, sourceID, body), "проверка")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +347,7 @@ func TestPgМеткаЕдиницыВУсловииНеРаздаётся(t *tes
 
 	body := годноеТело()
 	body.Segments[0].Text = "По пункту 3.1 заявление подано в понедельник."
-	one, err := store.FromDraft(ctx, черновик(t, gate, sourceID, body), "проверка")
+	one, _, err := store.FromDraft(ctx, черновик(t, gate, sourceID, body), "проверка")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +369,7 @@ func TestPgВерсияСодержанияРастётНаВыпускеИНа�
 	if err != nil {
 		t.Fatal(err)
 	}
-	one, err := store.FromDraft(ctx, черновик(t, gate, sourceID, годноеТело()), "проверка")
+	one, _, err := store.FromDraft(ctx, черновик(t, gate, sourceID, годноеТело()), "проверка")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +405,7 @@ func TestPgСнятаяЗадачаНеУдаляется(t *testing.T) {
 	ctx := context.Background()
 	sourceID := источник(t, gate)
 
-	one, err := store.FromDraft(ctx, черновик(t, gate, sourceID, годноеТело()), "проверка")
+	one, _, err := store.FromDraft(ctx, черновик(t, gate, sourceID, годноеТело()), "проверка")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,7 +433,7 @@ func TestPgРаздаваемаяЗадачаНеПравится(t *testing.T) 
 	ctx := context.Background()
 	sourceID := источник(t, gate)
 
-	one, err := store.FromDraft(ctx, черновик(t, gate, sourceID, годноеТело()), "проверка")
+	one, _, err := store.FromDraft(ctx, черновик(t, gate, sourceID, годноеТело()), "проверка")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +456,7 @@ func TestPgПравкаСверяетРедакцию(t *testing.T) {
 	ctx := context.Background()
 	sourceID := источник(t, gate)
 
-	one, err := store.FromDraft(ctx, черновик(t, gate, sourceID, годноеТело()), "проверка")
+	one, _, err := store.FromDraft(ctx, черновик(t, gate, sourceID, годноеТело()), "проверка")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,7 +492,7 @@ func TestPgСрезПоПутиБерётЗадачиПоддерева(t *testi
 	ctx := context.Background()
 	sourceID := источник(t, gate)
 
-	one, err := store.FromDraft(ctx, черновик(t, gate, sourceID, годноеТело()), "проверка")
+	one, _, err := store.FromDraft(ctx, черновик(t, gate, sourceID, годноеТело()), "проверка")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,7 +535,7 @@ func TestPgПовторнаяПубликацияНеОтказывает(t *tes
 	ctx := context.Background()
 	sourceID := источник(t, gate)
 
-	one, err := store.FromDraft(ctx, черновик(t, gate, sourceID, годноеТело()), "проверка")
+	one, _, err := store.FromDraft(ctx, черновик(t, gate, sourceID, годноеТело()), "проверка")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -482,7 +565,7 @@ func TestPgНеразобравшийсяЧерновикНеСтановитс�
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewStore(gate).FromDraft(ctx, draftID, "проверка"); err == nil {
+	if _, _, err := NewStore(gate).FromDraft(ctx, draftID, "проверка"); err == nil {
 		t.Fatal("из неразобравшегося черновика завелась задача")
 	}
 }

@@ -2,6 +2,7 @@ package gen
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"os"
@@ -414,10 +415,12 @@ func TestPgЧерновикиЗаданияНеЗатираютДругДруг�
 
 	first := Draft{Title: "Первый", Difficulty: 3}
 	second := Draft{Title: "Второй", Difficulty: 4}
-	if _, err := jobs.SaveDraft(ctx, job, first); err != nil {
+	перв, err := jobs.SaveDraft(ctx, job, first)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := jobs.SaveDraft(ctx, job, second); err != nil {
+	втор, err := jobs.SaveDraft(ctx, job, second)
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -427,6 +430,29 @@ func TestPgЧерновикиЗаданияНеЗатираютДругДруг�
 	}
 	if len(drafts) != 2 || drafts[0].Title != "Первый" || drafts[1].Title != "Второй" {
 		t.Fatalf("черновики легли не так: %+v", drafts)
+	}
+
+	// Опознаватель приезжает вместе с черновиком, и это не украшение:
+	// принять черновик задачей — это обращение с его номером, и без
+	// номера кнопке «Принять» не на чем стоять.
+	if drafts[0].ID != перв || drafts[1].ID != втор {
+		t.Fatalf("опознаватели разошлись: записаны %d и %d, прочитаны %d и %d",
+			перв, втор, drafts[0].ID, drafts[1].ID)
+	}
+
+	// И в записанном теле его нет: тело — то, что написала модель, а
+	// номер строки модель не пишет.
+	var тело map[string]any
+	var raw []byte
+	if err := gate.QueryRow(ctx,
+		`SELECT body FROM case_drafts WHERE id = $1`, перв).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &тело); err != nil {
+		t.Fatal(err)
+	}
+	if _, есть := тело["id"]; есть {
+		t.Fatalf("в записанном теле оказался опознаватель: %s", raw)
 	}
 }
 

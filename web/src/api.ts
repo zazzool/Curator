@@ -75,6 +75,9 @@ export type Job = {
 // их отдаёт сервер: переименование по дороге — это второе имя одного
 // поля, и расходятся такие пары молча.
 export type Draft = {
+  // Опознаватель записанного черновика. Им и только им черновик
+  // принимается задачей: без него кнопке «Принять» не на чем стоять.
+  id: number
   title: string
   segments: { text: string; statements?: string[] }[]
   options: { label?: string; text: string }[]
@@ -441,8 +444,10 @@ export const api = {
 
   case: (id: string) => request<Case>('GET', `/admin/api/cases/${id}`),
 
+  // Повтор отдаёт ПРЕЖНЮЮ задачу с пометкой repeated, а не вторую:
+  // составитель нажал «Принять» дважды, а принял черновик один раз.
   caseFromDraft: (draftId: number) =>
-    request<Case>('POST', '/admin/api/cases', { draftId }),
+    request<Case & { repeated: boolean }>('POST', '/admin/api/cases', { draftId }),
 
   saveCase: (id: string, body: CaseBody, revision: number) =>
     request<Case>('PUT', `/admin/api/cases/${id}`, { body, revision }),

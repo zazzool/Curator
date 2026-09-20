@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { Generation } from './Generation'
-import type { Job, Me, Source, Unit } from './api'
+import type { Draft, Job, Me, Source, Unit } from './api'
 
 const SOURCE: Source = {
   id: 1,
@@ -61,6 +61,30 @@ const СОСТАВИТЕЛЬ: Me = {
   permissions: ['source:read', 'generate'],
 }
 const ЧИТАТЕЛЬ: Me = { login: 'читатель', displayName: 'Читатель', permissions: ['source:read'] }
+
+// Право «править задачи» — не то же самое, что право генерации: заказать
+// написание и принять написанное решают разные люди.
+const РЕДАКТОР: Me = {
+  login: 'редактор',
+  displayName: 'Редактор',
+  permissions: ['source:read', 'generate', 'case:write'],
+}
+
+const ЧЕРНОВИК: Draft = {
+  id: 11,
+  title: 'Срок рассмотрения',
+  segments: [
+    { text: 'Заявление подано в понедельник.', statements: ['абз. 1'] },
+    { text: 'Заявитель ждёт ответа.' },
+  ],
+  options: [
+    { label: '3.1', text: 'Десять рабочих дней' },
+    { label: '3.2', text: 'Отказ письменно' },
+  ],
+  answer: '3.1',
+  explanationMd: 'Срок назван прямо в положении.',
+  difficulty: 2,
+}
 
 describe('генерация по источнику', () => {
   beforeEach(() => {
@@ -142,20 +166,7 @@ describe('генерация по источнику', () => {
       '/admin/api/jobs/7': job({
         status: 'done',
         drafts: [
-          {
-            title: 'Срок рассмотрения',
-            segments: [
-              { text: 'Заявление подано в понедельник.', statements: ['абз. 1'] },
-              { text: 'Заявитель ждёт ответа.' },
-            ],
-            options: [
-              { label: '3.1', text: 'Десять рабочих дней' },
-              { label: '3.2', text: 'Отказ письменно' },
-            ],
-            answer: '3.1',
-            explanationMd: 'Срок назван прямо в положении.',
-            difficulty: 2,
-          },
+          ЧЕРНОВИК,
         ],
       }),
     })
@@ -167,6 +178,60 @@ describe('генерация по источнику', () => {
     const marked = await screen.findByText(/абз\. 1/)
     expect(marked.closest('p')?.textContent).toMatch(/Заявление подано в понедельник/)
     expect(screen.getByText(/заказанный ответ/)).toBeTruthy()
+  })
+
+  it('черновик принимается задачей — и второй раз не заводит второй', async () => {
+    // Здесь конвейер и обрывался: деньги за обращение к модели платились,
+    // черновик показывался, а выхода у него не было. Второе нажатие —
+    // при обрыве связи или просто дважды — не должно заводить второй
+    // задачи с тем же условием.
+    const посланные: unknown[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if (init?.method === 'POST' && path === '/admin/api/cases') {
+          посланные.push(JSON.parse(String(init.body)))
+          return Promise.resolve(
+            new Response(JSON.stringify({ id: 'c-01', repeated: посланные.length > 1 }), {
+              status: посланные.length > 1 ? 200 : 201,
+            }),
+          )
+        }
+        if (path.startsWith('/admin/api/jobs/7')) {
+          return Promise.resolve(
+            new Response(JSON.stringify(job({ status: 'done', drafts: [ЧЕРНОВИК] })), {
+              status: 200,
+            }),
+          )
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify({ jobs: [job({ status: 'done' })] }), { status: 200 }),
+        )
+      }),
+    )
+    render(<Generation me={РЕДАКТОР} source={SOURCE} units={UNITS} />)
+    fireEvent.click(await screen.findByText('Открыть'))
+
+    fireEvent.click(await screen.findByText('Принять черновик'))
+    expect(await screen.findByText(/Задача заведена/)).toBeTruthy()
+    expect(посланные).toEqual([{ draftId: 11 }])
+
+    // Кнопки больше нет: принятый черновик принимать нечем, и второго
+    // нажатия неоткуда взяться.
+    expect(screen.queryByText('Принять черновик')).toBeNull()
+  })
+
+  it('без права правки задач принять черновик не предлагается', async () => {
+    // Раздел закрывает право на сервере; здесь скрывается действие,
+    // которое всё равно отказало бы, и рядом сказано, почему его нет.
+    serve({
+      '/admin/api/sources/1/jobs': { jobs: [job({ status: 'done' })] },
+      '/admin/api/jobs/7': job({ status: 'done', drafts: [ЧЕРНОВИК] }),
+    })
+    render(<Generation me={ЧИТАТЕЛЬ} source={SOURCE} units={UNITS} />)
+    fireEvent.click(await screen.findByText('Открыть'))
+    expect(await screen.findByText(/право «править задачи»/)).toBeTruthy()
+    expect(screen.queryByText('Принять черновик')).toBeNull()
   })
 
   it('не опрашивает очередь, когда в ней нечего ждать', async () => {
