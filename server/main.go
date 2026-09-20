@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -252,6 +253,11 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 		}
 		sessions := studio.NewSessions(gate)
 		desk := studio.NewDesk(studio.NewUsers(gate, seal), sessions)
+		// Признак Secure у печенья сессии решается по схеме адреса контура
+		// — оттуда же, где адрес объявлен. Спрашивать схему у самого
+		// обращения нельзя: до контейнера оно доходит по http, TLS снимает
+		// nginx, и печенье никогда не получило бы Secure на бою.
+		desk.SetSecureCookies(strings.HasPrefix(publicOrigin(), "https://"))
 		studio.Routes(desk)
 		studio.UserRoutes(desk)
 		source.Routes(desk, source.NewStore(gate))

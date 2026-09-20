@@ -6,7 +6,6 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -37,6 +36,15 @@ type Desk struct {
 	// доводу, что и часы: проверке сторожа нужны десятки попыток подряд, а
 	// настоящая задержка растянула бы её на минуты.
 	hold func(context.Context, time.Duration)
+
+	// secureCookies — ставить ли печенью сессии признак Secure.
+	//
+	// Решается по схеме адреса контура, и решает это main: адрес объявлен
+	// там в одном месте, и второе место для того же расходится молча.
+	// Умолчание — false: собранный без настройки стол стоит в проверке или
+	// на своей машине, то есть по http, а Secure-печенье браузер по http
+	// молча выбрасывает.
+	secureCookies bool
 }
 
 // NewDesk собирает стол студии.
@@ -83,7 +91,7 @@ func (d *Desk) Handle(perm Permission, pattern string, h func(http.ResponseWrite
 		panic("маршрут " + pattern + " объявлен несуществующим правом " + string(perm))
 	}
 	d.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
-		user, err := d.sessions.User(r.Context(), d.users, bearer(r), d.now())
+		user, err := d.sessions.User(r.Context(), d.users, presented(r), d.now())
 		if err != nil {
 			WriteError(w, http.StatusUnauthorized, "Войдите в студию заново")
 			return
@@ -109,6 +117,9 @@ func (d *Desk) SetClock(now func() time.Time) { d.now = now }
 
 // SetHold подменяет задержку неудачного входа. Только для проверок.
 func (d *Desk) SetHold(hold func(context.Context, time.Duration)) { d.hold = hold }
+
+// SetSecureCookies объявляет, что контур отдаётся по https.
+func (d *Desk) SetSecureCookies(secure bool) { d.secureCookies = secure }
 
 // ErrGate — единственный отказ входа.
 //
@@ -156,19 +167,6 @@ func (d *Desk) Login(ctx context.Context, login, code string) (string, error) {
 
 	d.guard.clear(login)
 	return d.sessions.Issue(ctx, user.ID, now)
-}
-
-// bearer достаёт токен из заголовка.
-func bearer(r *http.Request) string {
-	head := r.Header.Get("Authorization")
-	if head == "" {
-		return ""
-	}
-	const prefix = "Bearer "
-	if !strings.HasPrefix(head, prefix) {
-		return ""
-	}
-	return strings.TrimSpace(head[len(prefix):])
 }
 
 // WriteError отдаёт отказ разговорным текстом.

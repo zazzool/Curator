@@ -50,23 +50,33 @@ func (d *Desk) handleLogin(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusUnauthorized, "Имя или код не подошли")
 		return
 	}
+	// Печенье ставится до тела: заголовки уходят первыми, и Set-Cookie,
+	// написанный после WriteJSON, не уедет вовсе — молча.
+	d.setSession(w, token)
+	// Токен отдаётся и телом. Студия держит его в памяти страницы и шлёт
+	// заголовком, пока страница жива; печенье нужно ей на то время, когда
+	// памяти уже нет, — после перезагрузки.
 	WriteJSON(w, http.StatusOK, map[string]string{"token": token})
 }
 
 func (d *Desk) handleLogout(w http.ResponseWriter, r *http.Request) {
 	// Выход без сессии — не ошибка: человек, нажавший «выйти» дважды,
 	// хотел выйти, и он вышел.
-	if token := bearer(r); token != "" {
+	if token := presented(r); token != "" {
 		if err := d.sessions.Close(r.Context(), token); err != nil {
 			WriteError(w, http.StatusInternalServerError, "Выйти не удалось, попробуйте ещё раз")
 			return
 		}
 	}
+	// Печенье гасится и тогда, когда сессии за ним не нашлось: иначе
+	// браузер шлёт мёртвый токен до конца месяца, а студия на каждой
+	// перезагрузке пробует по нему войти.
+	d.dropSession(w)
 	WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (d *Desk) handleMe(w http.ResponseWriter, r *http.Request) {
-	user, err := d.sessions.User(r.Context(), d.users, bearer(r), d.now())
+	user, err := d.sessions.User(r.Context(), d.users, presented(r), d.now())
 	if err != nil {
 		WriteError(w, http.StatusUnauthorized, "Войдите в студию заново")
 		return
