@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { Generate } from './Generate'
-import type { Check, Draft, Job, Me, Proofread, SiblingCheck, Source, Unit } from './api'
+import type { Check, CueCheck, Draft, Job, Me, Proofread, SiblingCheck, Source, Unit } from './api'
 
 const SOURCE: Source = {
   id: 1,
@@ -543,6 +543,79 @@ describe('слепая сверка и повтор', () => {
 
     expect(await screen.findByText(/язык задачи не смотрел никто/)).toBeTruthy()
     expect(screen.queryByText(/Условие не вычитано/)).toBeNull()
+  })
+
+  function сПодсказками(cues?: CueCheck) {
+    const draft = cues === undefined ? ЧЕРНОВИК : { ...ЧЕРНОВИК, cues }
+    return {
+      ...ОБЫЧНО,
+      '/admin/api/sources/1/jobs': { jobs: [job({ status: 'done' })] },
+      '/admin/api/jobs/7': job({ status: 'done', drafts: [draft] }),
+    }
+  }
+
+  it('найденная подсказка показана тревогой и названа словами сервера', async () => {
+    // Задача с подсказкой выглядит исправной: слепая сверка у неё
+    // сходится, потому что признак в условии ЕСТЬ — он просто назван, а
+    // не показан. Решают её сведением слова со словом, и не проверяет
+    // она ничего. Тихой строкой это не показывается.
+    serve(
+      сПодсказками({
+        done: true,
+        cues: [
+          {
+            kind: 'named-sign',
+            where: 'segments',
+            message: 'в условии названо то, что надо показать: «ритуально» — абз. 1',
+          },
+        ],
+      }),
+    )
+    render(<Generate me={СОСТАВИТЕЛЬ} source={1} />)
+    fireEvent.click(await screen.findByText('Открыть'))
+
+    const тревога = await screen.findByText(/В условии есть подсказки/)
+    expect(тревога.getAttribute('role')).toBe('alert')
+    expect(screen.getByText(/названо то, что надо показать/).textContent).toMatch(/абз\. 1/)
+  })
+
+  it('«судить не могу» отделено от «подсказок нет»', async () => {
+    // Это и есть главный случай: у молодого источника словаря не
+    // набралось, мерить редкость слов не по чему. Слей это с чистотой —
+    // и весь его набор уехал бы к обучающимся непроверенным, при
+    // зелёном виде в студии.
+    serve(
+      сПодсказками({
+        done: false,
+        note: 'у источника 2 пункта с положениями — редкость слов мерить не по чему',
+        remark:
+          'подсказки в условии не искали: у источника 2 пункта с положениями — редкость слов мерить не по чему',
+      }),
+    )
+    render(<Generate me={СОСТАВИТЕЛЬ} source={1} />)
+    fireEvent.click(await screen.findByText('Открыть'))
+
+    const сказано = await screen.findByText(/подсказки в условии не искали/)
+    expect(сказано.textContent).toMatch(/мерить не по чему/)
+    expect(screen.queryByText(/Подсказок в условии не найдено/)).toBeNull()
+  })
+
+  it('чистый черновик сказан тихо, а не тревогой', async () => {
+    serve(сПодсказками({ done: true, cues: [] }))
+    render(<Generate me={СОСТАВИТЕЛЬ} source={1} />)
+    fireEvent.click(await screen.findByText('Открыть'))
+
+    expect(await screen.findByText(/Подсказок в условии не найдено/)).toBeTruthy()
+    expect(screen.queryByText(/В условии есть подсказки/)).toBeNull()
+  })
+
+  it('недошедший детектор отделён от несостоявшегося', async () => {
+    serve(сПодсказками())
+    render(<Generate me={СОСТАВИТЕЛЬ} source={1} />)
+    fireEvent.click(await screen.findByText('Открыть'))
+
+    expect(await screen.findByText(/детектор до этого черновика не дошёл/)).toBeTruthy()
+    expect(screen.queryByText(/подсказки в условии не искали/)).toBeNull()
   })
 
   it('отказавшее задание можно повторить', async () => {

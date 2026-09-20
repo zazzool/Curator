@@ -623,6 +623,21 @@ label {
   border-top: 1px solid var(--hairline);
 }
 
+/* Найденные подсказки. Каждая — отдельная строка для правки, потому
+   список; отличается от отклонённых правок только тем, что «было» и
+   «стало» здесь нет — есть одна фраза о том, что в условии названо. */
+.cue-list {
+  margin: var(--gap-xs) 0 0;
+  padding-left: var(--gap-lg);
+  max-width: var(--measure);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.cue-list li + li {
+  margin-top: var(--gap-xs);
+}
+
 .hint-warning {
   color: var(--warning);
 }

@@ -77,6 +77,9 @@ type Result struct {
 	// Siblings — итоги различающей сверки по каждому неверному варианту.
 	Siblings []SiblingCheck
 
+	// Cues — итог детектора подсказок.
+	Cues CueCheck
+
 	// Proofread — итог вычитки: что правлено и что отклонено заслоном.
 	Proofread Proofread
 }
@@ -200,7 +203,33 @@ func (r *Runner) run(ctx context.Context, job Job) (Result, error) {
 	r.keepCheck(ctx, job.ID, draftID, result.Check)
 
 	r.runSiblings(ctx, job, draftID, draft, &result)
+	r.runCueCheck(ctx, job, draftID, draft, &result)
 	return result, nil
+}
+
+// runCueCheck — детектор подсказок.
+//
+// Последним и без обращения к модели: он ничего не спрашивает, а сличает
+// условие с положениями самого источника. Денег не стоит, а ловит то,
+// чего не ловит ни одна сверка: условие, которое называет ответ прямо,
+// обе сверки подтверждают охотнее всего — оно и правда ведёт к эталону,
+// только учит при этом не тому.
+//
+// Отказ узла задание не роняет: задача написана и сверена, а ненайденные
+// подсказки — пометка, а не брак.
+func (r *Runner) runCueCheck(ctx context.Context, job Job, draftID int64, draft Draft, result *Result) {
+	lex, err := r.jobs.SourceLexicon(ctx, job.Plan.SourceID)
+	if err != nil {
+		// Словаря нет — детектор отказывается СУДИТЬ, а не объявляет
+		// чисто: молчание составитель примет за «подсказок нет».
+		result.Cues = CueCheck{Note: "словарь источника не прочитан: " + err.Error()}
+	} else {
+		result.Cues = LintDraft(draft, job.Plan, lex)
+	}
+	if err := r.jobs.SaveCueCheck(ctx, draftID, result.Cues); err != nil {
+		log.Printf("задание %d: итог детектора подсказок не записан в черновик %d: %v",
+			job.ID, draftID, err)
+	}
 }
 
 // runSiblings — узел различающей сверки.
