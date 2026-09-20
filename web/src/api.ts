@@ -174,6 +174,15 @@ export type PackItem = {
 export type PackContents = Omit<Pack, 'cases'> & {
   summaryMd: string
   items: PackItem[]
+  /**
+   * Редакция набора — одна на карточку и состав.
+   *
+   * Уезжает обратно при сохранении: двое, открывшие «Кардиологию»,
+   * иначе затирают друг друга молча. Первый двадцать минут переставляет
+   * сорок задач, второй добавляет одну и сохраняет, первый сохраняет
+   * следом — и добавленное исчезает.
+   */
+  revision: number
 }
 
 // Клиент глазами оператора. Одна и та же строка в списке и в карточке:
@@ -198,6 +207,8 @@ export type Price = {
   purpose: string
   kopecks: number
   enabled: boolean
+  /** Редакция строки цены; 0 означает, что цены на этот товар ещё нет. */
+  revision?: number
 }
 
 export type Payment = {
@@ -485,6 +496,7 @@ export const api = {
       summaryMd: string
       status: string
       version: number
+      revision: number
       cases: PackItem[]
     }>('GET', `/admin/api/packs/${encodeURIComponent(slug)}`)
     // Сервер зовёт состав «cases» — тем же словом, каким в списке наборов
@@ -497,16 +509,25 @@ export const api = {
   createPack: (pack: { slug: string; title: string; summaryMd: string }) =>
     request<{ slug: string }>('POST', '/admin/api/packs', pack),
 
-  savePack: (slug: string, card: { title: string; summaryMd: string; status: string }) =>
-    request<{ status: string }>('PUT', `/admin/api/packs/${encodeURIComponent(slug)}`, card),
+  savePack: (
+    slug: string,
+    card: { title: string; summaryMd: string; status: string; revision: number },
+  ) =>
+    request<{ status: string; revision: number }>(
+      'PUT',
+      `/admin/api/packs/${encodeURIComponent(slug)}`,
+      card,
+    ),
 
   // Состав задаётся целиком: порядок списка и есть решение составителя, а
   // правка по одной задаче превращает его в череду мелких решений, из
   // которых порядок не виден никому.
-  setPackItems: (slug: string, cases: string[]) =>
-    request<{ cases: number }>('PUT', `/admin/api/packs/${encodeURIComponent(slug)}/items`, {
-      cases,
-    }),
+  setPackItems: (slug: string, cases: string[], revision: number) =>
+    request<{ cases: number; revision: number }>(
+      'PUT',
+      `/admin/api/packs/${encodeURIComponent(slug)}/items`,
+      { cases, revision },
+    ),
 
   releasePack: (slug: string) =>
     request<{ slug: string; version: number; cases: number; keyId: string }>(

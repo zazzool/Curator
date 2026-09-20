@@ -181,6 +181,11 @@ function PackCard({ me, slug, onBack }: { me: Me; slug: string; onBack: () => vo
   const [items, setItems] = useState<PackItem[]>([])
   const [card, setCard] = useState({ title: '', summaryMd: '', status: 'published' })
   const [failure, setFailure] = useState('')
+  // Опоздавшая правка — отдельное состояние, а не просто отказ: у неё
+  // единственный выход, и его надо дать рядом со словами. Сам по себе
+  // отказ оставляет составителя с набранным, которое больше никогда не
+  // сохранится, и без подсказки, что делать.
+  const [overtaken, setOvertaken] = useState(false)
   const [note, setNote] = useState('')
   const [picking, setPicking] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -211,22 +216,38 @@ function PackCard({ me, slug, onBack }: { me: Me; slug: string; onBack: () => vo
       items.some((one, i) => one.id !== pack.items[i]?.id))
 
   async function saveItems() {
+    if (pack === null) return
     setFailure('')
+    setOvertaken(false)
     setNote('')
     setBusy(true)
     try {
-      await api.setPackItems(slug, items.map((one) => one.id))
+      await api.setPackItems(slug, items.map((one) => one.id), pack.revision)
       await reload()
       setNote('Состав сохранён. На устройства он попадёт следующим выпуском.')
     } catch (error) {
-      setFailure(error instanceof ApiError ? error.message : 'Состав не сохранён')
+      failed(error, 'Состав не сохранён')
     } finally {
       setBusy(false)
     }
   }
 
+  // Перечитывание при отказе НЕ делается само: набранный состав держится
+  // на экране, и перечитывание стёрло бы его — двадцать минут перестановок
+  // вместе с ними. Решает составитель, и решает, уже увидев отказ.
+  function failed(error: unknown, ifUnknown: string) {
+    if (error instanceof ApiError) {
+      setFailure(error.message)
+      setOvertaken(error.status === 409)
+      return
+    }
+    setFailure(ifUnknown)
+  }
+
   async function saveCard() {
+    if (pack === null) return
     setFailure('')
+    setOvertaken(false)
     setNote('')
     // Снятие с витрины спрашивается, остальная правка карточки — нет:
     // название и описание исправляются тем же полем, а снятый набор
@@ -245,11 +266,11 @@ function PackCard({ me, slug, onBack }: { me: Me; slug: string; onBack: () => vo
     }
     setBusy(true)
     try {
-      await api.savePack(slug, card)
+      await api.savePack(slug, { ...card, revision: pack.revision })
       await reload()
       setNote('Карточка сохранена.')
     } catch (error) {
-      setFailure(error instanceof ApiError ? error.message : 'Карточка не сохранена')
+      failed(error, 'Карточка не сохранена')
     } finally {
       setBusy(false)
     }
@@ -324,7 +345,27 @@ function PackCard({ me, slug, onBack }: { me: Me; slug: string; onBack: () => vo
           : 'ни одного выпуска: на устройствах этого набора нет'}
       </p>
 
-      {failure && <Banner kind="error">{failure}</Banner>}
+      {failure && (
+        <Banner kind="error">
+          {failure}
+          {overtaken && (
+            <>
+              {' '}
+              <button
+                type="button"
+                className="link-button"
+                onClick={() => {
+                  setFailure('')
+                  setOvertaken(false)
+                  void reload()
+                }}
+              >
+                Перечитать набор
+              </button>
+            </>
+          )}
+        </Banner>
+      )}
       {note && <Banner kind="success">{note}</Banner>}
 
       <div className="page-section">

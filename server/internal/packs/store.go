@@ -13,6 +13,15 @@ import (
 	"curator/server/internal/dbgate"
 )
 
+// ErrStale — правка, посланная от редакции, которой в базе уже нет.
+//
+// Отдельной ошибкой, а не текстом: по ней ручка отвечает 409, а не 400.
+// Разница не формальная — 400 означает «так нельзя», и составитель начнёт
+// искать, что он набрал не то, тогда как набрал он всё верно, просто
+// опоздал. Слова о том, чья редакция какая, дописываются обёрткой на
+// месте отказа.
+var ErrStale = errors.New("набор успели поправить, пока вы его держали открытым")
+
 // Store — пакеты в базе.
 type Store struct {
 	gate *dbgate.Gate
@@ -381,14 +390,16 @@ func goodSlug(slug string) bool {
 // Состав правится свободно, и это не противоречит неизменяемости выпуска:
 // выпуск — снимок состава на миг подписи, и новый состав доедет до
 // устройств только следующим выпуском.
-func (s *Store) SetItems(ctx context.Context, slug string, cases []string) (int, error) {
-	var count int
+//
+// Свободно — но не поверх чужой правки: редакция, с которой пришла студия,
+// сверяется с той, что в базе. Двое открыли «Кардиологию», первый двадцать
+// минут переставляет сорок задач, второй добавляет одну и сохраняет,
+// первый сохраняет следом — и добавленное исчезало, а экран тут же
+// перечитывал состав и показывал первому согласованную неверную картину.
+func (s *Store) SetItems(ctx context.Context, slug string, cases []string, revision int) (int, int, error) {
+	var count, grown int
 	err := s.gate.InTx(ctx, func(tx pgx.Tx) error {
-		var packID int64
-		err := tx.QueryRow(ctx, `SELECT id FROM packs WHERE slug = $1 FOR UPDATE`, slug).Scan(&packID)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return errors.New("такого набора нет")
-		}
+		packID, err := lock(ctx, tx, slug, revision)
 		if err != nil {
 			return err
 		}
@@ -419,9 +430,50 @@ func (s *Store) SetItems(ctx context.Context, slug string, cases []string) (int,
 			}
 			count++
 		}
-		return nil
+		grown, err = bump(ctx, tx, packID)
+		return err
 	})
-	return count, err
+	if err != nil {
+		return 0, 0, err
+	}
+	return count, grown, nil
+}
+
+// lock берёт набор под замок и сверяет редакцию.
+//
+// Замок берётся ДО сверки, а не после: сверка без замка проверяет то, что
+// было мгновение назад, и пропускает ровно тот случай, ради которого
+// заведена. Отказ называет обе редакции — «перечитайте» без чисел
+// составитель читает как сбой студии.
+func lock(ctx context.Context, tx pgx.Tx, slug string, revision int) (int64, error) {
+	var packID int64
+	var have int
+	err := tx.QueryRow(ctx,
+		`SELECT id, revision FROM packs WHERE slug = $1 FOR UPDATE`, slug).Scan(&packID, &have)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, errors.New("такого набора нет")
+	}
+	if err != nil {
+		return 0, err
+	}
+	if revision != have {
+		return 0, fmt.Errorf(
+			"%w: у вас редакция %d, в наборе уже %d — перечитайте набор и внесите правку заново",
+			ErrStale, revision, have)
+	}
+	return packID, nil
+}
+
+// bump поднимает редакцию набора и отдаёт новую.
+func bump(ctx context.Context, tx pgx.Tx, packID int64) (int, error) {
+	var grown int
+	err := tx.QueryRow(ctx,
+		`UPDATE packs SET revision = revision + 1, updated_at = NOW()
+		  WHERE id = $1 RETURNING revision`, packID).Scan(&grown)
+	if err != nil {
+		return 0, fmt.Errorf("редакция набора не поднята: %w", err)
+	}
+	return grown, nil
 }
 
 // All отдаёт наборы составителю.
@@ -466,7 +518,12 @@ type Contents struct {
 	// следующим выпуском, и разница между этими двумя числами — главное,
 	// что составителю надо видеть.
 	Version int64
-	Items   []Listed
+
+	// Revision — редакция набора, с которой студия пришла сохранять.
+	// Возвращается вместе с содержимым и уходит обратно при сохранении:
+	// иначе двое, открывшие один набор, затирают друг друга молча.
+	Revision int
+	Items    []Listed
 }
 
 // Listed — задача в составе, названная так, чтобы человек её узнал.
@@ -486,9 +543,10 @@ func (s *Store) One(ctx context.Context, slug string) (Contents, error) {
 	var out Contents
 	err := s.gate.QueryRow(ctx, `
 		SELECT p.slug, p.title, p.summary_md, p.status,
-		       coalesce((SELECT max(version) FROM pack_releases r WHERE r.pack_id = p.id), 0)
+		       coalesce((SELECT max(version) FROM pack_releases r WHERE r.pack_id = p.id), 0),
+		       p.revision
 		  FROM packs p WHERE p.slug = $1`, slug).
-		Scan(&out.Slug, &out.Title, &out.SummaryMd, &out.Status, &out.Version)
+		Scan(&out.Slug, &out.Title, &out.SummaryMd, &out.Status, &out.Version, &out.Revision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Contents{}, errors.New("такого набора нет")
 	}
@@ -528,23 +586,35 @@ func (s *Store) One(ctx context.Context, slug string) (Contents, error) {
 // разводить их по двум ручкам значит заставить составителя помнить две.
 // Выпусков это не касается вовсе: снятый набор перестаёт показываться,
 // но подписанное им остаётся подписанным.
-func (s *Store) Update(ctx context.Context, slug, title, summary, status string) error {
+//
+// Редакция здесь та же, что и у состава, и сверяется так же: карточка и
+// состав правятся на одном экране, и «снял с витрины, пока ты
+// переставлял» — та же потеря, что и потерянная перестановка.
+func (s *Store) Update(ctx context.Context, slug, title, summary, status string, revision int) (int, error) {
 	if title == "" {
-		return errors.New("у набора должно быть название")
+		return 0, errors.New("у набора должно быть название")
 	}
 	switch status {
 	case "draft", "published", "retired":
 	default:
-		return fmt.Errorf("состояния %q у набора не бывает", status)
+		return 0, fmt.Errorf("состояния %q у набора не бывает", status)
 	}
-	tag, err := s.gate.Exec(ctx,
-		`UPDATE packs SET title = $2, summary_md = $3, status = $4, updated_at = NOW()
-		  WHERE slug = $1`, slug, title, summary, status)
-	if err != nil {
+	var grown int
+	err := s.gate.InTx(ctx, func(tx pgx.Tx) error {
+		packID, err := lock(ctx, tx, slug, revision)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE packs SET title = $2, summary_md = $3, status = $4
+			  WHERE id = $1`, packID, title, summary, status); err != nil {
+			return err
+		}
+		grown, err = bump(ctx, tx, packID)
 		return err
+	})
+	if err != nil {
+		return 0, err
 	}
-	if tag.RowsAffected() == 0 {
-		return errors.New("такого набора нет")
-	}
-	return nil
+	return grown, nil
 }

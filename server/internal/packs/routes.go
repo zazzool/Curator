@@ -1,6 +1,7 @@
 package packs
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
@@ -47,7 +48,8 @@ func (r *routes) create(w http.ResponseWriter, req *http.Request, _ studio.User)
 }
 
 type itemsRequest struct {
-	Cases []string `json:"cases"`
+	Cases    []string `json:"cases"`
+	Revision int      `json:"revision"`
 }
 
 // setItems задаёт состав набора целиком.
@@ -62,12 +64,13 @@ func (r *routes) setItems(w http.ResponseWriter, req *http.Request, _ studio.Use
 		studio.WriteError(w, http.StatusBadRequest, "Запрос не разобран: "+err.Error())
 		return
 	}
-	count, err := r.store.SetItems(req.Context(), req.PathValue("slug"), body.Cases)
+	count, revision, err := r.store.SetItems(
+		req.Context(), req.PathValue("slug"), body.Cases, body.Revision)
 	if err != nil {
-		studio.WriteError(w, http.StatusBadRequest, studio.Sentence(err.Error()))
+		studio.WriteError(w, stale(err), studio.Sentence(err.Error()))
 		return
 	}
-	studio.WriteJSON(w, http.StatusOK, map[string]any{"cases": count})
+	studio.WriteJSON(w, http.StatusOK, map[string]any{"cases": count, "revision": revision})
 }
 
 func (r *routes) release(w http.ResponseWriter, req *http.Request, _ studio.User) {
@@ -113,7 +116,8 @@ func (r *routes) show(w http.ResponseWriter, req *http.Request, _ studio.User) {
 	}
 	studio.WriteJSON(w, http.StatusOK, map[string]any{
 		"slug": one.Slug, "title": one.Title, "summaryMd": one.SummaryMd,
-		"status": one.Status, "version": one.Version, "cases": items,
+		"status": one.Status, "version": one.Version, "revision": one.Revision,
+		"cases": items,
 	})
 }
 
@@ -121,6 +125,20 @@ type updateRequest struct {
 	Title     string `json:"title"`
 	SummaryMd string `json:"summaryMd"`
 	Status    string `json:"status"`
+	Revision  int    `json:"revision"`
+}
+
+// stale разводит «так нельзя» и «вы опоздали».
+//
+// Разными кодами, а не одним: студия по 409 не просто показывает слова
+// сервера, а предлагает перечитать набор — единственное, что тут можно
+// сделать. По 400 такого предложения быть не должно, иначе оно появится
+// и на «у набора должно быть название».
+func stale(err error) int {
+	if errors.Is(err, ErrStale) {
+		return http.StatusConflict
+	}
+	return http.StatusBadRequest
 }
 
 func (r *routes) update(w http.ResponseWriter, req *http.Request, _ studio.User) {
@@ -129,11 +147,13 @@ func (r *routes) update(w http.ResponseWriter, req *http.Request, _ studio.User)
 		studio.WriteError(w, http.StatusBadRequest, "Запрос не разобран: "+err.Error())
 		return
 	}
-	err := r.store.Update(req.Context(), req.PathValue("slug"),
-		body.Title, body.SummaryMd, body.Status)
+	revision, err := r.store.Update(req.Context(), req.PathValue("slug"),
+		body.Title, body.SummaryMd, body.Status, body.Revision)
 	if err != nil {
-		studio.WriteError(w, http.StatusBadRequest, studio.Sentence(err.Error()))
+		studio.WriteError(w, stale(err), studio.Sentence(err.Error()))
 		return
 	}
-	studio.WriteJSON(w, http.StatusOK, map[string]any{"status": body.Status})
+	studio.WriteJSON(w, http.StatusOK, map[string]any{
+		"status": body.Status, "revision": revision,
+	})
 }

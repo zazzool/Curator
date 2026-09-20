@@ -1,6 +1,7 @@
 package sales
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -36,9 +37,10 @@ type routes struct {
 }
 
 type priceRequest struct {
-	Purpose string `json:"purpose"`
-	Kopecks int64  `json:"kopecks"`
-	Enabled bool   `json:"enabled"`
+	Purpose  string `json:"purpose"`
+	Kopecks  int64  `json:"kopecks"`
+	Enabled  bool   `json:"enabled"`
+	Revision int    `json:"revision"`
 }
 
 // setPrice задаёт цену.
@@ -52,12 +54,21 @@ func (r *routes) setPrice(w http.ResponseWriter, req *http.Request, user studio.
 		studio.WriteError(w, http.StatusBadRequest, "Запрос не разобран: "+err.Error())
 		return
 	}
-	if err := r.prices.Set(req.Context(), user.Login, body.Purpose, body.Kopecks, body.Enabled); err != nil {
-		studio.WriteError(w, http.StatusBadRequest, studio.Sentence(err.Error()))
+	revision, err := r.prices.Set(
+		req.Context(), user.Login, body.Purpose, body.Kopecks, body.Enabled, body.Revision)
+	if err != nil {
+		// 409, а не 400: оператор набрал всё верно, он опоздал. По 400
+		// он пойдёт искать описку в сумме, которой нет.
+		code := http.StatusBadRequest
+		if errors.Is(err, ErrStale) {
+			code = http.StatusConflict
+		}
+		studio.WriteError(w, code, studio.Sentence(err.Error()))
 		return
 	}
 	studio.WriteJSON(w, http.StatusOK, map[string]any{
 		"purpose": body.Purpose, "kopecks": body.Kopecks, "enabled": body.Enabled,
+		"revision": revision,
 	})
 }
 
@@ -71,6 +82,7 @@ func (r *routes) listPrices(w http.ResponseWriter, req *http.Request, _ studio.U
 	for _, one := range list {
 		out = append(out, map[string]any{
 			"purpose": one.Purpose, "kopecks": one.Kopecks, "enabled": one.Enabled,
+			"revision": one.Revision,
 		})
 	}
 	studio.WriteJSON(w, http.StatusOK, map[string]any{"prices": out})

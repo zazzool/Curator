@@ -2,6 +2,7 @@ package sales
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"os"
@@ -77,7 +78,7 @@ func TestPgПлатныйНаборЗакрытПокаНеКуплен(t *testi
 	slug := набор(t, gate)
 	id := врач(t, gate)
 
-	if err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, true); err != nil {
+	if _, err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, true, 0); err != nil {
 		t.Fatal(err)
 	}
 	ok, err := access.Allowed(ctx, id, slug, time.Now())
@@ -112,7 +113,7 @@ func TestPgПодпискаОткрываетВсеНаборы(t *testing.T) {
 	id := врач(t, gate)
 
 	for _, slug := range []string{первый, второй} {
-		if err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, true); err != nil {
+		if _, err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, true, 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -140,7 +141,7 @@ func TestPgИстёкшаяПодпискаНеОткрываетНичего(t 
 	ctx := context.Background()
 	slug := набор(t, gate)
 	id := врач(t, gate)
-	if err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, true); err != nil {
+	if _, err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, true, 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -209,7 +210,7 @@ func TestPgПовторНеОформляетВторойПлатёж(t *testing
 	ctx := context.Background()
 	slug := набор(t, gate)
 	id := врач(t, gate)
-	if err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, true); err != nil {
+	if _, err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, true, 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -250,7 +251,7 @@ func TestPgВозвратОтзываетПравоВыданноеЭтимПл�
 	ctx := context.Background()
 	slug := набор(t, gate)
 	id := врач(t, gate)
-	if err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, true); err != nil {
+	if _, err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, true, 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -292,7 +293,7 @@ func TestPgПовторныйВозвратОтказывает(t *testing.T) {
 	payments, prices := NewPayments(gate), NewPrices(gate)
 	ctx := context.Background()
 	slug := набор(t, gate)
-	if err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, true); err != nil {
+	if _, err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, true, 0); err != nil {
 		t.Fatal(err)
 	}
 	out, err := payments.Accept(ctx, Income{
@@ -350,7 +351,7 @@ func TestPgЦенаВНольНеПринимается(t *testing.T) {
 	// Ноль выглядит ценой и таковой не является. Бесплатный набор делается
 	// выключением цены, и это видно в студии.
 	gate := testGate(t)
-	if err := NewPrices(gate).Set(context.Background(), "проверка", "pack:"+набор(t, gate), 0, true); err == nil {
+	if _, err := NewPrices(gate).Set(context.Background(), "проверка", "pack:"+набор(t, gate), 0, true, 0); err == nil {
 		t.Error("цена в ноль принята")
 	}
 }
@@ -362,13 +363,14 @@ func TestPgВыключеннаяЦенаДелаетНаборБесплатн�
 	slug := набор(t, gate)
 	id := врач(t, gate)
 
-	if err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, true); err != nil {
+	редакция, err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, true, 0)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if ok, _ := access.Allowed(ctx, id, slug, time.Now()); ok {
 		t.Fatal("платный набор открыт без покупки")
 	}
-	if err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, false); err != nil {
+	if _, err := prices.Set(ctx, "проверка", "pack:"+slug, 39900, false, редакция); err != nil {
 		t.Fatal(err)
 	}
 	ok, err := access.Allowed(ctx, id, slug, time.Now())
@@ -682,16 +684,17 @@ func TestPgВыключеннаяЦенаПопадаетВЖурнал(t *testi
 	ctx := context.Background()
 	slug := набор(t, gate)
 
-	if err := prices.Set(ctx, "составитель", "pack:"+slug, 39900, true); err != nil {
+	редакция, err := prices.Set(ctx, "составитель", "pack:"+slug, 39900, true, 0)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := prices.Set(ctx, "составитель", "pack:"+slug, 39900, false); err != nil {
+	if _, err := prices.Set(ctx, "составитель", "pack:"+slug, 39900, false, редакция); err != nil {
 		t.Fatal(err)
 	}
 
 	var by string
 	var details map[string]any
-	err := gate.QueryRow(ctx, `
+	err = gate.QueryRow(ctx, `
 		SELECT user_login, details FROM admin_journal
 		 WHERE action = 'price:set' AND subject = $1
 		 ORDER BY id DESC LIMIT 1`, "pack:"+slug).Scan(&by, &details)
@@ -720,7 +723,7 @@ func TestPgЗаведениеЦеныНеСчитаетсяПереходомВ�
 	ctx := context.Background()
 	slug := набор(t, gate)
 
-	if err := prices.Set(ctx, "составитель", "pack:"+slug, 19900, true); err != nil {
+	if _, err := prices.Set(ctx, "составитель", "pack:"+slug, 19900, true, 0); err != nil {
 		t.Fatal(err)
 	}
 	var details map[string]any
@@ -745,7 +748,7 @@ func TestPgОтвергнутаяЦенаНеПишетВЖурнал(t *testing
 	ctx := context.Background()
 	slug := набор(t, gate)
 
-	if err := prices.Set(ctx, "составитель", "pack:"+slug, 0, true); err == nil {
+	if _, err := prices.Set(ctx, "составитель", "pack:"+slug, 0, true, 0); err == nil {
 		t.Fatal("цена в ноль принята")
 	}
 	var n int
@@ -812,5 +815,60 @@ func TestPgПоискКлиентовНазываетОбрезанное(t *tes
 	}
 	if len(probe) != 4 {
 		t.Errorf("запрос на одного больше нашёл %d: обрезанное не отличить от полного", len(probe))
+	}
+}
+
+func TestPgЦенаНеЗатираетсяОпоздавшимОператором(t *testing.T) {
+	// Двое открыли витрину. Первый ставит 399 рублей, второй, видевший
+	// прежнюю цену, сохраняет свою следом — и прежде побеждала последняя
+	// запись. Узнаётся это по непришедшим деньгам, и ровно тогда, когда
+	// возвращать поздно.
+	gate := testGate(t)
+	prices := NewPrices(gate)
+	ctx := context.Background()
+	slug := набор(t, gate)
+
+	редакция, err := prices.Set(ctx, "первый", "pack:"+slug, 39900, true, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prices.Set(ctx, "второй", "pack:"+slug, 19900, true, 0); !errors.Is(err, ErrStale) {
+		t.Fatalf("опоздавшая цена принята: %v", err)
+	}
+
+	// Цена осталась первой, а не той, что пришла последней.
+	live, err := prices.Live(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if live["pack:"+slug] != 39900 {
+		t.Errorf("в витрине %d копеек вместо 39900: опоздавший всё же затёр",
+			live["pack:"+slug])
+	}
+	// А от своей редакции тот же оператор правит свободно.
+	if _, err := prices.Set(ctx, "первый", "pack:"+slug, 19900, true, редакция); err != nil {
+		t.Errorf("правка от своей редакции отклонена: %v", err)
+	}
+}
+
+func TestPgЗаведениеЦеныПоверхЗаведённойОтказывает(t *testing.T) {
+	// Нулевая редакция означает «цены не было». Пришедший с ней к товару,
+	// которому цену уже назначили, не правит её, а заводит заново — и
+	// затирает чужое решение, ничего о нём не зная. Отказ поэтому говорит
+	// не о числах, а о том, что случилось.
+	gate := testGate(t)
+	prices := NewPrices(gate)
+	ctx := context.Background()
+	slug := набор(t, gate)
+
+	if _, err := prices.Set(ctx, "первый", "pack:"+slug, 39900, true, 0); err != nil {
+		t.Fatal(err)
+	}
+	_, err := prices.Set(ctx, "второй", "pack:"+slug, 19900, true, 0)
+	if !errors.Is(err, ErrStale) {
+		t.Fatalf("цена заведена поверх заведённой: %v", err)
+	}
+	if !strings.Contains(err.Error(), "назначили, пока вы открывали витрину") {
+		t.Errorf("отказ не говорит, что цену назначили без него: %s", err)
 	}
 }

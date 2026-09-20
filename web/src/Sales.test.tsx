@@ -53,7 +53,7 @@ const ОБЫЧНО: [string, unknown][] = [
   ['/admin/api/clients/7/entitlements', { entitlements: [] }],
   ['/admin/api/clients/7', КАРТОЧКА],
   ['/admin/api/clients', КЛИЕНТЫ],
-  ['/admin/api/prices', { prices: [{ purpose: 'subscription:month', kopecks: 199000, enabled: true }] }],
+  ['/admin/api/prices', { prices: [{ purpose: 'subscription:month', kopecks: 199000, enabled: true, revision: 4 }] }],
   ['/admin/api/packs', { packs: [] }],
 ]
 
@@ -194,6 +194,64 @@ describe('продажи', () => {
     expect(отказ.textContent).toMatch(/Рублями и копейками/)
     expect(поле.closest('.form-row')?.contains(отказ)).toBe(true)
     expect(posted).toBe(0)
+  })
+
+  it('цена уходит с той редакцией, которую оператор видел на витрине', async () => {
+    // Двое открыли витрину: первый ставит 399 рублей, второй сохраняет
+    // свою цену следом. Без редакции побеждала последняя запись, и
+    // узнавалось это по непришедшим деньгам — когда возвращать поздно.
+    let ушло: Record<string, unknown> | null = null
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if (init?.method === 'PUT' && path.startsWith('/admin/api/prices')) {
+          ушло = JSON.parse(String(init.body))
+        }
+        const found = ОБЫЧНО.find(([key]) => path.startsWith(key))
+        return Promise.resolve(
+          new Response(JSON.stringify(found ? found[1] : {}), { status: 200 }),
+        )
+      }),
+    )
+    render(<Sales me={ОПЕРАТОР} />)
+    const поле = await screen.findByPlaceholderText('1990')
+    fireEvent.change(поле, { target: { value: '2490' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить цену' }))
+
+    await waitFor(() => expect(ушло).not.toBeNull())
+    const тело = ушло as unknown as Record<string, unknown>
+    expect(тело.kopecks).toBe(249000)
+    // Редакция той строки, которая показана, а не какая-нибудь.
+    expect(тело.revision).toBe(4)
+  })
+
+  it('цена товара без цены уходит нулевой редакцией', async () => {
+    // Нуль означает «цены не было». Пришли с ненулевой — и сервер примет
+    // заведение за правку чужой цены, назначенной, пока витрину читали.
+    let ушло: Record<string, unknown> | null = null
+    const пусто: [string, unknown][] = [
+      ['/admin/api/prices', { prices: [] }],
+      ...ОБЫЧНО.filter(([key]) => key !== '/admin/api/prices'),
+    ]
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if (init?.method === 'PUT' && path.startsWith('/admin/api/prices')) {
+          ушло = JSON.parse(String(init.body))
+        }
+        const found = пусто.find(([key]) => path.startsWith(key))
+        return Promise.resolve(
+          new Response(JSON.stringify(found ? found[1] : {}), { status: 200 }),
+        )
+      }),
+    )
+    render(<Sales me={ОПЕРАТОР} />)
+    const поле = await screen.findByPlaceholderText('1990')
+    fireEvent.change(поле, { target: { value: '2490' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить цену' }))
+
+    await waitFor(() => expect(ушло).not.toBeNull())
+    expect((ушло as unknown as Record<string, unknown>).revision).toBe(0)
   })
 
   it('приход уносит ровно ту сумму, которую набрал оператор', async () => {
