@@ -7,12 +7,14 @@ import { ApiError, api } from './api'
 import { Loaded, useResource } from './useResource'
 import { confirmed } from './confirm'
 import type {
+  CheckCatalog,
   CompactionGroup,
   CompactionPlan,
   Me,
   PipelineNode,
   Prompt,
   Rule,
+  RuleCheck,
   RuleEdit,
   StudioUser,
 } from './api'
@@ -761,11 +763,23 @@ function Prompts({ me }: { me: Me }) {
 function Rules({ me }: { me: Me }) {
   const [open, setOpen] = useState<string | null>(null)
   const [draft, setDraft] = useState<RuleEdit>(пустоеПравило())
-  // Проверка открытого правила словами, как её написал сервер. Держится
-  // отдельно от draft намеренно: draft — это то, что уедет обратно, а
-  // проверка отсюда не правится, и положи мы её туда, первая же отправка
-  // повезла бы поле, которого ручка не ждёт.
+  // Проверка открытого правила словами, как её написал сервер. Фраза
+  // считается ТАМ, и второй её сборки здесь нет: собери мы её в студии —
+  // составитель читал бы в списке одно, а в форме другое, разойдясь на
+  // первой же правке формулировки.
   const [checkWords, setCheckWords] = useState('')
+  // Проверка, какой её правят, и признак «трогали ли».
+  //
+  // Признак нужен затем, что у поля на сервере ТРИ состояния: не слали —
+  // не трогали, слали null — снимают, слали запись — ставят. Шли студия
+  // проверку всегда, правка одной запятой в тексте переписывала бы
+  // проверку тем, что студия успела прочитать, — а прочитать она могла и
+  // устаревшее.
+  const [проверка, setПроверка] = useState<RuleCheck | null>(null)
+  const [проверкуТрогали, setПроверкуТрогали] = useState(false)
+
+  const readChecks = useCallback(async () => await api.checkCatalog(), [])
+  const каталог = useResource(readChecks, 'Каталог проверок не прочитан')
   const [failure, setFailure] = useState('')
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
@@ -781,6 +795,8 @@ function Rules({ me }: { me: Me }) {
     setNote('')
     setFailure('')
     setCheckWords(rule.checkWords ?? '')
+    setПроверка(rule.check ?? null)
+    setПроверкуТрогали(false)
     setDraft({
       title: rule.title,
       text: rule.text,
@@ -797,11 +813,14 @@ function Rules({ me }: { me: Me }) {
     setNote('')
     setBusy(true)
     try {
+      // Поле проверки едет, только если её трогали: нетронутую сервер
+      // оставляет как была.
+      const тело: RuleEdit = проверкуТрогали ? { ...draft, check: проверка } : draft
       if (open === 'новое') {
-        const made = await api.createRule(draft)
+        const made = await api.createRule(тело)
         setNote(`Правило «${made.title}» записано и действует.`)
       } else if (open !== null) {
-        await api.saveRule(open, draft)
+        await api.saveRule(open, тело)
         setNote('Правило сохранено.')
       }
       await reload()
@@ -827,6 +846,8 @@ function Rules({ me }: { me: Me }) {
               setOpen('новое')
               setDraft(пустоеПравило())
               setCheckWords('')
+              setПроверка(null)
+              setПроверкуТрогали(false)
               setNote('')
               setFailure('')
             }}
@@ -945,16 +966,26 @@ function Rules({ me }: { me: Me }) {
             </label>
           )}
           {/*
-            Проверка показана, но не правится, и сказано это прямо. Поле,
-            которое выглядит полем, а сохраняется мимо, хуже отсутствующего:
-            составитель написал бы проверку и считал бы, что она стоит.
+            Нынешняя проверка словами — как её написал сервер, а не как
+            её собрала бы студия. Стоит НАД формой: открывший правило
+            сперва читает, что оно меряет сейчас, и только потом решает,
+            менять ли.
           */}
-          {open !== 'новое' && checkWords !== '' && (
-            <p className="hint">
-              Это правило проверяется машинно: {checkWords}. Проверка переписывается
-              пока не здесь — правка правила её не тронет и не сотрёт.
-            </p>
+          {open !== 'новое' && checkWords !== '' && !проверкуТрогали && (
+            <p className="hint">Сейчас это правило меряется так: {checkWords}.</p>
           )}
+          <Loaded from={каталог}>
+            {(catalog) => (
+              <ПроверкаПравила
+                catalog={catalog}
+                check={проверка}
+                onChange={(next) => {
+                  setПроверка(next)
+                  setПроверкуТрогали(true)
+                }}
+              />
+            )}
+          </Loaded>
           <p className="hint">
             Погашенное правило не удаляется и не возвращается само: подтверждения
             проверок его больше не воскресят. Свод дрейфует, и вопрос «чего мы
@@ -1136,6 +1167,258 @@ const РОДА = [
   { code: 'structure', word: 'устройство' },
   { code: 'language', word: 'слог' },
 ]
+
+/**
+ * Форма машинной проверки правила.
+ *
+ * # Почему форма, а не поле для записи
+ *
+ * Каталог предикатов закрыт и живёт в коде сервера. Свободное поле
+ * отдало бы серверу предикат, которого нет, и человек узнал бы об этом
+ * после заполнения всей формы. Списками выбора он выбирает из того, что
+ * исполнитель умеет, — и промахнуться не может.
+ *
+ * # Почему поля показываются не все
+ *
+ * У каждого предиката свои доводы, и сервер называет их сам (`params`).
+ * Покажи мы все девять полей всегда — составитель заполнял бы «сколько
+ * знаков» у запрета слов, а оно не читается никем: поле, которое
+ * выглядит полем и никуда не идёт, хуже отсутствующего.
+ *
+ * # Почему фразы «вот что получится» здесь нет
+ *
+ * Фразу пишет сервер (`checkWords`), и второй её сборки в студии быть не
+ * должно: собранная здесь, она разошлась бы с тем, что исполняет код, —
+ * и составитель читал бы обещание, а меряло бы другое. После сохранения
+ * фраза приезжает с сервера и встаёт над формой.
+ */
+function ПроверкаПравила({
+  catalog,
+  check,
+  onChange,
+}: {
+  catalog: CheckCatalog
+  check: RuleCheck | null
+  onChange: (next: RuleCheck | null) => void
+}) {
+  const spec = catalog.checks.find((one) => one.type === check?.type)
+  const берёт = (param: string) => spec?.params.includes(param) ?? false
+
+  function правка(patch: Partial<RuleCheck>) {
+    if (!check) return
+    onChange({ ...check, ...patch })
+  }
+
+  return (
+    <>
+      <label className="form-row">
+        <span className="fld-label">Проверяется машинно</span>
+        <select
+          className="fld-long"
+          value={check?.type ?? ''}
+          onChange={(e) => {
+            const type = e.target.value
+            // Смена предиката НЕ тащит доводы прежнего: «слова» у
+            // запрета и «выражение» у выражения — разные вещи, а
+            // сохранившееся поле уехало бы на сервер незаметно для
+            // того, кто его не заполнял.
+            onChange(type === '' ? null : { type })
+          }}
+        >
+          {/*
+            «Без проверки» стоит первым и выбран у правила, которое ею не
+            меряется: это самый частый случай, и правило без проверки —
+            законное правило, а не недоделанное.
+          */}
+          <option value="">без проверки — правило держится текстом задания</option>
+          {catalog.checks.map((one) => (
+            <option key={one.type} value={one.type}>
+              {one.title}
+            </option>
+          ))}
+        </select>
+      </label>
+      {spec && (
+        <p className="hint">
+          {spec.about}
+          {spec.doctorOnly && '. Этот предикат модель не получает: пишете его только вы'}
+        </p>
+      )}
+      {берёт('when') && (
+        <label>
+          <span className="fld-label">При каких словах запрет действует</span>
+          <textarea
+            value={(check?.when ?? []).join(', ')}
+            onChange={(e) => правка({ when: словами(e.target.value) })}
+          />
+        </label>
+      )}
+      {берёт('words') && (
+        <label>
+          <span className="fld-label">
+            {check?.type === 'require-words' ? 'Слова, одно из которых обязано быть' : 'Слова, которых быть не должно'}
+          </span>
+          {/*
+            Через запятую, и сказано это прямо: набранное в столбик тоже
+            принимается, но догадываться о разделителе составитель не
+            должен.
+          */}
+          <textarea
+            value={(check?.words ?? []).join(', ')}
+            onChange={(e) => правка({ words: словами(e.target.value) })}
+          />
+        </label>
+      )}
+      {берёт('pattern') && (
+        <label className="form-row">
+          <span className="fld-label">Выражение</span>
+          <input
+            className="fld-long"
+            value={check?.pattern ?? ''}
+            onChange={(e) => правка({ pattern: e.target.value })}
+          />
+        </label>
+      )}
+      {берёт('what') && (
+        <label className="form-row">
+          <span className="fld-label">Что считать</span>
+          <select
+            className="fld-medium"
+            value={check?.what ?? catalog.what[0]?.value ?? ''}
+            onChange={(e) => правка({ what: e.target.value })}
+          >
+            {catalog.what.map((one) => (
+              <option key={one.value} value={one.value}>
+                {one.word}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {берёт('where') && (
+        <>
+          <p className="hint">
+            {/*
+              Ничего не отмечено — фрагменты условия, и так же считает
+              исполнитель. Сказано словами, а не подставлено галочкой:
+              подставленная галочка означала бы выбор, которого человек не
+              делал, и сняв её, он получил бы ровно то же самое.
+            */}
+            Где смотреть. Ничего не отмечено — смотрит во фрагменты условия.
+          </p>
+          <ul className="units">
+            {catalog.where.map((one) => (
+              <li key={one.value}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={(check?.where ?? []).includes(one.value)}
+                    onChange={(e) => {
+                      const было = check?.where ?? []
+                      правка({
+                        where: e.target.checked
+                          ? [...было, one.value]
+                          : было.filter((f) => f !== one.value),
+                      })
+                    }}
+                  />{' '}
+                  {one.word}
+                </label>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {берёт('min') && (
+        <label className="form-row">
+          <span className="fld-label">Не меньше</span>
+          <input
+            className="fld-num"
+            inputMode="numeric"
+            value={check?.min ? String(check.min) : ''}
+            onChange={(e) => правка({ min: числом(e.target.value) })}
+          />
+        </label>
+      )}
+      {берёт('max') && (
+        <label className="form-row">
+          <span className="fld-label">Не больше</span>
+          <input
+            className="fld-num"
+            inputMode="numeric"
+            value={check?.max ? String(check.max) : ''}
+            onChange={(e) => правка({ max: числом(e.target.value) })}
+          />
+        </label>
+      )}
+      {берёт('gender') && (
+        <label className="form-row">
+          <span className="fld-label">Только когда</span>
+          <select
+            className="fld-medium"
+            value={check?.gender ?? ''}
+            onChange={(e) => правка({ gender: e.target.value })}
+          >
+            <option value="">условие о ком угодно</option>
+            {catalog.gender.map((one) => (
+              <option key={one.value} value={one.value}>
+                {one.word}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {берёт('allowNegated') && (
+        <ul className="units">
+          <li>
+            <label>
+              <input
+                type="checkbox"
+                checked={check?.allowNegated ?? false}
+                onChange={(e) => правка({ allowNegated: e.target.checked })}
+              />{' '}
+              {/*
+                «Отрицание не нарушение» — не тонкость: «алкоголь не
+                употребляет» это обязательная запись, а не упоминание
+                алкоголя, и запрет, считающий её нарушением, чинил бы
+                исправные задачи.
+              */}
+              Отрицание нарушением не считать{' '}
+              <span className="muted">— «алкоголь не употребляет» это запись, а не упоминание</span>
+            </label>
+          </li>
+        </ul>
+      )}
+    </>
+  )
+}
+
+/**
+ * Набранные слова в список.
+ *
+ * Разделителем служит и запятая, и перевод строки: составитель вставляет
+ * сюда столбик из чужого документа так же часто, как набирает через
+ * запятую, и требовать одного значило бы молча терять второе.
+ */
+function словами(raw: string): string[] {
+  return raw
+    .split(/[,\n;]/)
+    .map((one) => one.trim())
+    .filter((one) => one !== '')
+}
+
+/**
+ * Набранный предел числом.
+ *
+ * Ненабранное и набранное не числом — ноль, а ноль на сервере значит
+ * «предела нет». Своего отказа здесь нет намеренно: отказ по пределам
+ * пишет сервер («не назван ни нижний предел, ни верхний»), и вторая его
+ * редакция разошлась бы с первой молча.
+ */
+function числом(raw: string): number {
+  const n = Number(raw.replace(/\s/g, ''))
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0
+}
 
 function пустоеПравило(): RuleEdit {
   return { title: '', text: '', why: '', kind: 'substance', scope: {} }

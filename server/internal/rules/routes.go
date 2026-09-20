@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -20,6 +21,12 @@ func Routes(desk *studio.Desk, store *Store, talker Talker) {
 	r := &routes{store: store, talker: talker}
 
 	desk.Handle(studio.PermPrompts, "GET /admin/api/rules", r.list)
+	// Каталог предикатов отдаётся отдельной ручкой, а не вкладывается в
+	// список правил: он не меняется от правила к правилу, а список
+	// перечитывается на каждую правку — семь описаний ездили бы туда и
+	// обратно без нужды. И главное, он нужен ДО того, как правило
+	// появилось: форма нового правила строится по нему.
+	desk.Handle(studio.PermPrompts, "GET /admin/api/rules/checks", r.checks)
 	desk.Handle(studio.PermPrompts, "POST /admin/api/rules", r.create)
 	desk.Handle(studio.PermPrompts, "PUT /admin/api/rules/{id}", r.save)
 
@@ -49,6 +56,51 @@ type ruleRequest struct {
 	Kind   string `json:"kind"`
 	Status string `json:"status"`
 	Scope  Scope  `json:"scope"`
+
+	// Check — проверка правила, и состояний у поля ТРИ, а не два.
+	//
+	// Поля нет вовсе — проверку не трогали: правка формулировки не
+	// должна снимать проверку, которую никто не снимал. Пришло null —
+	// проверку снимают намеренно. Пришла запись — ставят её.
+	//
+	// Поэтому сырой JSON, а не *Check: разобранный в указатель, «нет
+	// поля» и «null» становятся одним и тем же nil, и правка текста
+	// правила молча снимала бы его проверку.
+	Check json.RawMessage `json:"check"`
+}
+
+// checkEdit разбирает присланную проверку.
+//
+// Отвечает тремя величинами: что поставить, снимать ли, и отказ. Отказ
+// здесь ОБЯЗАН быть словами: свод выбрасывает негодную проверку сам
+// (Rule.Normalize), и это верно для проверки, пришедшей из ввоза или от
+// модели, — непонятое не применяется. Но составителю, заполнившему
+// форму, тот же выброс ответил бы успехом и оставил правило без
+// проверки: он видел бы в списке «проверяется машинно» ровно до
+// перечитывания страницы.
+func checkEdit(raw json.RawMessage) (set *Check, clear bool, complaint string) {
+	if len(raw) == 0 {
+		return nil, false, ""
+	}
+	if string(raw) == "null" {
+		return nil, true, ""
+	}
+	var check Check
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&check); err != nil {
+		return nil, false, "проверка не разобрана: " + err.Error()
+	}
+	// Незнакомое ловится ДО причёсывания: Normalize выбрасывает его
+	// молча, и составитель получил бы проверку, которая меряет не то.
+	if u := check.Unknown(); u != "" {
+		return nil, false, u
+	}
+	check.Normalize()
+	if c := check.Complaint(); c != "" {
+		return nil, false, c
+	}
+	return &check, false, ""
 }
 
 func (r *routes) list(w http.ResponseWriter, req *http.Request, _ studio.User) {
@@ -90,6 +142,12 @@ func (r *routes) create(w http.ResponseWriter, req *http.Request, user studio.Us
 		// кандидаты, ответив при этом успехом.
 		Pinned: true,
 	}
+	check, _, complaint := checkEdit(body.Check)
+	if complaint != "" {
+		studio.WriteError(w, http.StatusBadRequest, studio.Sentence(complaint))
+		return
+	}
+	rule.Check = check
 	saved, err := r.store.Save(req.Context(), rule)
 	if err != nil {
 		studio.WriteError(w, http.StatusBadRequest, studio.Sentence(err.Error()))
@@ -128,11 +186,23 @@ func (r *routes) save(w http.ResponseWriter, req *http.Request, _ studio.User) {
 		return
 	}
 
+	check, clear, complaint := checkEdit(body.Check)
+	if complaint != "" {
+		studio.WriteError(w, http.StatusBadRequest, studio.Sentence(complaint))
+		return
+	}
+
 	rule.Title = body.Title
 	rule.Text = body.Text
 	rule.Why = body.Why
 	rule.Kind = Kind(strings.TrimSpace(body.Kind))
 	rule.Scope = body.Scope
+	switch {
+	case clear:
+		rule.Check = nil
+	case check != nil:
+		rule.Check = check
+	}
 	if s := Status(strings.TrimSpace(body.Status)); s != "" && s != rule.Status {
 		rule.Status = s
 		// Состояние, названное рукой, счётчик больше не пересчитывает —
@@ -146,6 +216,49 @@ func (r *routes) save(w http.ResponseWriter, req *http.Request, _ studio.User) {
 		return
 	}
 	studio.WriteJSON(w, http.StatusOK, ruleJSON(saved))
+}
+
+// checks отдаёт закрытый каталог предикатов и словари их доводов.
+//
+// Вместе, а не порознь: форма строится по обоим сразу, и список «куда
+// смотреть», приехавший отдельно от предикатов, разошёлся бы с ними на
+// том предикате, который добавили последним.
+func (r *routes) checks(w http.ResponseWriter, _ *http.Request, _ studio.User) {
+	specs := make([]map[string]any, 0, len(Catalog()))
+	for _, spec := range Catalog() {
+		specs = append(specs, map[string]any{
+			"type":   string(spec.Type),
+			"title":  spec.Title,
+			"about":  spec.About,
+			"params": spec.Params,
+			// Составителю предикат доступен любой — он и есть тот, кому
+			// «только составитель» разрешает. Признак уезжает всё равно:
+			// форма подписывает им поле, чтобы правящий видел, что
+			// модель этого предиката не получит.
+			"doctorOnly": spec.DoctorOnly,
+		})
+	}
+	studio.WriteJSON(w, http.StatusOK, map[string]any{
+		"checks": specs,
+		// Словари закрыты, и студия их не повторяет: повторённый список
+		// разошёлся бы молча — ровно на том значении, которое добавили
+		// последним, — и составитель выбрал бы то, чего исполнитель не
+		// знает.
+		"where": []map[string]string{
+			{"value": FieldSegments, "word": "фрагменты условия"},
+			{"value": FieldTitle, "word": "заголовок"},
+			{"value": FieldExplanation, "word": "разбор"},
+		},
+		"what": []map[string]string{
+			{"value": CountSegments, "word": CountTitle(CountSegments)},
+			{"value": CountOptions, "word": CountTitle(CountOptions)},
+			{"value": CountMarked, "word": CountTitle(CountMarked)},
+		},
+		"gender": []map[string]string{
+			{"value": GenderMale, "word": "условие о мужчине"},
+			{"value": GenderFemale, "word": "условие о женщине"},
+		},
+	})
 }
 
 // ruleJSON — правило, каким его видит студия.

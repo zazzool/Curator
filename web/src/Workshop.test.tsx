@@ -118,6 +118,7 @@ const СВОД = {
       status: 'active',
       pinned: false,
       scope: { nodes: ['compose'] },
+      checkWords: '',
       confirmations: 5,
       seenJobs: [1, 2, 3, 4, 5],
       quorum: 3,
@@ -135,6 +136,8 @@ const СВОД = {
       status: 'candidate',
       pinned: false,
       scope: { sources: [7], nodes: ['compose'] },
+      check: { type: 'forbid-words', words: ['ритуально'], where: ['segments'] },
+      checkWords: 'в фрагментах условия не должно быть: ритуально',
       confirmations: 2,
       seenJobs: [11, 12],
       quorum: 3,
@@ -144,12 +147,51 @@ const СВОД = {
   ],
 }
 
+// Каталог предикатов: он закрыт и живёт на сервере, и форма строится по
+// нему. Повтори его студия — разошлись бы они молча на том предикате,
+// который добавили последним.
+const КАТАЛОГ_ПРОВЕРОК = {
+  checks: [
+    {
+      type: 'forbid-words', title: 'Запрещённые слова',
+      about: 'слов быть не должно',
+      params: ['words', 'where', 'gender', 'allowNegated'],
+    },
+    {
+      type: 'length', title: 'Длина текста',
+      about: 'сколько знаков должно быть в условии, заголовке или разборе',
+      params: ['where', 'min', 'max'],
+    },
+    {
+      type: 'pattern', title: 'Выражение',
+      about: 'регулярное выражение; пишет только составитель',
+      params: ['pattern', 'where'], doctorOnly: true,
+    },
+  ],
+  where: [
+    { value: 'segments', word: 'фрагменты условия' },
+    { value: 'title', word: 'заголовок' },
+    { value: 'explanation', word: 'разбор' },
+  ],
+  what: [
+    { value: 'segments', word: 'фрагментов условия' },
+    { value: 'options', word: 'вариантов ответа' },
+  ],
+  gender: [
+    { value: 'm', word: 'условие о мужчине' },
+    { value: 'f', word: 'условие о женщине' },
+  ],
+}
+
 // Мастерская ходит за четырьмя списками сразу, и подставлять их надо все
 // четыре: экран, которому не ответили, остаётся в «Читаем…» и молча
 // уводит проверку от того, что она проверяет.
 function ответ(path: string, prompts: unknown, keys: unknown, users: unknown, rules: unknown) {
   if (path.startsWith('/admin/api/prompts')) return prompts
   if (path.startsWith('/admin/api/users')) return users
+  // Каталог проверок стоит ПЕРЕД сводом: его путь начинается тем же
+  // «/admin/api/rules», и свод перехватил бы его себе.
+  if (path.startsWith('/admin/api/rules/checks')) return КАТАЛОГ_ПРОВЕРОК
   if (path.startsWith('/admin/api/rules')) return rules
   // Список моделей — пятый, и подставляется он здесь по тому же доводу,
   // что и остальные четыре: экран, которому не ответили, остаётся в
@@ -825,6 +867,214 @@ describe('мастерская', () => {
     expect(
       await screen.findByDisplayValue('Не пиши в условии слово «ритуально» и однокоренные.'),
     ).toBeTruthy()
+  })
+
+  it('форма проверки строится по каталогу сервера, а не по своему списку', async () => {
+    // Каталог предикатов закрыт и живёт в коде сервера. Повтори его
+    // студия — он разошёлся бы молча ровно на том предикате, который
+    // добавили последним, и составитель выбрал бы то, чего исполнитель
+    // не знает.
+    render(<Workshop me={МАСТЕР} />)
+    fireEvent.click(await screen.findByText('Слово «ритуально» в условии'))
+    const выбор = (await screen.findByLabelText('Проверяется машинно')) as HTMLSelectElement
+    const пункты = Array.from(выбор.options).map((one) => one.value)
+    // Первым — «без проверки»: правило без неё законно, а не недоделано.
+    expect(пункты[0]).toBe('')
+    expect(пункты.slice(1)).toEqual(КАТАЛОГ_ПРОВЕРОК.checks.map((one) => one.type))
+    // Открылось на своей проверке, а не на пустом месте.
+    expect(выбор.value).toBe('forbid-words')
+    expect(await screen.findByDisplayValue('ритуально')).toBeTruthy()
+  })
+
+  it('у предиката показаны только его доводы', async () => {
+    // Покажи форма все девять полей сразу — составитель заполнял бы
+    // «сколько знаков» у запрета слов, а читает это поле никто: поле,
+    // которое выглядит полем и никуда не идёт, хуже отсутствующего.
+    render(<Workshop me={МАСТЕР} />)
+    fireEvent.click(await screen.findByText('Слово «ритуально» в условии'))
+    const выбор = await screen.findByLabelText('Проверяется машинно')
+    expect(screen.queryByLabelText('Не больше')).toBeNull()
+
+    fireEvent.change(выбор, { target: { value: 'length' } })
+    expect(await screen.findByLabelText('Не больше')).toBeTruthy()
+    expect(screen.queryByLabelText('Слова, которых быть не должно')).toBeNull()
+    // И «только составитель» подписано там, где это правда.
+    fireEvent.change(выбор, { target: { value: 'pattern' } })
+    expect(await screen.findByText(/предикат модель не получает/)).toBeTruthy()
+  })
+
+  it('смена предиката не тащит доводы прежнего', async () => {
+    // «Слова» у запрета и «выражение» у выражения — разные вещи.
+    // Сохранись слова при переходе, они уехали бы на сервер незаметно
+    // для того, кто их уже не видит, и вернулись бы, стоит выбрать
+    // запрет снова.
+    const calls: Array<Record<string, unknown>> = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if (init?.method === 'PUT' && path.startsWith('/admin/api/rules')) {
+          calls.push(JSON.parse(String(init.body)))
+          return Promise.resolve(new Response(JSON.stringify(СВОД.rules[1]), { status: 200 }))
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ, СВОД)), {
+            status: 200,
+          }),
+        )
+      }),
+    )
+    render(<Workshop me={МАСТЕР} />)
+    fireEvent.click(await screen.findByText('Слово «ритуально» в условии'))
+    fireEvent.change(await screen.findByLabelText('Проверяется машинно'), {
+      target: { value: 'length' },
+    })
+    fireEvent.change(await screen.findByLabelText('Не больше'), { target: { value: '900' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить правило' }))
+
+    await waitFor(() => expect(calls.length).toBe(1))
+    const check = calls[0]!.check as Record<string, unknown>
+    expect(check.type).toBe('length')
+    expect(check.max).toBe(900)
+    expect(check.words).toBeUndefined()
+  })
+
+  it('слова принимаются и столбиком, а не только через запятую', async () => {
+    // Составитель вставляет сюда столбик из чужого документа так же
+    // часто, как набирает через запятую. Режь студия только по запятой —
+    // весь столбик уехал бы ОДНИМ словом «алкоголь\nспиртное\nвино», и
+    // проверка искала бы его целиком, то есть не находила бы никогда.
+    // Правило при этом выглядело бы работающим.
+    const calls: Array<Record<string, unknown>> = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if (init?.method === 'PUT' && path.startsWith('/admin/api/rules')) {
+          calls.push(JSON.parse(String(init.body)))
+          return Promise.resolve(new Response(JSON.stringify(СВОД.rules[1]), { status: 200 }))
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ, СВОД)), {
+            status: 200,
+          }),
+        )
+      }),
+    )
+    render(<Workshop me={МАСТЕР} />)
+    fireEvent.click(await screen.findByText('Слово «ритуально» в условии'))
+    fireEvent.change(await screen.findByLabelText('Слова, которых быть не должно'), {
+      target: { value: 'алкоголь\nспиртное\n\nвино' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить правило' }))
+
+    await waitFor(() => expect(calls.length).toBe(1))
+    const check = calls[0]!.check as Record<string, unknown>
+    expect(check.words).toEqual(['алкоголь', 'спиртное', 'вино'])
+  })
+
+  it('«без проверки» шлёт снятие, а не молчание', async () => {
+    // У поля на сервере три состояния, и «не слали» значит «не трогали».
+    // Шли студия молчание вместо null, снять проверку было бы нельзя
+    // вовсе: сохранение отвечало бы успехом, а проверка оставалась бы.
+    const calls: Array<Record<string, unknown>> = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if (init?.method === 'PUT' && path.startsWith('/admin/api/rules')) {
+          calls.push(JSON.parse(String(init.body)))
+          return Promise.resolve(new Response(JSON.stringify(СВОД.rules[1]), { status: 200 }))
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ, СВОД)), {
+            status: 200,
+          }),
+        )
+      }),
+    )
+    render(<Workshop me={МАСТЕР} />)
+    fireEvent.click(await screen.findByText('Слово «ритуально» в условии'))
+    fireEvent.change(await screen.findByLabelText('Проверяется машинно'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить правило' }))
+
+    await waitFor(() => expect(calls.length).toBe(1))
+    expect('check' in calls[0]!).toBe(true)
+    expect(calls[0]!.check).toBeNull()
+  })
+
+  it('правка одного текста проверку не шлёт вовсе', async () => {
+    // Нетронутую проверку сервер оставляет как была, и различает он это
+    // по отсутствию поля. Шли студия прочитанное ею — правка одной
+    // запятой переписывала бы проверку тем, что студия успела прочитать,
+    // а прочитать она могла и устаревшее.
+    const calls: Array<Record<string, unknown>> = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if (init?.method === 'PUT' && path.startsWith('/admin/api/rules')) {
+          calls.push(JSON.parse(String(init.body)))
+          return Promise.resolve(new Response(JSON.stringify(СВОД.rules[1]), { status: 200 }))
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ, СВОД)), {
+            status: 200,
+          }),
+        )
+      }),
+    )
+    render(<Workshop me={МАСТЕР} />)
+    fireEvent.click(await screen.findByText('Слово «ритуально» в условии'))
+    fireEvent.change(
+      await screen.findByDisplayValue('Не пиши в условии слово «ритуально» и однокоренные.'),
+      { target: { value: 'Не пиши «ритуально».' } },
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить правило' }))
+
+    await waitFor(() => expect(calls.length).toBe(1))
+    expect('check' in calls[0]!).toBe(false)
+  })
+
+  it('нынешняя проверка читается словами сервера', async () => {
+    // Фразу пишет сервер. Собери её студия — составитель читал бы в
+    // форме одно, а меряло бы другое, разойдясь на первой же правке
+    // формулировки предиката.
+    render(<Workshop me={МАСТЕР} />)
+    fireEvent.click(await screen.findByText('Слово «ритуально» в условии'))
+    expect(
+      await screen.findByText(/в фрагментах условия не должно быть: ритуально/),
+    ).toBeTruthy()
+  })
+
+  it('отказ по проверке показан словами сервера', async () => {
+    // Сервер говорит, чего не хватает («не названо ни одного слова»).
+    // Своё «не удалось сохранить» отправило бы составителя перебирать
+    // поля вслепую.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if (init?.method === 'PUT' && path.startsWith('/admin/api/rules')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                error: 'У проверки «Длина текста» не назван ни нижний предел, ни верхний',
+              }),
+              { status: 400 },
+            ),
+          )
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify(ответ(path, ЗАДАНИЯ, КЛЮЧИ, ПОЛЬЗОВАТЕЛИ, СВОД)), {
+            status: 200,
+          }),
+        )
+      }),
+    )
+    render(<Workshop me={МАСТЕР} />)
+    fireEvent.click(await screen.findByText('Слово «ритуально» в условии'))
+    fireEvent.change(await screen.findByLabelText('Проверяется машинно'), {
+      target: { value: 'length' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить правило' }))
+
+    expect(await screen.findByText(/не назван ни нижний предел/)).toBeTruthy()
   })
 
   it('погашение шлёт состояние, а не только текст', async () => {

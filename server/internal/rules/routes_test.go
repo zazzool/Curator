@@ -231,3 +231,187 @@ func TestPgПустойСводОтдаётсяСпискомАНеNULL(t *testi
 		t.Fatalf("свод отдан не списком: %#v", body["rules"])
 	}
 }
+
+func TestPgКаталогПредикатовПриходитСоСловарями(t *testing.T) {
+	// Форма проверки строится по каталогу, и повторять его в студии
+	// нельзя: повторённый разойдётся молча — ровно на том предикате,
+	// который добавили последним, — и составитель выберет то, чего
+	// исполнитель не знает.
+	srv, token, _ := newDesk(t, studio.PermPrompts)
+	status, body := call(t, srv, token, "GET", "/admin/api/rules/checks", nil)
+	if status != http.StatusOK {
+		t.Fatalf("каталог предикатов отдан кодом %d", status)
+	}
+	список, _ := body["checks"].([]any)
+	if len(список) != len(Catalog()) {
+		t.Fatalf("предикатов в ответе %d, а в каталоге %d", len(список), len(Catalog()))
+	}
+	имена := map[string]bool{}
+	for _, one := range список {
+		row, _ := one.(map[string]any)
+		if fmt.Sprint(row["title"]) == "" || fmt.Sprint(row["about"]) == "" {
+			t.Fatalf("предикат приехал без русского описания: %v", row)
+		}
+		if params, _ := row["params"].([]any); len(params) == 0 && row["type"] != string(CheckSpouseGender) {
+			t.Fatalf("у предиката не названо ни одного довода: %v", row)
+		}
+		имена[fmt.Sprint(row["type"])] = true
+	}
+	for _, spec := range Catalog() {
+		if !имена[string(spec.Type)] {
+			t.Fatalf("предикат %q не уехал в студию", spec.Type)
+		}
+	}
+
+	// Словари закрыты и приезжают вместе с предикатами.
+	for _, ключ := range []string{"where", "what", "gender"} {
+		словарь, _ := body[ключ].([]any)
+		if len(словарь) == 0 {
+			t.Fatalf("словарь %q не приехал", ключ)
+		}
+		for _, one := range словарь {
+			row, _ := one.(map[string]any)
+			if fmt.Sprint(row["value"]) == "" || fmt.Sprint(row["word"]) == "" {
+				t.Fatalf("в словаре %q запись без значения или без слова: %v", ключ, row)
+			}
+		}
+	}
+	// «Считать» приходит теми же словами, какими исполнитель их называет:
+	// разойдись они — составитель выбрал бы «фрагменты», а померилось бы
+	// другое.
+	что, _ := body["what"].([]any)
+	for _, one := range что {
+		row, _ := one.(map[string]any)
+		if fmt.Sprint(row["word"]) != CountTitle(fmt.Sprint(row["value"])) {
+			t.Fatalf("слово «считать» разошлось с исполнителем: %v", row)
+		}
+	}
+}
+
+func TestPgКаталогПредикатовЗакрытПравомЗаданий(t *testing.T) {
+	srv, token, _ := newDesk(t, studio.PermGenerate)
+	if status, _ := call(t, srv, token, "GET", "/admin/api/rules/checks", nil); status != http.StatusForbidden {
+		t.Fatalf("каталог предикатов открылся по праву заказа: %d", status)
+	}
+}
+
+func TestPgПроверкаЗаписываетсяФормойИЧитаетсяСловами(t *testing.T) {
+	srv, token, _ := newDesk(t, studio.PermPrompts)
+	status, body := call(t, srv, token, "POST", "/admin/api/rules", map[string]any{
+		"title": "Алкоголь в условии", "text": "Не пиши про алкоголь.",
+		"why": "Протекало.", "kind": string(KindSubstance),
+		"check": map[string]any{
+			"type": string(CheckForbidWords), "words": []string{"Алкоголь", "спиртное"},
+			"where": []string{FieldSegments, FieldTitle},
+		},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("правило с проверкой не записалось: %d, %v", status, body)
+	}
+	// Проверка уезжает и записью, и фразой: список читается фразой, а
+	// форма открывается записью.
+	check, _ := body["check"].(map[string]any)
+	if check == nil {
+		t.Fatalf("проверка не вернулась записью: %v", body)
+	}
+	if fmt.Sprint(body["checkWords"]) == "" {
+		t.Fatalf("проверка вернулась без фразы: %v", body)
+	}
+	// Слова причёсаны: набранное с большой буквы — то же слово.
+	words, _ := check["words"].([]any)
+	if len(words) != 2 || fmt.Sprint(words[0]) != "алкоголь" {
+		t.Fatalf("слова проверки не причёсаны: %v", words)
+	}
+}
+
+func TestPgНегоднаяПроверкаОтказываетсяСловами(t *testing.T) {
+	// Живой класс отказа: свод выбрасывает негодную проверку молча
+	// (Rule.Normalize), и для проверки из ввоза это верно. Составителю
+	// же тот же выброс ответил бы успехом — правило осталось бы без
+	// проверки, а в списке стояло бы «проверяется машинно» ровно до
+	// перечитывания страницы.
+	srv, token, _ := newDesk(t, studio.PermPrompts)
+	случаи := []struct {
+		имя   string
+		check map[string]any
+		слово string
+	}{
+		{"запрет без слов", map[string]any{"type": string(CheckForbidWords)}, "ни одного слова"},
+		{"несовместимое без условия", map[string]any{
+			"type": string(CheckForbidWhen), "words": []string{"жена"}}, "условие"},
+		{"длина без пределов", map[string]any{"type": string(CheckLength)}, "предел"},
+		{"пределы наизнанку", map[string]any{
+			"type": string(CheckLength), "min": 900, "max": 100}, "больше верхнего"},
+		{"негодное выражение", map[string]any{
+			"type": string(CheckPattern), "pattern": "("}, "не собирается"},
+		{"предиката нет", map[string]any{"type": "выдуманный"}, "в каталоге нет"},
+		{"незнакомое место", map[string]any{
+			"type": string(CheckForbidWords), "words": []string{"жена"},
+			"where": []string{"options"}}, "проверка не умеет"},
+		{"незнакомый счёт", map[string]any{
+			"type": string(CheckCount), "min": 2, "what": "statements"}, "проверка не умеет"},
+		{"незнакомый пол", map[string]any{
+			"type": string(CheckForbidWords), "words": []string{"жена"},
+			"gender": "ж"}, "мужской или женский"},
+	}
+	for _, случай := range случаи {
+		status, body := call(t, srv, token, "POST", "/admin/api/rules", map[string]any{
+			"title": "Правило " + случай.имя, "text": "Текст.", "kind": string(KindStructure),
+			"check": случай.check,
+		})
+		if status != http.StatusBadRequest {
+			t.Fatalf("%s: правило записалось кодом %d, %v", случай.имя, status, body)
+		}
+		if !strings.Contains(fmt.Sprint(body["error"]), случай.слово) {
+			t.Fatalf("%s: отказ не называет, чего не хватает: %v", случай.имя, body["error"])
+		}
+	}
+}
+
+func TestPgПравкаТекстаНеСнимаетПроверку(t *testing.T) {
+	// Три состояния поля, и различать их обязательно: поля нет — не
+	// трогали, null — снимают, запись — ставят. Разобранная в указатель,
+	// «нет поля» и «null» стали бы одним nil, и правка формулировки
+	// молча снимала бы проверку — правило осталось бы текстом, а
+	// составитель считал бы, что оно меряется.
+	srv, token, _ := newDesk(t, studio.PermPrompts)
+	_, созданное := call(t, srv, token, "POST", "/admin/api/rules", map[string]any{
+		"title": "Длина условия", "text": "Условие не должно быть простынёй.",
+		"kind": string(KindStructure),
+		"check": map[string]any{
+			"type": string(CheckLength), "max": 900,
+		},
+	})
+	id := fmt.Sprint(созданное["id"])
+
+	// Правка текста без поля check.
+	status, правленое := call(t, srv, token, "PUT", "/admin/api/rules/"+id, map[string]any{
+		"title": "Длина условия", "text": "Условие короче простыни.",
+		"kind": string(KindStructure),
+	})
+	if status != http.StatusOK {
+		t.Fatalf("правка текста отказала: %d, %v", status, правленое)
+	}
+	check, _ := правленое["check"].(map[string]any)
+	if check == nil || fmt.Sprint(check["max"]) != "900" {
+		t.Fatalf("правка текста сняла проверку: %v", правленое["check"])
+	}
+
+	// А null снимает её намеренно, и правило остаётся текстом.
+	status, снятое := call(t, srv, token, "PUT", "/admin/api/rules/"+id, map[string]any{
+		"title": "Длина условия", "text": "Условие короче простыни.",
+		"kind": string(KindStructure), "check": nil,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("снятие проверки отказало: %d, %v", status, снятое)
+	}
+	if снятое["check"] != nil {
+		t.Fatalf("проверка не снялась: %v", снятое["check"])
+	}
+	if fmt.Sprint(снятое["checkWords"]) != "" {
+		t.Fatalf("фраза проверки осталась у правила без проверки: %v", снятое["checkWords"])
+	}
+	if fmt.Sprint(снятое["text"]) != "Условие короче простыни." {
+		t.Fatalf("снятие проверки потеряло текст правила: %v", снятое)
+	}
+}

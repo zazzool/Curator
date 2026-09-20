@@ -170,31 +170,120 @@ const (
 
 // Known — исполним ли предикат.
 //
+// Считается по Complaint, а не своим разбором: два места для одного
+// правила расходятся молча, и разойдясь, дали бы проверку, которую
+// форма приняла, а свод выбросил, — сохранение ответило бы успехом, и
+// правило осталось бы без проверки, выглядя проверяемым.
+func (c *Check) Known() bool { return c.Complaint() == "" }
+
+// Complaint — чего проверке не хватает, чтобы исполниться; пусто —
+// исполнится.
+//
+// Отдельной фразой, а не одним «негодна»: заполняет проверку человек в
+// форме, и «проверка негодна» отправляет его перебирать поля вслепую.
 // Проверяется и род предиката, и достаточность параметров. Второе не
 // придирчивость: forbid-words без слов запрещает пустоту, то есть не
 // срабатывает никогда, и правило с такой проверкой выглядит работающим,
 // не будучи им.
-func (c *Check) Known() bool {
+//
+// Зовётся ПОСЛЕ Normalize: слова приезжают из формы одной строкой и
+// пустыми, и жалоба на непричёсанное говорила бы о пробелах.
+func (c *Check) Complaint() string {
 	if c == nil {
-		return false
+		return "проверка не названа"
 	}
+	title := SpecTitle(c.Type)
 	switch c.Type {
 	case CheckForbidWords, CheckRequireWords:
-		return len(c.Words) > 0
+		if len(c.Words) == 0 {
+			return fmt.Sprintf("у проверки «%s» не названо ни одного слова: она не сработает никогда", title)
+		}
 	case CheckForbidWhen:
-		return len(c.Words) > 0 && len(c.When) > 0
+		if len(c.When) == 0 {
+			return fmt.Sprintf("у проверки «%s» не названо условие — то, при чём запрет и действует", title)
+		}
+		if len(c.Words) == 0 {
+			return fmt.Sprintf("у проверки «%s» не названо, чего быть не должно", title)
+		}
 	case CheckSpouseGender:
-		return true
 	case CheckLength, CheckCount:
-		return c.Min > 0 || c.Max > 0
+		if c.Min <= 0 && c.Max <= 0 {
+			return fmt.Sprintf("у проверки «%s» не назван ни нижний предел, ни верхний: без них меряться нечему", title)
+		}
+		if c.Min > 0 && c.Max > 0 && c.Min > c.Max {
+			return fmt.Sprintf("у проверки «%s» нижний предел больше верхнего: под такой не подойдёт ничто", title)
+		}
 	case CheckPattern:
 		if c.Pattern == "" {
-			return false
+			return fmt.Sprintf("у проверки «%s» не написано само выражение", title)
 		}
-		_, err := regexp.Compile(c.Pattern)
-		return err == nil
+		if _, err := regexp.Compile(c.Pattern); err != nil {
+			// Жалоба разборщика уезжает целиком: она называет место в
+			// выражении, а «выражение не собирается» отправляет
+			// составителя искать скобку глазами.
+			return fmt.Sprintf("выражение не собирается: %v", err)
+		}
+	case "":
+		return "проверка не выбрана: предикат называется из каталога"
+	default:
+		return fmt.Sprintf("проверки «%s» в каталоге нет", c.Type)
 	}
-	return false
+	return ""
+}
+
+// Unknown — что в проверке написано мимо закрытых словарей; пусто —
+// всё знакомое.
+//
+// Смотрит на ПРИСЛАННОЕ, а не на причёсанное, и потому зовётся ДО
+// Normalize. Normalize выбрасывает незнакомое молча, и для проверки,
+// приехавшей из ввоза или от модели, это верно — непонятое не
+// применяется. Но составителю, набравшему «options» в «где смотреть»,
+// молчание отвечает проверкой условия вместо проверки вариантов: он
+// получает работающую на вид проверку, которая меряет не то, и узнаёт
+// об этом по задачам, которые она пропустила.
+func (c *Check) Unknown() string {
+	if c == nil {
+		return ""
+	}
+	for _, raw := range c.Where {
+		where := strings.ToLower(strings.TrimSpace(raw))
+		switch where {
+		case FieldSegments, FieldTitle, FieldExplanation:
+		case "":
+		default:
+			return fmt.Sprintf("смотреть в «%s» проверка не умеет: есть фрагменты условия, заголовок и разбор", raw)
+		}
+	}
+	if c.Type == CheckCount {
+		switch strings.ToLower(strings.TrimSpace(c.What)) {
+		case CountSegments, CountOptions, CountMarked:
+		case "":
+			// Пусто — фрагменты условия, и так и считает исполнитель.
+		default:
+			return fmt.Sprintf("считать «%s» проверка не умеет: есть %s, %s и %s",
+				c.What, CountTitle(CountSegments), CountTitle(CountOptions), CountTitle(CountMarked))
+		}
+	}
+	switch strings.TrimSpace(c.Gender) {
+	case GenderMale, GenderFemale, "":
+	default:
+		// Отбор по полу сужает правило, и выброшенный молча он его
+		// РАСШИРЯЕТ: правило, писанное про мужчин, начинает меряться по
+		// всем задачам подряд.
+		return fmt.Sprintf("пол «%s» проверке неизвестен: он бывает мужской или женский", c.Gender)
+	}
+	return ""
+}
+
+// SpecTitle — как предикат зовётся по-русски. Берётся из каталога: имя,
+// написанное вторым местом, разойдётся с тем, что стоит в форме выбора.
+func SpecTitle(t CheckType) string {
+	for _, spec := range Catalog() {
+		if spec.Type == t {
+			return spec.Title
+		}
+	}
+	return string(t)
 }
 
 // Fields — где смотреть на самом деле.
