@@ -69,7 +69,7 @@ func прогнать(t *testing.T, runner *Runner, jobs *Jobs, sourceID int64) 
 	t.Helper()
 	ctx := context.Background()
 	for {
-		job, ok, err := jobs.Take(ctx)
+		job, ok, err := jobs.Take(ctx, KindCase)
 		if err != nil {
 			t.Fatal(err)
 		}

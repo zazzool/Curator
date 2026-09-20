@@ -85,7 +85,7 @@ type Verdict struct {
 // Второй ответ — нашлось ли задание. Пустая очередь не отказ, и
 // исполнитель, принявший её за отказ, начал бы её чинить.
 func (r *Runner) RunNext(ctx context.Context) (Result, bool, error) {
-	job, ok, err := r.jobs.Take(ctx)
+	job, ok, err := r.jobs.Take(ctx, KindCase)
 	if err != nil || !ok {
 		return Result{}, false, err
 	}
@@ -297,20 +297,38 @@ func (r *Runner) ask(ctx context.Context, job Job, node string, prompt llm.Promp
 func (r *Runner) account(ctx context.Context, job Job, node string, prompt llm.Prompt,
 	answer string, usage llm.Usage, took time.Duration, err error) {
 
-	if r.ledger == nil {
+	record(ctx, r.ledger, r.prices, job.ID, node, job.Plan.Model,
+		prompt, answer, usage, took, err)
+}
+
+// record — одна запись в учёт, общая на все узлы конвейера.
+//
+// Общая потому, что узлов становится много, а правило у всех одно и оно не
+// про узел: обращение состоялось — строка расхода обязана быть, чем бы
+// обращение ни кончилось. Вторая такая запись рядом с первой разошлась бы
+// с ней молча — и расхождение читалось бы как «этот узел бесплатный».
+//
+// Пустой учёт — это проверка без базы, и она законна: на бою пусто не
+// бывает, потому что обращение, нигде не записанное, невозможно ни
+// разобрать, ни посчитать.
+func record(ctx context.Context, ledger *llmusage.Store, prices llm.Prices,
+	jobID int64, node, model string, prompt llm.Prompt, answer string,
+	usage llm.Usage, took time.Duration, err error) {
+
+	if ledger == nil {
 		return
 	}
-	// Ошибку записи в учёт наверх не несём: задача написана, и ронять её
+	// Ошибку записи в учёт наверх не несём: работа сделана, и ронять её
 	// из-за того, что не записалась строка расхода, значит платить дважды.
 	// Но и молчать нельзя — запись об этом остаётся в журнале службы.
-	recordErr := r.ledger.Record(ctx, llmusage.Call{
-		JobID: job.ID, Node: node, Model: job.Plan.Model,
+	recordErr := ledger.Record(ctx, llmusage.Call{
+		JobID: jobID, Node: node, Model: model,
 		Usage: usage, Latency: took, Err: err,
 		Request: prompt.System + "\n\n" + prompt.User,
 		Answer:  answer,
-	}, r.prices)
+	}, prices)
 	if recordErr != nil {
-		logAccountFailure(job.ID, node, recordErr)
+		logAccountFailure(jobID, node, recordErr)
 	}
 }
 

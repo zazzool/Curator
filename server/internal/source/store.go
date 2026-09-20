@@ -200,6 +200,94 @@ func (s *Store) SaveDraft(ctx context.Context, docID int64, units []Unit, statem
 	})
 }
 
+// ClearDraft убирает черновик разбора целиком.
+//
+// Отдельно от записи, потому что разбор моделью идёт ПО ЧАСТЯМ и пишет
+// каждую часть сразу, как она разобралась: всё, что записано, обрыв уже не
+// отнимет. Чистка при этом нужна ровно одна — перед первой частью;
+// сделанная перед каждой, она стирала бы разобранное соседями.
+//
+// Прежний черновик уходит целиком, а не дополняется: два разбора, слитые в
+// один, — это разбор, которого не делал никто.
+func (s *Store) ClearDraft(ctx context.Context, docID int64) error {
+	return s.gate.InTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `DELETE FROM source_draft_statements WHERE document_id = $1`, docID); err != nil {
+			return fmt.Errorf("прежние положения черновика не убраны: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM source_draft_units WHERE document_id = $1`, docID); err != nil {
+			return fmt.Errorf("прежние единицы черновика не убраны: %w", err)
+		}
+		return nil
+	})
+}
+
+// AppendDraft дописывает в черновик разобранное одной частью документа.
+//
+// Порядок продолжается с того, на чём встала прежняя часть, и считается
+// ЗДЕСЬ, а не приходит снаружи. Модель, размечающая третью часть, нумерует
+// со своего нуля — она не знает ни о первой, ни о второй; взять её номера
+// значило бы поставить третью часть в начало черновика. Порядок документа
+// при этом и есть то, по чему потом выбирается головное положение единицы,
+// так что цена ошибки не косметическая.
+//
+// Записывается одной транзакцией: часть, легшая единицами без положений,
+// выглядит разобранной и пустой, а отличить её от честно пустой нечем.
+func (s *Store) AppendDraft(ctx context.Context, docID int64, units []Unit, statements []Statement) error {
+	if len(units) == 0 && len(statements) == 0 {
+		return nil
+	}
+	return s.gate.InTx(ctx, func(tx pgx.Tx) error {
+		nextUnit, err := nextOrd(ctx, tx, `source_draft_units`, docID)
+		if err != nil {
+			return err
+		}
+		nextStatement, err := nextOrd(ctx, tx, `source_draft_statements`, docID)
+		if err != nil {
+			return err
+		}
+		for i, u := range units {
+			_, err := tx.Exec(ctx,
+				`INSERT INTO source_draft_units (document_id, label, parent_label, title, kind, ord)
+				 VALUES ($1, $2, $3, $4, $5, $6)`,
+				docID, u.Label, u.ParentLabel, u.Title, kindOf(u.Kind), nextUnit+i)
+			if err != nil {
+				return fmt.Errorf("единица черновика %q не сохранена: %w", u.Label, err)
+			}
+		}
+		for i, st := range statements {
+			_, err := tx.Exec(ctx,
+				`INSERT INTO source_draft_statements
+				     (document_id, unit_label, kind, designation, body_md, place_ref, ord)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+				docID, st.UnitLabel, st.Kind, st.Designation, st.Body, st.PlaceRef,
+				nextStatement+i)
+			if err != nil {
+				return fmt.Errorf("положение черновика %d не сохранено: %w", i+1, err)
+			}
+		}
+		return nil
+	})
+}
+
+// nextOrd — с какого номера продолжать.
+//
+// Считается в той же транзакции, что и вставка: прочитанный заранее номер
+// успевает устареть, а разъехавшийся порядок молчит — черновик выглядит
+// целым, и только головное положение единицы оказывается не тем.
+//
+// Имя таблицы подставляется склейкой, а не доводом: имена таблиц доводами
+// не бывают. Обе строки — постоянные этого файла, и снаружи сюда не
+// доезжает ничего.
+func nextOrd(ctx context.Context, tx pgx.Tx, table string, docID int64) (int, error) {
+	var next int
+	err := tx.QueryRow(ctx,
+		`SELECT COALESCE(MAX(ord) + 1, 0) FROM `+table+` WHERE document_id = $1`, docID).Scan(&next)
+	if err != nil {
+		return 0, fmt.Errorf("порядок в %s не прочитан: %w", table, err)
+	}
+	return next, nil
+}
+
 // AcceptDraft переводит черновик разбора в источник.
 //
 // # Почему путь считается здесь, а не в базе
