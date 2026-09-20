@@ -1,0 +1,200 @@
+# Автоматическая выкатка на контур.
+#
+# # Почему выкатывает сторож, а не человек и не сессия
+#
+# До 20.09.2026 выкатка шла руками: `./deploy.sh` с машины владельца. Всё
+# остальное — проверки, слияния, разбор — делают сессии, а выкатка у них
+# не выходит и не выйдет: у облачного окружения белый список выхода
+# (проходит github.com, `*.psync.ru` отвечает 403 на CONNECT) и закрыт
+# порт 22, а `deploy.sh` целиком идёт по ssh. То есть выкатить умела ровно
+# одна машина в мире, и пока её хозяин спал, выкаченного не было.
+#
+# GitHub Actions умеет и то и другое: видит репозиторий и ходит по ssh
+# наружу. Поэтому выкатывает он, а сессия при нужде толкает его через API
+# (`workflow_dispatch`) — то есть выкатка перестала зависеть от того, кто
+# сейчас за какой машиной.
+#
+# # Почему `workflow_run`, а не `push`
+#
+# Выкатывается только то, на чём сторож уже сказал «зелено»: `workflow_run`
+# просыпается ПОСЛЕ прогона проверок и знает его исход. На `push` выкатка
+# стартовала бы одновременно с проверками и успевала бы увезти на контур
+# то, что через минуту окажется красным.
+#
+# Есть и второе свойство, менее заметное и более важное: при `workflow_run`
+# GitHub берёт ЭТОТ файл из главной ветки, а не из ветки, которая его
+# разбудила. Репозиторий публичный, предложение слияния может прислать кто
+# угодно, и правка этого файла в чужой ветке иначе означала бы чужие
+# команды на боевом контуре с ключом от него.
+#
+# # Секреты
+#
+# В репозитории их нет и быть не может — он публичный. Ключ от контура
+# живёт в секретах репозитория (`CURATOR_SSH_KEY`), отпечаток хоста рядом
+# (`CURATOR_SSH_KNOWN_HOSTS`). Заводятся они один раз,
+# `deploy/setup-auto-deploy.sh`; разбор — `docs/deploy.md`.
+name: Выкатка
+
+on:
+  workflow_run:
+    workflows: ["Проверки"]
+    types: [completed]
+    branches: [main]
+
+  # Ручной толчок: выкатить повторно, не выдумывая коммита, и вернуть
+  # предыдущий образ, когда контур уже горит. Этим же входом пользуется
+  # сессия через API — у неё других путей к контуру нет.
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Что сделать
+        type: choice
+        options: [выкатить, вернуть]
+        default: выкатить
+      force:
+        description: Выкатить, даже если проверки по этому коммиту не зелены
+        type: boolean
+        default: false
+
+# Две выкатки разом — это две сборки в одном каталоге на хосте и накат
+# схемы из двух образов сразу. Очередь, а не отмена: оборвать выкатку
+# между накатом схемы и подменой контейнера значит оставить контур в
+# состоянии, которого нет ни в одном коммите.
+concurrency:
+  group: curator-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # Чтобы спросить у API исход проверок по коммиту при ручном толчке.
+  actions: read
+
+jobs:
+  deploy:
+    name: Выкатка на контур
+    runs-on: ubuntu-latest
+    # Полчаса хватает с запасом: сборка образа на хосте — минуты. Без
+    # предела повисшая ssh-сессия держала бы очередь выкаток до вечера.
+    timeout-minutes: 30
+
+    # Файл лежит в .github/workflows, а этот каталог читает и Forgejo на
+    # exam.psync.ru — так устроен сторож (см. checks.yml). Проверок это
+    # касается по замыслу, выкатки — нет: секретов у Forgejo нет, и он
+    # либо выкатывал бы второй раз, либо краснел бы вечно. Поэтому работа
+    # объявлена только для github.com.
+    if: >-
+      github.server_url == 'https://github.com' &&
+      (github.event_name == 'workflow_dispatch' ||
+       github.event.workflow_run.conclusion == 'success')
+
+    env:
+      CURATOR_HOST: ${{ vars.CURATOR_HOST || 'root@curator.psync.ru' }}
+      CURATOR_DIR: ${{ vars.CURATOR_DIR || '/root/curator' }}
+      CURATOR_DEPLOY_ORIGIN: ${{ vars.CURATOR_DEPLOY_ORIGIN || 'https://curator.psync.ru' }}
+
+    steps:
+      # Какой коммит выкатываем, решается здесь и один раз. При
+      # `workflow_run` это коммит, на котором сторож сказал «зелено», а НЕ
+      # голова главной ветки: пока шли проверки, в неё мог влиться
+      # следующий, и выкатилось бы непроверенное.
+      - name: Что выкатываем
+        id: target
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = workflow_run ]; then
+              sha='${{ github.event.workflow_run.head_sha }}'
+          else
+              sha='${{ github.sha }}'
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Коммит: $sha"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.target.outputs.sha }}
+
+      # При `workflow_run` исход проверок известен из события. При ручном
+      # толчке — нет, и его приходится спрашивать: иначе кнопка «выкатить»
+      # стала бы дверью мимо сторожа, а ради такой двери сторожа и заводят.
+      # Обойти её можно вслух, входом `force`, — он нужен, когда чинишь сам
+      # сторожа и выкатывать надо прежде, чем он позеленеет.
+      - name: Проверки по этому коммиту зелены
+        if: github.event_name == 'workflow_dispatch' && inputs.action == 'выкатить' && !inputs.force
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha='${{ steps.target.outputs.sha }}'
+          # Исход берётся у прогонов проверок по этому коммиту, а не у
+          # «состояния коммита» целиком: в состояние попадает и эта самая
+          # выкатка, и получилось бы, что она сторожит сама себя.
+          #
+          # `|| verdict=…` обязателен: под `set -e` неудачная подстановка
+          # команд убивает скрипт на самой строке присваивания, и внятный
+          # отказ ниже не выполнился бы никогда (см. CLAUDE.md).
+          verdict=$(gh api "repos/${{ github.repository }}/actions/workflows/checks.yml/runs?head_sha=$sha&per_page=1" \
+              --jq '.workflow_runs[0].conclusion // "нет прогона"') ||
+              verdict='спросить не удалось'
+          echo "Проверки по $sha: $verdict"
+          [ "$verdict" = success ] || {
+              echo "Выкатка остановлена: сторож по этому коммиту не зелен." >&2
+              echo "Починить проверки, либо толкнуть выкатку с force=true, если чинится сам сторож." >&2
+              exit 1
+          }
+
+      # Ключ приезжает из секрета в файл, а не в переменную окружения:
+      # ssh читает только файл, а переменная утекла бы в журнал первой же
+      # командой, печатающей окружение.
+      #
+      # Отпечаток хоста обязателен, и отдельным секретом. Соблазн написать
+      # StrictHostKeyChecking=no велик — и это ровно тот случай, когда
+      # «лишь бы работало» отдаёт root на контуре первому, кто сумеет
+      # ответить вместо него.
+      - name: Ключ от контура
+        env:
+          KEY: ${{ secrets.CURATOR_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.CURATOR_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          [ -n "$KEY" ] || {
+              echo "Нет секрета CURATOR_SSH_KEY: выкатывать нечем." >&2
+              echo "Завести один раз: deploy/setup-auto-deploy.sh (см. docs/deploy.md)." >&2
+              exit 1
+          }
+          [ -n "$KNOWN_HOSTS" ] || {
+              echo "Нет секрета CURATOR_SSH_KNOWN_HOSTS: отпечаток хоста неизвестен." >&2
+              echo "Завести один раз: deploy/setup-auto-deploy.sh (см. docs/deploy.md)." >&2
+              exit 1
+          }
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/curator_deploy
+          chmod 600 ~/.ssh/curator_deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          install -m 600 deploy/actions-ssh-config ~/.ssh/config
+
+      - name: Возврат предыдущего образа
+        if: github.event_name == 'workflow_dispatch' && inputs.action == 'вернуть'
+        run: ./deploy.sh --rollback
+
+      # --no-local-checks: набор целиком по этому коммиту сторож уже
+      # прогнал, а gofmt поверх пройденного набора ничего не сторожит и
+      # стоит установки Go и Node на раннере.
+      - name: Выкатка
+        if: github.event_name == 'workflow_run' || inputs.action == 'выкатить'
+        run: ./deploy.sh --no-local-checks
+
+      # Отказ выкатки читает тот, кто её не запускал и, скорее всего,
+      # спит. Поэтому в журнале должно остаться не «job failed», а что
+      # делать дальше.
+      - name: Что делать, если не вышло
+        if: failure()
+        run: |
+          echo "Выкатка не прошла. Контур мог остаться на прежнем образе — порядок шагов"
+          echo "в deploy.sh на это и рассчитан: схема накатывается до подмены кода."
+          echo
+          echo "Вернуть предыдущий образ: вкладка Actions → Выкатка → Run workflow →"
+          echo "  «вернуть». То же самое с машины: ./deploy.sh --rollback"
+          echo
+          echo "Журнал контура: ssh $CURATOR_HOST 'cd $CURATOR_DIR && docker compose logs --tail=100 curator'"
