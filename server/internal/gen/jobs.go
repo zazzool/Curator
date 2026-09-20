@@ -30,16 +30,39 @@ const (
 	StatusCancelled = "cancelled"
 )
 
+// Роды работы. Очередь одна, исполнители разные, и отбор идёт по роду:
+// исполнитель, взявший чужое задание, прочёл бы чужой заказ и выполнил не
+// то. Словарь закрыт по той же причине, что и словарь состояний.
+const (
+	// KindCase — написать задачу по единице источника.
+	KindCase = "case"
+
+	// KindParse — разобрать документ на единицы и положения.
+	KindParse = "parse"
+)
+
 // Job — задание в очереди.
 type Job struct {
 	ID        int64
+	Kind      string
 	SourceID  int64
 	UnitLabel string
 	Status    string
 	Step      string
 	Attempts  int
 	Error     string
+
+	// Notes — замечания о сделанной работе: что отброшено, какая часть
+	// документа не далась. Отдельно от Error, который говорит, почему
+	// работа не сделана вовсе.
+	Notes []string
+
+	// Plan — заказ задачи. Пуст у разбора: у него свой заказ (ParsePlan),
+	// и читать один JSON двумя разборами значило бы завести два места, где
+	// известен формат заказа.
 	Plan      Plan
+	ParsePlan ParsePlan
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -50,6 +73,85 @@ type Jobs struct {
 }
 
 func NewJobs(gate *dbgate.Gate) *Jobs { return &Jobs{gate: gate} }
+
+// jobColumns — колонки задания в одном месте на все чтения.
+//
+// Одно место потому, что порядок колонок обязан сойтись с порядком доводов
+// scanJob: разъедься они — и род задания приехал бы в поле шага, а
+// компилятор промолчал бы, потому что обе колонки текстовые.
+const jobColumns = `id, kind, source_id, unit_label, status, step, attempts, error,
+	        notes, params, created_at, updated_at`
+
+// scanRow — строка, откуда читается задание. Интерфейсом, а не pgx.Row,
+// чтобы одинаково читались и QueryRow, и строки Query.
+type scanRow interface {
+	Scan(dest ...any) error
+}
+
+// scanJob читает задание вместе с его заказом.
+//
+// Заказ разбирается ПО РОДУ: у задачи и у разбора это разные записи, и
+// разбирать их одним типом значило бы молча принять одну за другую. Род,
+// которого мы не знаем, — отказ, а не «пусть будет задачей»: непонятое не
+// применяется.
+func scanJob(row scanRow) (Job, error) {
+	var job Job
+	var notes, params []byte
+	err := row.Scan(&job.ID, &job.Kind, &job.SourceID, &job.UnitLabel, &job.Status,
+		&job.Step, &job.Attempts, &job.Error, &notes, &params,
+		&job.CreatedAt, &job.UpdatedAt)
+	if err != nil {
+		return Job{}, err
+	}
+	if err := json.Unmarshal(notes, &job.Notes); err != nil {
+		return Job{}, fmt.Errorf("замечания задания %d не разобраны: %w", job.ID, err)
+	}
+	// Пустой список — [], а не nil: он уедет в ответ ручки, и null вместо
+	// списка роняет студию на исправном случае — на задании без замечаний.
+	if job.Notes == nil {
+		job.Notes = []string{}
+	}
+	switch job.Kind {
+	case KindCase:
+		if err := json.Unmarshal(params, &job.Plan); err != nil {
+			return Job{}, fmt.Errorf("план задания %d не разобран: %w", job.ID, err)
+		}
+	case KindParse:
+		if err := json.Unmarshal(params, &job.ParsePlan); err != nil {
+			return Job{}, fmt.Errorf("заказ разбора %d не разобран: %w", job.ID, err)
+		}
+	default:
+		return Job{}, fmt.Errorf("задание %d неизвестного рода %q", job.ID, job.Kind)
+	}
+	return job, nil
+}
+
+// taker — чтение строки, запоминающее номер задания по дороге.
+//
+// Номер нужен ровно в одном случае: колонки прочлись, а заказ при задании
+// не разобрался. Тогда задание надо отбить с причиной, а отбивать нечем —
+// номер приехал бы только вместе с разобранным заказом. Задание осталось
+// бы висеть идущим навсегда, а со стороны это неотличимо от «долго
+// думает», то есть хуже отказа.
+//
+// Подглядывание безопасно потому, что порядок колонок задан одним местом
+// (jobColumns) и первая из них — номер.
+type taker struct {
+	row scanRow
+	id  *int64
+}
+
+func (t taker) Scan(dest ...any) error {
+	if err := t.row.Scan(dest...); err != nil {
+		return err
+	}
+	if len(dest) > 0 {
+		if got, ok := dest[0].(*int64); ok {
+			*t.id = *got
+		}
+	}
+	return nil
+}
 
 // Place ставит заказ в очередь и отдаёт задание.
 //
@@ -63,63 +165,112 @@ func (j *Jobs) Place(ctx context.Context, order Order, plan Plan) (Job, error) {
 		return Job{}, fmt.Errorf("план заказа не записан: %w", err)
 	}
 
-	var job Job
-	var raw []byte
-	err = j.gate.QueryRow(ctx,
-		`INSERT INTO gen_jobs (source_id, unit_label, idem_key, params)
-		 VALUES ($1, $2, $3, $4)
+	job, err := scanJob(j.gate.QueryRow(ctx,
+		`INSERT INTO gen_jobs (kind, source_id, unit_label, idem_key, params)
+		 VALUES ($1, $2, $3, $4, $5)
 		 ON CONFLICT (idem_key) WHERE idem_key <> ''
 		 DO UPDATE SET updated_at = gen_jobs.updated_at
-		 RETURNING id, source_id, unit_label, status, step, attempts, error, params,
-		           created_at, updated_at`,
-		plan.SourceID, order.UnitLabel, order.IdemKey(), params).
-		Scan(&job.ID, &job.SourceID, &job.UnitLabel, &job.Status, &job.Step,
-			&job.Attempts, &job.Error, &raw, &job.CreatedAt, &job.UpdatedAt)
+		 RETURNING `+jobColumns,
+		KindCase, plan.SourceID, order.UnitLabel, order.IdemKey(), params))
 	if err != nil {
 		return Job{}, fmt.Errorf("задание не поставлено в очередь: %w", err)
-	}
-	if err := json.Unmarshal(raw, &job.Plan); err != nil {
-		return Job{}, fmt.Errorf("план задания не разобран: %w", err)
 	}
 	return job, nil
 }
 
-// Take берёт следующее задание в работу.
+// PlaceParse ставит в очередь разбор документа.
+//
+// Ключа повторности у разбора нет намеренно, и это не забывчивость.
+// Повторный разбор — обычная работа составителя: документ разобрался
+// плохо, задание модели поправили, разбирают заново. Ключ, склеивающий
+// такие заказы в один, отдал бы на второй заказ прежнее — уже закрытое —
+// задание, то есть молча отказал бы в переделке.
+//
+// Повтор при этом не бесплатен, и заслон от него всё-таки есть: идущий
+// разбор того же документа не заводит второго (см. RunningParse). Разница
+// существенна — здесь запрещено ПАРАЛЛЕЛЬНОЕ, а не повторное.
+func (j *Jobs) PlaceParse(ctx context.Context, plan ParsePlan) (Job, error) {
+	params, err := json.Marshal(plan)
+	if err != nil {
+		return Job{}, fmt.Errorf("заказ разбора не записан: %w", err)
+	}
+	job, err := scanJob(j.gate.QueryRow(ctx,
+		`INSERT INTO gen_jobs (kind, source_id, params)
+		 VALUES ($1, $2, $3)
+		 RETURNING `+jobColumns,
+		KindParse, plan.SourceID, params))
+	if err != nil {
+		return Job{}, fmt.Errorf("разбор не поставлен в очередь: %w", err)
+	}
+	return job, nil
+}
+
+// RunningParse — идёт ли уже разбор этого документа.
+//
+// Отдаёт номер идущего задания. Заслон нужен потому, что два разбора
+// одного документа пишут в один черновик: второй затирает части первого, и
+// на выходе получается разбор, которого не делал никто. Заметить это
+// нельзя ничем — обе работы отчитываются успехом.
+func (j *Jobs) RunningParse(ctx context.Context, documentID int64) (int64, bool, error) {
+	var id int64
+	err := j.gate.QueryRow(ctx,
+		`SELECT id FROM gen_jobs
+		  WHERE kind = $1
+		    AND status IN ('queued', 'running')
+		    AND (params ->> 'documentId')::bigint = $2
+		  ORDER BY id
+		  LIMIT 1`, KindParse, documentID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("идущий разбор документа %d не проверен: %w", documentID, err)
+	}
+	return id, true, nil
+}
+
+// Take берёт следующее задание своего рода в работу.
 //
 // Отбор и пометка — одним запросом с FOR UPDATE SKIP LOCKED: два
 // исполнителя, читающие очередь одновременно, иначе взяли бы одно и то же
 // задание и написали бы две задачи по одному заказу — за деньги.
 //
+// Род стоит в отборе, а не проверяется после: исполнитель, взявший чужое
+// задание и положивший его обратно, всё равно уже пометил его идущим — и
+// оно досталось бы своему исполнителю с лишней попыткой в счёте. Хуже
+// того, «положить обратно» пришлось бы писать, а не написанное оставило бы
+// чужое задание висеть идущим навсегда.
+//
 // Вторым ответом идёт «нашлось ли»: пустая очередь — это не отказ, и
 // исполнитель, принявший её за отказ, начал бы её чинить.
-func (j *Jobs) Take(ctx context.Context) (Job, bool, error) {
-	var job Job
-	var raw []byte
-	err := j.gate.QueryRow(ctx,
+func (j *Jobs) Take(ctx context.Context, kind string) (Job, bool, error) {
+	// Номер читается отдельно от разбора заказа: разбор может не
+	// состояться, и тогда задание надо отбить — а отбить его нечем, если
+	// номер приехал только вместе с заказом.
+	var id int64
+	row := j.gate.QueryRow(ctx,
 		`UPDATE gen_jobs
 		    SET status = 'running', attempts = attempts + 1, updated_at = NOW()
 		  WHERE id = (SELECT id FROM gen_jobs
-		               WHERE status = 'queued'
+		               WHERE status = 'queued' AND kind = $1
 		               ORDER BY id
 		               FOR UPDATE SKIP LOCKED
 		               LIMIT 1)
-		 RETURNING id, source_id, unit_label, status, step, attempts, error, params,
-		           created_at, updated_at`).
-		Scan(&job.ID, &job.SourceID, &job.UnitLabel, &job.Status, &job.Step,
-			&job.Attempts, &job.Error, &raw, &job.CreatedAt, &job.UpdatedAt)
+		 RETURNING `+jobColumns, kind)
+	job, err := scanJob(taker{row: row, id: &id})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Job{}, false, nil
 	}
 	if err != nil {
-		return Job{}, false, fmt.Errorf("задание не взято в работу: %w", err)
-	}
-	if err := json.Unmarshal(raw, &job.Plan); err != nil {
+		if id == 0 {
+			return Job{}, false, fmt.Errorf("задание не взято в работу: %w", err)
+		}
 		// Непонятое не применяется: план, собранный прежней выкаткой и не
 		// разобравшийся нынешней, — это не задание с пробелом, а задание,
 		// которого мы не понимаем. Выполнять его по умолчаниям значит
 		// написать задачу не про то.
-		_ = j.Fail(ctx, job.ID, "план задания не разобран: "+err.Error())
-		return Job{}, false, fmt.Errorf("задание %d отбито: план не разобран: %w", job.ID, err)
+		_ = j.Fail(ctx, id, "заказ задания не разобран: "+err.Error())
+		return Job{}, false, fmt.Errorf("задание %d отбито: заказ не разобран: %w", id, err)
 	}
 	return job, true, nil
 }
@@ -179,21 +330,32 @@ func (j *Jobs) finish(ctx context.Context, id int64, status, reason string) erro
 	return nil
 }
 
+// Note дописывает замечание о сделанной работе.
+//
+// Дописывает на стороне базы, а не «прочитать, добавить, записать»: между
+// чтением и записью вклинивается соседняя часть того же разбора, и её
+// замечание пропало бы молча — то есть отброшенное перестало бы считаться
+// ровно там, где его больше всего.
+func (j *Jobs) Note(ctx context.Context, id int64, note string) error {
+	if note == "" {
+		return nil
+	}
+	_, err := j.gate.Exec(ctx,
+		`UPDATE gen_jobs
+		    SET notes = notes || to_jsonb($2::text), updated_at = NOW()
+		  WHERE id = $1`, id, note)
+	if err != nil {
+		return fmt.Errorf("замечание к заданию %d не записано: %w", id, err)
+	}
+	return nil
+}
+
 // Job читает одно задание.
 func (j *Jobs) Job(ctx context.Context, id int64) (Job, error) {
-	var job Job
-	var raw []byte
-	err := j.gate.QueryRow(ctx,
-		`SELECT id, source_id, unit_label, status, step, attempts, error, params,
-		        created_at, updated_at
-		   FROM gen_jobs WHERE id = $1`, id).
-		Scan(&job.ID, &job.SourceID, &job.UnitLabel, &job.Status, &job.Step,
-			&job.Attempts, &job.Error, &raw, &job.CreatedAt, &job.UpdatedAt)
+	job, err := scanJob(j.gate.QueryRow(ctx,
+		`SELECT `+jobColumns+` FROM gen_jobs WHERE id = $1`, id))
 	if err != nil {
 		return Job{}, fmt.Errorf("задание %d не найдено: %w", id, err)
-	}
-	if err := json.Unmarshal(raw, &job.Plan); err != nil {
-		return Job{}, fmt.Errorf("план задания %d не разобран: %w", id, err)
 	}
 	return job, nil
 }
@@ -204,7 +366,8 @@ func (j *Jobs) Recent(ctx context.Context, sourceID int64, limit int) ([]Job, er
 		limit = 50
 	}
 	rows, err := j.gate.Query(ctx,
-		`SELECT id, source_id, unit_label, status, step, attempts, error,
+		`SELECT id, kind, source_id, unit_label, status, step, attempts, error, notes,
+		        COALESCE(params ->> 'filename', ''),
 		        created_at, updated_at
 		   FROM gen_jobs
 		  WHERE source_id = $1
@@ -215,15 +378,32 @@ func (j *Jobs) Recent(ctx context.Context, sourceID int64, limit int) ([]Job, er
 	}
 	defer rows.Close()
 
-	// План в список не читается намеренно: он весит килобайты (положения
+	// Заказ в список не читается намеренно: он весит килобайты (положения
 	// единицы и соседей), а списку нужны состояние и шаг. Читать его на
 	// каждую строку значит таскать весь документ ради одной колонки.
+	//
+	// Замечания при этом читаются: их читает человек, глядя в список, и
+	// «одна часть из восьмидесяти не далась» — это ровно то, ради чего в
+	// список и смотрят.
+	//
+	// Имя файла вынимается из заказа ОДНИМ полем, а не разбором заказа
+	// целиком: разбор называется в списке именем документа, и без него
+	// строка разбора стоит безымянной — номер документа человеку не
+	// говорит ничего. Одно поле стоит копейки, весь заказ — килобайты.
 	out := []Job{}
 	for rows.Next() {
 		var job Job
-		if err := rows.Scan(&job.ID, &job.SourceID, &job.UnitLabel, &job.Status,
-			&job.Step, &job.Attempts, &job.Error, &job.CreatedAt, &job.UpdatedAt); err != nil {
+		var notes []byte
+		if err := rows.Scan(&job.ID, &job.Kind, &job.SourceID, &job.UnitLabel, &job.Status,
+			&job.Step, &job.Attempts, &job.Error, &notes, &job.ParsePlan.Filename,
+			&job.CreatedAt, &job.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("строка задания не разобрана: %w", err)
+		}
+		if err := json.Unmarshal(notes, &job.Notes); err != nil {
+			return nil, fmt.Errorf("замечания задания %d не разобраны: %w", job.ID, err)
+		}
+		if job.Notes == nil {
+			job.Notes = []string{}
 		}
 		out = append(out, job)
 	}

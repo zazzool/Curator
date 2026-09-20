@@ -55,6 +55,11 @@ function serve(answers: Record<string, unknown>) {
 
 const РЕДАКТОР: Me = { login: 'редактор', displayName: 'Редактор', permissions: ['source:read', 'source:accept'] }
 const ЧИТАТЕЛЬ: Me = { login: 'читатель', displayName: 'Читатель', permissions: ['source:read'] }
+const ГЕНЕРАТОР: Me = {
+  login: 'генератор',
+  displayName: 'Генератор',
+  permissions: ['source:read', 'source:accept', 'generate'],
+}
 
 describe('экран источника', () => {
   beforeEach(() => {
@@ -185,6 +190,133 @@ describe('экран источника', () => {
     fireEvent.click(screen.getByText('Принять разбор'))
     await waitFor(() => expect(screen.getByText(/Разбор принят/)).toBeTruthy())
     expect(принятые).toEqual([5])
+  })
+
+  it('отдаёт документ модели и не ждёт разбора на открытой вкладке', async () => {
+    // Документ на сотню страниц разбирается минутами: заказ уходит в
+    // очередь, а ответ приходит сразу. Делай ручка разбор на месте, закрытая
+    // вкладка отменяла бы уже оплаченное.
+    const ДОКУМЕНТ = {
+      id: 5,
+      sourceId: 1,
+      filename: 'prikaz.docx',
+      mime: 'text/plain',
+      byteSize: 40960,
+      uploadedBy: 'редактор',
+    }
+    const заказы: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if (init?.method === 'POST' && path.includes('/parse')) {
+          заказы.push(path)
+          return Promise.resolve(
+            new Response(JSON.stringify({ id: 9, kind: 'parse', status: 'queued' }), {
+              status: 201,
+            }),
+          )
+        }
+        if (path.startsWith('/admin/api/sources/1/documents')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ documents: [ДОКУМЕНТ] }), { status: 200 }),
+          )
+        }
+        if (path.startsWith('/admin/api/sources/1/units')) {
+          return Promise.resolve(new Response(JSON.stringify({ units: [] }), { status: 200 }))
+        }
+        if (path.startsWith('/admin/api/sources/1/jobs')) {
+          return Promise.resolve(new Response(JSON.stringify({ jobs: [] }), { status: 200 }))
+        }
+        if (path.startsWith('/admin/api/cases')) {
+          return Promise.resolve(new Response(JSON.stringify({ cases: [] }), { status: 200 }))
+        }
+        return Promise.resolve(new Response(JSON.stringify(SOURCE), { status: 200 }))
+      }),
+    )
+    render(<SourceScreen me={ГЕНЕРАТОР} id={1} onBack={() => {}} />)
+
+    fireEvent.click(await screen.findByText('Разобрать моделью'))
+    await waitFor(() => expect(заказы).toEqual(['/admin/api/documents/5/parse']))
+    // Сказано и то, что разбор идёт не мгновенно, и то, что принимать его
+    // придётся отдельно: молчание здесь читается как «источник пополнен».
+    const note = await screen.findByText(/Документ отдан модели/)
+    expect(note.textContent).toMatch(/принять его надо будет отдельно/)
+  })
+
+  it('отказ разбора показывается словами сервера, а не общей неудачей', async () => {
+    // «Этот документ уже разбирается» и «разбор не заказан» требуют разных
+    // действий: подождать и позвать снова. Общий текст отправляет жать
+    // кнопку по второму разу там, где это заведёт второй разбор.
+    const ДОКУМЕНТ = {
+      id: 5,
+      sourceId: 1,
+      filename: 'prikaz.docx',
+      mime: 'text/plain',
+      byteSize: 40960,
+      uploadedBy: 'редактор',
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if (init?.method === 'POST' && path.includes('/parse')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ error: 'Этот документ уже разбирается' }), {
+              status: 409,
+            }),
+          )
+        }
+        if (path.startsWith('/admin/api/sources/1/documents')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ documents: [ДОКУМЕНТ] }), { status: 200 }),
+          )
+        }
+        if (path.startsWith('/admin/api/sources/1/units')) {
+          return Promise.resolve(new Response(JSON.stringify({ units: [] }), { status: 200 }))
+        }
+        if (path.startsWith('/admin/api/sources/1/jobs')) {
+          return Promise.resolve(new Response(JSON.stringify({ jobs: [] }), { status: 200 }))
+        }
+        if (path.startsWith('/admin/api/cases')) {
+          return Promise.resolve(new Response(JSON.stringify({ cases: [] }), { status: 200 }))
+        }
+        return Promise.resolve(new Response(JSON.stringify(SOURCE), { status: 200 }))
+      }),
+    )
+    render(<SourceScreen me={ГЕНЕРАТОР} id={1} onBack={() => {}} />)
+    fireEvent.click(await screen.findByText('Разобрать моделью'))
+    expect(await screen.findByText(/уже разбирается/)).toBeTruthy()
+  })
+
+  it('человеку без права генерации не показывает разбор моделью и говорит, почему', async () => {
+    // У права приёмки и права генерации разные предметы: принять разбор —
+    // решить, что теперь истина источника; заказать разбор — потратить
+    // деньги у поставщика моделей. Редактор с первым правом, но без
+    // второго, кнопки не видит.
+    serve({
+      '/admin/api/sources/1/units': { units: UNITS },
+      '/admin/api/sources/1/jobs': { jobs: [] },
+      '/admin/api/cases': { cases: [] },
+      // Документ в источнике есть: проверка, сделанная на пустом списке,
+      // подтверждала бы отсутствие кнопки там, где её не было бы и с правом.
+      '/admin/api/sources/1/documents': {
+        documents: [
+          {
+            id: 5,
+            sourceId: 1,
+            filename: 'prikaz.docx',
+            mime: 'text/plain',
+            byteSize: 40960,
+            uploadedBy: 'редактор',
+          },
+        ],
+      },
+      '/admin/api/sources/1': SOURCE,
+    })
+    render(<SourceScreen me={РЕДАКТОР} id={1} onBack={() => {}} />)
+    // Строка документа показана — значит скрыта именно кнопка, а не раздел.
+    expect(await screen.findByText('prikaz.docx')).toBeTruthy()
+    expect(screen.queryByText('Разобрать моделью')).toBeNull()
+    expect(screen.getByText(/право запускать\s+генерацию/)).toBeTruthy()
   })
 
   it('человеку без права приёмки не показывает действие и говорит, почему', async () => {

@@ -306,7 +306,7 @@ func TestPgЗаданиеБерётсяВРаботуОдинРаз(t *testing.T
 
 	seen := map[int64]int{}
 	for {
-		job, ok, err := jobs.Take(ctx)
+		job, ok, err := jobs.Take(ctx, KindCase)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -330,7 +330,7 @@ func TestPgПустаяОчередьЭтоНеОтказ(t *testing.T) {
 	ctx := context.Background()
 	jobs := NewJobs(testGate(t))
 	for {
-		job, ok, err := jobs.Take(ctx)
+		job, ok, err := jobs.Take(ctx, KindCase)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -473,7 +473,7 @@ func TestPgПланДоезжаетДоИсполнителяЦеликом(t *t
 	}
 
 	for {
-		job, ok, err := jobs.Take(ctx)
+		job, ok, err := jobs.Take(ctx, KindCase)
 		if err != nil {
 			t.Fatal(err)
 		}

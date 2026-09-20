@@ -26,6 +26,7 @@ const UNITS: Unit[] = [
 function job(over: Partial<Job> = {}): Job {
   return {
     id: 7,
+    kind: 'case',
     sourceId: 1,
     unitLabel: '3.1',
     status: 'queued',
@@ -33,6 +34,7 @@ function job(over: Partial<Job> = {}): Job {
     stepWord: 'написание',
     attempts: 0,
     error: '',
+    notes: [],
     createdAt: '2026-09-19T10:00:00Z',
     updatedAt: '2026-09-19T10:00:00Z',
     taskKind: 'recognise',

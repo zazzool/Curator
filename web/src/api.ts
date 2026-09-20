@@ -76,6 +76,8 @@ export type Document = {
 // и то, что написано.
 export type Job = {
   id: number
+  /** Род работы: 'case' — пишется задача, 'parse' — разбирается документ. */
+  kind: string
   sourceId: number
   unitLabel: string
   status: string
@@ -83,11 +85,21 @@ export type Job = {
   stepWord: string
   attempts: number
   error: string
+  /**
+   * Замечания о СДЕЛАННОЙ работе: какая часть документа не далась, сколько
+   * непонятого отброшено из ответа модели. Отдельно от error, который
+   * говорит, почему работа не сделана вовсе: свали их в одно, и задание с
+   * одной потерянной частью из восьмидесяти читалось бы как провал.
+   */
+  notes: string[]
   createdAt: string
   updatedAt: string
   taskKind: string
   unitTitle: string
   unitWord: string
+  /** Имя разбираемого файла. Только у разбора: номер документа человеку
+   *  не говорит ничего. */
+  documentName?: string
   drafts?: Draft[]
 }
 
@@ -494,6 +506,12 @@ export const api = {
       'GET',
       `/admin/api/documents/${documentId}/draft`,
     ),
+
+  // Разбор документа моделью. Ответ — заведённое задание: ход виден в
+  // списке заданий, а разобранное ложится черновиком и принимается
+  // отдельным решением.
+  parseDocument: (documentId: number) =>
+    request<Job>('POST', `/admin/api/documents/${documentId}/parse`, {}),
 
   placeOrder: (
     sourceId: number,
