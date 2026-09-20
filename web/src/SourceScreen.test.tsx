@@ -233,7 +233,7 @@ describe('экран источника', () => {
         return Promise.resolve(new Response(JSON.stringify(SOURCE), { status: 200 }))
       }),
     )
-    render(<SourceScreen me={ГЕНЕРАТОР} id={1} onBack={() => {}} />)
+    render(<SourceScreen me={ГЕНЕРАТОР} id={1} onTitle={() => {}} onBack={() => {}} />)
 
     fireEvent.click(await screen.findByText('Разобрать моделью'))
     await waitFor(() => expect(заказы).toEqual(['/admin/api/documents/5/parse']))
@@ -282,7 +282,7 @@ describe('экран источника', () => {
         return Promise.resolve(new Response(JSON.stringify(SOURCE), { status: 200 }))
       }),
     )
-    render(<SourceScreen me={ГЕНЕРАТОР} id={1} onBack={() => {}} />)
+    render(<SourceScreen me={ГЕНЕРАТОР} id={1} onTitle={() => {}} onBack={() => {}} />)
     fireEvent.click(await screen.findByText('Разобрать моделью'))
     expect(await screen.findByText(/уже разбирается/)).toBeTruthy()
   })
@@ -312,7 +312,7 @@ describe('экран источника', () => {
       },
       '/admin/api/sources/1': SOURCE,
     })
-    render(<SourceScreen me={РЕДАКТОР} id={1} onBack={() => {}} />)
+    render(<SourceScreen me={РЕДАКТОР} id={1} onTitle={() => {}} onBack={() => {}} />)
     // Строка документа показана — значит скрыта именно кнопка, а не раздел.
     expect(await screen.findByText('prikaz.docx')).toBeTruthy()
     expect(screen.queryByText('Разобрать моделью')).toBeNull()
