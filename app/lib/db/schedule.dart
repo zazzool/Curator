@@ -103,11 +103,26 @@ class Schedule {
         limit: 1,
       );
       if (rows.isNotEmpty && rows.first['synced'] == 0) continue;
-      batch.insert('review', {
-        'case_id': entry.key,
-        'due_at': entry.value.toUtc().millisecondsSinceEpoch,
-        'synced': 1,
-      }, conflictAlgorithm: ConflictAlgorithm.replace);
+      // Правятся ровно две колонки, и это не украшение.
+      //
+      // Прежде здесь стоял insert с ConflictAlgorithm.replace, то есть
+      // INSERT OR REPLACE. В SQLite он не правит строку, а УДАЛЯЕТ её и
+      // вставляет новую — значит неназванные колонки падают к умолчаниям
+      // схемы, а там нули. Лёгкость, интервал и число повторов,
+      // накопленные врачом за месяцы, обнулялись на каждой связи с
+      // сервером, и следующий разбор получал первую ступень: одни сутки.
+      // Повторение с интервалами не работало ни у кого, и заметить это
+      // было можно только по тому, что повторений подозрительно много.
+      //
+      // Сервер владеет сроком, а не расчётом: срок он прислал, а лёгкость
+      // и повторы посчитаны здесь по общему эталону. Поэтому правим срок
+      // и отметку, а расчёт не трогаем.
+      batch.rawInsert(
+        'INSERT INTO review (case_id, due_at, synced) VALUES (?, ?, 1) '
+        'ON CONFLICT(case_id) DO UPDATE SET '
+        'due_at = excluded.due_at, synced = 1',
+        [entry.key, entry.value.toUtc().millisecondsSinceEpoch],
+      );
       taken++;
     }
     await batch.commit(noResult: true);

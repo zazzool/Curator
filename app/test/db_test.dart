@@ -187,18 +187,34 @@ void main() {
       expect((await schedule.state('c-01'))!.intervalDays, 6);
     });
 
-    test('доехавший разбор сервер уже перекрывает', () async {
+    test('доехавший разбор сервер перекрывает сроком, не расчётом', () async {
+      // Сверяется и то, что срок переписан, И то, что расчёт уцелел.
+      //
+      // Прежде здесь сверялся один срок, и проверка проходила бы, даже
+      // если бы accept не делал ничего, кроме записи срока. Она и
+      // проходила: INSERT OR REPLACE обнулял лёгкость, интервал и число
+      // повторов, а набор оставался зелёным. Сервер владеет сроком;
+      // расчёт посчитан здесь по общему эталону, и затирать его нечем.
       final now = DateTime(2026, 9, 19, 10);
       await schedule.put(
         'c-01',
-        ReviewState(ease: 2.6, dueAt: now.add(const Duration(days: 6))),
+        ReviewState(
+          ease: 2.6,
+          intervalDays: 15,
+          repetitions: 4,
+          dueAt: now.add(const Duration(days: 15)),
+        ),
         synced: true,
       );
 
       final taken = await schedule.accept({'c-01': now});
 
       expect(taken, 1);
-      expect((await schedule.state('c-01'))!.dueAt!.toUtc(), now.toUtc());
+      final after = (await schedule.state('c-01'))!;
+      expect(after.dueAt!.toUtc(), now.toUtc());
+      expect(after.ease, 2.6);
+      expect(after.intervalDays, 15);
+      expect(after.repetitions, 4);
     });
 
     test('незнакомая задача от сервера просто ложится', () async {

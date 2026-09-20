@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"os"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -540,5 +542,130 @@ func TestPgБлокировкаЧужогоНомераОтказывает(t *t
 	err := clients.SetBlocked(context.Background(), 1<<40, true, time.Now())
 	if err == nil {
 		t.Fatal("блокировка несуществующей записи прошла молча")
+	}
+}
+
+func TestPgДвеОплатыПодрядДаютДваМесяца(t *testing.T) {
+	// Продление читает конец действующей подписки и вставляет новую
+	// строку. Без замка на записи врача две оплаты, пришедшие разом,
+	// видели одно и то же «до» и обе считали от него: врач платил за два
+	// месяца и получал один. Воспроизводилось в тридцати девяти случаях
+	// из сорока, и потому кругов здесь много — с одним парным заходом
+	// проверка проходила бы и на сломанном коде.
+	ctx := context.Background()
+	gate := testGate(t)
+	pay := NewPayments(gate)
+	const кругов = 20
+
+	for круг := range кругов {
+		account := врач(t, gate)
+		now := time.Now()
+
+		// Общий старт: без него горутины расходятся во времени, и
+		// соперничество, ради которого всё написано, просто не случается.
+		старт := make(chan struct{})
+		var wg sync.WaitGroup
+		for range 2 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-старт
+				_, err := pay.Accept(ctx, Income{
+					AccountID: account, Purpose: "subscription:month",
+					Kopecks: 199000, By: "проверка",
+					IdemKey: ключ(),
+				}, now)
+				if err != nil {
+					t.Errorf("платёж не принят: %v", err)
+				}
+			}()
+		}
+		close(старт)
+		wg.Wait()
+
+		var until time.Time
+		if err := gate.QueryRow(ctx, `SELECT max(expires_at) FROM entitlements
+		     WHERE account_id = $1 AND kind = 'subscription'`, account).Scan(&until); err != nil {
+			t.Fatalf("срок подписки не прочитан: %v", err)
+		}
+		if суток := until.Sub(now).Hours() / 24; суток < 59 {
+			t.Fatalf("круг %d: оплачено два месяца, выдано %.0f суток", круг, суток)
+		}
+	}
+}
+
+func TestPgКлючПовторностиСверяетсяСПриходом(t *testing.T) {
+	// Ключ уникален сам по себе, а не в паре с врачом и назначением.
+	// Прежде повтор отдавал ПРЕЖНИЙ платёж без сверки: второй врач платил,
+	// получал чужой приход с пометкой «повтор» и оставался без прав, а
+	// оператор читал уверенное «уже оформлен».
+	ctx := context.Background()
+	gate := testGate(t)
+	pay := NewPayments(gate)
+	первый, второй := врач(t, gate), врач(t, gate)
+	key := ключ()
+	now := time.Now()
+
+	if _, err := pay.Accept(ctx, Income{AccountID: первый,
+		Purpose: "subscription:year", Kopecks: 249000,
+		IdemKey: key, By: "оператор"}, now); err != nil {
+		t.Fatalf("первый приход не оформлен: %v", err)
+	}
+
+	_, err := pay.Accept(ctx, Income{AccountID: второй,
+		Purpose: "subscription:month", Kopecks: 39900,
+		IdemKey: key, By: "оператор"}, now)
+	if err == nil {
+		t.Fatal("чужой ключ принят молча: второй врач заплатил и остался без прав")
+	}
+	if !strings.Contains(err.Error(), "уже занят другим приходом") {
+		t.Errorf("отказ не называет причину: %v", err)
+	}
+
+	var прав int
+	if err := gate.QueryRow(ctx,
+		`SELECT count(*) FROM entitlements WHERE account_id = $1`, второй).Scan(&прав); err != nil {
+		t.Fatal(err)
+	}
+	if прав != 0 {
+		t.Errorf("отказанный приход всё же выдал прав: %d", прав)
+	}
+}
+
+func TestPgПовторТемЖеПриходомОтдаётПрежнийПлатёж(t *testing.T) {
+	// Оборотная сторона той же сверки: оператор нажал дважды, а не принял
+	// деньги дважды. Тот же врач, то же назначение, та же сумма — это
+	// повтор, и он обязан отдать прежний платёж, а не отказ.
+	ctx := context.Background()
+	gate := testGate(t)
+	pay := NewPayments(gate)
+	account := врач(t, gate)
+	key := ключ()
+	now := time.Now()
+
+	in := Income{AccountID: account, Purpose: "subscription:month",
+		Kopecks: 39900, IdemKey: key, By: "оператор"}
+	первый, err := pay.Accept(ctx, in, now)
+	if err != nil {
+		t.Fatalf("приход не оформлен: %v", err)
+	}
+	второй, err := pay.Accept(ctx, in, now)
+	if err != nil {
+		t.Fatalf("повтор того же прихода отказал: %v", err)
+	}
+	if !второй.Repeated {
+		t.Error("повтор не помечен повтором")
+	}
+	if второй.ID != первый.ID {
+		t.Errorf("повтор завёл второй платёж: %d и %d", первый.ID, второй.ID)
+	}
+
+	var платежей int
+	if err := gate.QueryRow(ctx,
+		`SELECT count(*) FROM payments WHERE account_id = $1`, account).Scan(&платежей); err != nil {
+		t.Fatal(err)
+	}
+	if платежей != 1 {
+		t.Errorf("платежей %d, а деньги приходили один раз", платежей)
 	}
 }

@@ -14,12 +14,27 @@
 /// дважды, ляжет один раз — иначе она испортит и прогресс, и решаемость,
 /// причём незаметно: числа останутся правдоподобными.
 ///
-/// # Очередь живёт в настройках, а не в местной базе
+/// # Где живёт очередь
 ///
-/// Местной базы пока нет. Записи здесь маленькие и недолгие — десятки
-/// строк между двумя выходами в сеть, — и настройки их держат. Когда
-/// появится местная база, очередь переедет в неё: это записано здесь, а
-/// не оставлено на память.
+/// В местной базе — `db/outbox_store.dart`. Прежде она жила в настройках,
+/// потому что местной базы не было; переезд состоялся, и прежняя очередь
+/// переносится при подъёме. Настройки остались хранилищем для проверок и
+/// для устройств, не дошедших до переноса.
+///
+/// # Очередь правится по одному действию за раз
+///
+/// И `add`, и `flush` — это «прочитать всё, изменить, записать всё»
+/// поверх одного хранилища. Без порядка они затирали друг друга: `flush`
+/// снимал список, уходил в сеть на двадцать секунд слабой связи, а
+/// вернувшись — записывал поверх очереди пустоту вместе с ответами,
+/// которые врач дал за эти секунды. Ответ пропадал молча, и счётчик
+/// «ждут отправки» показывал ноль.
+///
+/// Поэтому правки очереди выстроены в очередь сами (`_inTurn`), а
+/// обращение к серверу идёт БЕЗ замка: держи мы замок через сеть, и ответ,
+/// данный в эти секунды, ждал бы записи столько же — а убитое в это время
+/// приложение унесло бы его с собой. Из очереди при этом убираются именно
+/// отправленные разборы, по ключам повторности, а не «всё, что лежало».
 library;
 
 import 'dart:convert';
@@ -154,13 +169,26 @@ class Outbox {
   /// узнает. Здесь потолок тот же, и посылка режется на пачки.
   static const batch = 500;
 
-  Future<void> add(PendingAttempt attempt) async {
+  /// Хвост очереди правок. Довод — в пояснении к файлу.
+  Future<void> _turn = Future.value();
+
+  /// Выполняет правку очереди, дождавшись предыдущей.
+  Future<T> _inTurn<T>(Future<T> Function() work) {
+    final result = _turn.then((_) => work());
+    // Отказ одной правки не рвёт цепочку для следующих: иначе первая же
+    // неудачная запись заперла бы очередь навсегда, и врач перестал бы
+    // копить разборы, ничего об этом не узнав.
+    _turn = result.then((_) {}, onError: (_) {});
+    return result;
+  }
+
+  Future<void> add(PendingAttempt attempt) => _inTurn(() async {
     final rows = await _store.read();
     rows.add(attempt.toJson());
     await _store.write(rows);
-  }
+  });
 
-  Future<int> pending() async => (await _store.read()).length;
+  Future<int> pending() => _inTurn(() async => (await _store.read()).length);
 
   /// Отправляет накопленное.
   ///
@@ -168,33 +196,51 @@ class Outbox {
   /// до ответа — и обрыв стоил бы врачу вечера. Повтор при этом безопасен:
   /// ключ повторности у каждого разбора свой, и второй раз он не ляжет.
   Future<Flushed> flush() async {
+    // Снимок берётся под замком, сеть идёт без него.
+    //
     // Негодная строка не уезжает: сервер отбросил бы её молча, а очередь
     // считала бы её отправленной. Разбирается каждая, и отбрасывается
-    // только она сама — очередь из-за неё не пропадает.
-    final rows = [
-      for (final row in await _store.read())
-        if (PendingAttempt.tryParse(row) != null) row,
-    ];
-    if (rows.isEmpty) {
-      await _store.write([]);
-      return const Flushed(sent: 0, left: 0);
-    }
+    // только она сама — очередь из-за неё не пропадает. Убираются они
+    // здесь же, под замком: иначе остались бы в очереди навсегда, потому
+    // что ключа повторности у них нет и убрать их по ключу нечем.
+    final rows = await _inTurn(() async {
+      final kept = [
+        for (final row in await _store.read())
+          if (PendingAttempt.tryParse(row) != null) row,
+      ];
+      await _store.write(kept);
+      return kept;
+    });
+    if (rows.isEmpty) return const Flushed(sent: 0, left: 0);
 
     var sent = 0;
+    ApiFailure? failure;
     while (sent < rows.length) {
       final chunk = rows.skip(sent).take(batch).toList();
       try {
         await _api.post('/v1/attempts', {'attempts': chunk});
-      } on ApiFailure catch (failure) {
-        // Отправленное убираем, остальное оставляем лежать: потерять
+      } on ApiFailure catch (denied) {
+        // Отправленное убираем ниже, остальное остаётся лежать: потерять
         // очередь из-за отказа на второй пачке значит потерять то, что
         // сервер и не видел.
-        await _store.write(rows.skip(sent).toList());
-        return Flushed(sent: sent, left: rows.length - sent, failure: failure);
+        failure = denied;
+        break;
       }
       sent += chunk.length;
     }
-    await _store.write([]);
-    return Flushed(sent: sent, left: 0);
+
+    // Убираются ИМЕННО отправленные, по ключам повторности. Запись поверх
+    // очереди пустотой унесла бы с собой ответы, данные врачом, пока шло
+    // обращение к серверу, — и унесла бы молча.
+    final done = {for (final row in rows.take(sent)) row['idemKey'] as String};
+    final left = await _inTurn(() async {
+      final rest = [
+        for (final row in await _store.read())
+          if (!done.contains(row['idemKey'])) row,
+      ];
+      await _store.write(rest);
+      return rest.length;
+    });
+    return Flushed(sent: sent, left: left, failure: failure);
   }
 }
