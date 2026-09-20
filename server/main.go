@@ -25,6 +25,7 @@ import (
 
 	"curator/server/internal/analytics"
 	"curator/server/internal/app"
+	"curator/server/internal/backup"
 	"curator/server/internal/casestore"
 	"curator/server/internal/dbgate"
 	"curator/server/internal/envfile"
@@ -185,6 +186,19 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 		rollup := analytics.NewRollup(gate)
 		analytics.Routes(desk, rollup)
 		go sweep(ctx, rollup)
+
+		// Снимки базы. Задачи, разметка и разборы существуют в одном
+		// экземпляре: разбор источника и генерация стоят денег и времени
+		// составителя, а восстановить их из ничего нельзя — модель
+		// напишет другое. Ненастроенные снимки говорят об этом вслух при
+		// старте: пустой каталог выглядит одинаково при «ещё не сняли» и
+		// при «не снимаем никогда».
+		(&backup.Keeper{
+			DSN:       os.Getenv("DATABASE_URL"),
+			Dir:       os.Getenv("CURATOR_BACKUP_DIR"),
+			VerifyDSN: os.Getenv("CURATOR_BACKUP_VERIFY_DSN"),
+			Keep:      positive(os.Getenv("CURATOR_BACKUP_KEEP")),
+		}).Every(ctx, 24*time.Hour)
 
 		generation(ctx, gate, desk)
 		mux.Handle("/admin/api/", desk.Handler())
@@ -347,4 +361,17 @@ func slowThreshold() time.Duration {
 		return 500 * time.Millisecond
 	}
 	return time.Duration(ms) * time.Millisecond
+}
+
+// positive разбирает число из окружения, не отказывая на пустом.
+//
+// Пустая переменная — это «не задано», а не ноль. В числе снимков ноль
+// понимался бы как «стереть все», и защита стёрла бы себя от пустой
+// строки в .env.
+func positive(raw string) int {
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }

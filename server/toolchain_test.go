@@ -68,3 +68,43 @@ func читай(t *testing.T, path string) string {
 	}
 	return strings.ReplaceAll(string(raw), "\r\n", "\n")
 }
+
+func TestКаталогСнимковВОбразцеСходитсяСТомом(t *testing.T) {
+	// Путь назван дважды и по-разному: том монтирует docker-compose, а
+	// читает его служба из .env. Разойдись они — служба напишет снимок
+	// внутрь контейнера, том останется пуст, и весь смысл снимка (пережить
+	// контейнер, который его написал) потеряется молча. Так и было: в
+	// образце стоял /data/backups, а том монтируется в /app/backups.
+	compose := читай(t, "../docker-compose.yml")
+	c := regexp.MustCompile(`\./backups:(\S+)`).FindStringSubmatch(compose)
+	if c == nil {
+		t.Fatal("в docker-compose.yml не нашлось тома снимков")
+	}
+
+	env := читай(t, ".env.example")
+	e := regexp.MustCompile(`(?m)^CURATOR_BACKUP_DIR=(\S+)`).FindStringSubmatch(env)
+	if e == nil {
+		t.Fatal("в .env.example не нашлось CURATOR_BACKUP_DIR")
+	}
+	if e[1] != c[1] {
+		t.Errorf("служба пишет снимки в %s, а том смонтирован в %s — "+
+			"снимки останутся в контейнере и умрут вместе с ним", e[1], c[1])
+	}
+}
+
+func TestОбразНесётpg_dump(t *testing.T) {
+	// Снимок снимает pg_dump, а не свой обход таблиц. Нет его в образе —
+	// снимков не будет, и выяснится это не сегодня: служба поднимется,
+	// студия заработает, а в журнале раз в сутки будет строка, которую
+	// никто не читает.
+	//
+	// Версия названа поимённо: pg_dump старше базы отказывается с ней
+	// разговаривать.
+	dockerfile := читай(t, "../Dockerfile")
+	if !strings.Contains(dockerfile, "postgresql16-client") {
+		t.Error("в образе нет postgresql16-client: снимать базу нечем")
+	}
+	if !strings.Contains(dockerfile, "/app/backup") {
+		t.Error("в образе нет утилиты снимка: снять базу руками нечем")
+	}
+}
