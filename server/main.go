@@ -237,6 +237,7 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 			Dir:       os.Getenv("CURATOR_BACKUP_DIR"),
 			VerifyDSN: os.Getenv("CURATOR_BACKUP_VERIFY_DSN"),
 			Keep:      positive(os.Getenv("CURATOR_BACKUP_KEEP")),
+			Offsite:   offsite(),
 		}).Every(ctx, 24*time.Hour)
 
 		generation(ctx, gate, desk)
@@ -437,4 +438,19 @@ func positive(raw string) int {
 		return 0
 	}
 	return n
+}
+
+// offsite — второе хранилище снимков, если оно настроено.
+//
+// Негодная настройка роняет подъём, а не молча отключает вывоз. Это
+// исключение из общего правила «мусор в необязательной переменной не
+// роняет подъём», и оно объявлено: переменные вывоза заполняет человек
+// вручную и один раз, а замечает их отсутствие — в тот единственный день,
+// когда снимок нужен. Незаполненные вовсе — не мусор, а «вывоза нет».
+func offsite() backup.Offsite {
+	out, err := backup.FromEnv(os.Getenv)
+	if err != nil {
+		log.Fatalf("вывоз снимков: %v", err)
+	}
+	return out
 }

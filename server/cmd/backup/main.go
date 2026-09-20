@@ -42,6 +42,7 @@ func main() {
 		Dir:       os.Getenv("CURATOR_BACKUP_DIR"),
 		VerifyDSN: os.Getenv("CURATOR_BACKUP_VERIFY_DSN"),
 		Keep:      number(os.Getenv("CURATOR_BACKUP_KEEP")),
+		Offsite:   offsite(),
 	}
 	if !keeper.Ready() {
 		log.Fatal("снимки не настроены: нужны DATABASE_URL и CURATOR_BACKUP_DIR")
@@ -89,4 +90,17 @@ func number(raw string) int {
 		return 0
 	}
 	return n
+}
+
+// offsite — второе хранилище снимков, если оно настроено.
+//
+// Негодная настройка роняет разовую съёмку так же, как и службу: молча
+// снять снимок и не вывезти его — значит оставить человека уверенным, что
+// вторая копия есть.
+func offsite() backup.Offsite {
+	out, err := backup.FromEnv(os.Getenv)
+	if err != nil {
+		log.Fatalf("вывоз снимков: %v", err)
+	}
+	return out
 }
