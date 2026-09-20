@@ -174,7 +174,7 @@ func (r *routes) savePrompt(w http.ResponseWriter, req *http.Request, user studi
 // План в ответ не уезжает: он весит килобайты (положения единицы и всех
 // соседей), а студии нужны состояние, шаг и то, что написано. Нужен план —
 // это другой разговор и другая ручка.
-func jobJSON(job Job, drafts []Draft) map[string]any {
+func jobJSON(job Job, drafts []Stored) map[string]any {
 	out := map[string]any{
 		"id":        job.ID,
 		"sourceId":  job.SourceID,
@@ -194,7 +194,7 @@ func jobJSON(job Job, drafts []Draft) map[string]any {
 		// Пустой список — [], а не null: студия ходит по нему циклом, и
 		// null роняет её на исправном случае — на задании, которое ещё в
 		// очереди.
-		list := make([]Draft, 0, len(drafts))
+		list := make([]Stored, 0, len(drafts))
 		list = append(list, drafts...)
 		out["drafts"] = list
 	}

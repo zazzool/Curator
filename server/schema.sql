@@ -657,11 +657,24 @@ CREATE TABLE IF NOT EXISTS cases (
     -- одновременно, не затирают друг друга молча.
     revision     INTEGER     NOT NULL DEFAULT 1,
     origin       TEXT        NOT NULL DEFAULT 'manual',
+
+    -- Из какого черновика заведена. Пусто у задач, пришедших ввозом и
+    -- написанных руками. Нужно не для истории, а чтобы принять черновик
+    -- было можно только однажды: составитель нажимает «Принять» дважды
+    -- при обрыве связи, и второе нажатие завело бы вторую задачу с тем же
+    -- условием — а заметил бы это не он, а обучающийся, получивший одну
+    -- задачу дважды.
+    draft_id     BIGINT      NULL REFERENCES case_drafts (id),
+
     body         JSONB       NOT NULL,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     published_at TIMESTAMPTZ NULL
 );
+-- Указатель частичный: задач без черновика много, и общий указатель
+-- считал бы их все одинаковыми.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cases_draft
+    ON cases (draft_id) WHERE draft_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_cases_status  ON cases (status);
 CREATE INDEX IF NOT EXISTS idx_cases_updated ON cases (updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cases_unit    ON cases (source_id, unit_label);

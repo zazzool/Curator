@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { ApiError, api } from './api'
-import type { Job, Me, Source, Unit } from './api'
+import type { Draft, Job, Me, Source, Unit } from './api'
 
 // Генерация по источнику: заказать задачу, посмотреть очередь, прочитать
 // черновик.
@@ -180,7 +180,7 @@ export function Generation({
         </div>
       )}
 
-      {open && <JobCard job={open} onClose={() => setOpen(null)} />}
+      {open && <JobCard me={me} job={open} onClose={() => setOpen(null)} />}
     </section>
   )
 }
@@ -206,8 +206,39 @@ function statusWord(job: Job): string {
   }
 }
 
-function JobCard({ job, onClose }: { job: Job; onClose: () => void }) {
+/**
+ * Написанное моделью по одному заданию — и решение составителя по нему.
+ *
+ * Принять черновик значит завести из него задачу: до этого момента
+ * написанное моделью не существует ни для кого, кроме этого экрана. Именно
+ * здесь конвейер и обрывался — деньги за обращение к модели платились,
+ * черновик показывался, а выхода у него не было.
+ *
+ * Заведённая задача — черновик, а не раздача: выпускает её составитель в
+ * разделе «Задачи», отдельным решением и после сверки. Принять и выпустить
+ * одной кнопкой значило бы отдать врачу то, чего никто не читал.
+ */
+function JobCard({ me, job, onClose }: { me: Me; job: Job; onClose: () => void }) {
   const drafts = job.drafts ?? []
+  const canAccept = me.permissions.includes('case:write')
+  /** Что вышло из принятия черновика: по опознавателю черновика. */
+  const [accepted, setAccepted] = useState<Record<number, string>>({})
+  const [busy, setBusy] = useState(0)
+  const [failure, setFailure] = useState('')
+
+  async function accept(draft: Draft) {
+    setFailure('')
+    setBusy(draft.id)
+    try {
+      const one = await api.caseFromDraft(draft.id)
+      setAccepted((was) => ({ ...was, [draft.id]: one.id }))
+    } catch (error) {
+      setFailure(error instanceof ApiError ? error.message : 'Черновик не принят')
+    } finally {
+      setBusy(0)
+    }
+  }
+
   return (
     <div className="page-section">
       <div className="page-head">
@@ -217,6 +248,12 @@ function JobCard({ job, onClose }: { job: Job; onClose: () => void }) {
         <button onClick={onClose}>Закрыть</button>
       </div>
       {job.error && <p className="banner error">{job.error}</p>}
+      {failure && <p className="banner error">{failure}</p>}
+      {!canAccept && drafts.length > 0 && (
+        <p className="hint">
+          Черновик принимает тот, кому выдано право «править задачи».
+        </p>
+      )}
       {drafts.length === 0 ? (
         <p className="empty">Написанного пока нет.</p>
       ) : (
@@ -251,6 +288,24 @@ function JobCard({ job, onClose }: { job: Job; onClose: () => void }) {
               ))}
             </ul>
             <p className="hint">{draft.explanationMd}</p>
+            {accepted[draft.id] ? (
+              <p className="banner success">
+                Задача заведена и лежит в черновиках. Выпустить её — в
+                разделе «Задачи».
+              </p>
+            ) : (
+              canAccept && (
+                <div className="form-actions">
+                  <button
+                    className="primary"
+                    disabled={busy !== 0}
+                    onClick={() => void accept(draft)}
+                  >
+                    Принять черновик
+                  </button>
+                </div>
+              )
+            )}
           </div>
         ))
       )}

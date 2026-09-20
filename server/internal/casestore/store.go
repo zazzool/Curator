@@ -28,8 +28,9 @@ func NewStore(gate *dbgate.Gate) *Store { return &Store{gate: gate} }
 // Метка единицы и источник берутся у черновика, а не у того, кто заводит:
 // черновик написан по конкретной единице, и подменить её при заведении
 // значило бы получить задачу, проверяющую не то, что написано.
-func (s *Store) FromDraft(ctx context.Context, draftID int64, origin string) (Case, error) {
+func (s *Store) FromDraft(ctx context.Context, draftID int64, origin string) (Case, bool, error) {
 	var out Case
+	var repeated bool
 	err := s.gate.InTx(ctx, func(tx pgx.Tx) error {
 		var raw []byte
 		err := tx.QueryRow(ctx,
@@ -54,12 +55,31 @@ func (s *Store) FromDraft(ctx context.Context, draftID int64, origin string) (Ca
 			return err
 		}
 		out.ID, out.Status, out.Origin, out.Revision = id, StatusDraft, origin, 1
-		return s.insert(ctx, tx, &out)
+
+		заведена, err := s.insert(ctx, tx, &out, draftID)
+		if err != nil {
+			return err
+		}
+		if заведена {
+			return nil
+		}
+
+		// Этот черновик уже принят. Отдаём прежнюю задачу, а не вторую и
+		// не отказ: составитель нажал «Принять» дважды — при обрыве связи
+		// или просто дважды, — а принял черновик один раз. Завести вторую
+		// задачу с тем же условием значит выдать обучающемуся одну задачу
+		// дважды, и заметит это он, а не составитель.
+		prior, err := scanCase(tx.QueryRow(ctx, selectCase+` WHERE draft_id = $1`, draftID))
+		if err != nil {
+			return fmt.Errorf("задача по черновику %d не найдена: %w", draftID, err)
+		}
+		out, repeated = prior, true
+		return nil
 	})
 	if err != nil {
-		return Case{}, err
+		return Case{}, false, err
 	}
-	return out, nil
+	return out, repeated, nil
 }
 
 // insert кладёт новую задачу вместе с первой строкой истории.
@@ -67,31 +87,47 @@ func (s *Store) FromDraft(ctx context.Context, draftID int64, origin string) (Ca
 // Путь единицы читается здесь же, а не принимается доводом: он обязан
 // сойтись с тем, что лежит в источнике СЕЙЧАС, и единственный способ это
 // обеспечить — прочитать его в той же транзакции.
-func (s *Store) insert(ctx context.Context, tx pgx.Tx, c *Case) error {
+// Отдаёт false, когда задача по этому черновику уже заведена: проверкой и
+// вставкой это не делается — между ними успевает вклиниться второй
+// соперник, и проверка «сперва прочитали — не было» пропустит ровно тот
+// случай, ради которого заведена. Держит это частичный указатель базы.
+//
+// draftID нулевой у задач, написанных руками и пришедших ввозом: у них
+// черновика нет, и указатель их не считает — на то он и частичный.
+func (s *Store) insert(ctx context.Context, tx pgx.Tx, c *Case, draftID int64) (bool, error) {
 	err := tx.QueryRow(ctx,
 		`SELECT path FROM source_units WHERE source_id = $1 AND label = $2`,
 		c.SourceID, c.UnitLabel).Scan(&c.UnitPath)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("единицы «%s» в источнике нет: задача повиснет вне подбора", c.UnitLabel)
+		return false, fmt.Errorf("единицы «%s» в источнике нет: задача повиснет вне подбора", c.UnitLabel)
 	}
 	if err != nil {
-		return fmt.Errorf("путь единицы «%s» не прочитан: %w", c.UnitLabel, err)
+		return false, fmt.Errorf("путь единицы «%s» не прочитан: %w", c.UnitLabel, err)
 	}
 
 	body, err := json.Marshal(c.Body)
 	if err != nil {
-		return fmt.Errorf("содержание задачи не записано: %w", err)
+		return false, fmt.Errorf("содержание задачи не записано: %w", err)
+	}
+	var draft *int64
+	if draftID != 0 {
+		draft = &draftID
 	}
 	err = tx.QueryRow(ctx,
-		`INSERT INTO cases (id, source_id, unit_label, unit_path, status, revision, origin, body)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		`INSERT INTO cases (id, source_id, unit_label, unit_path, status, revision,
+		                    origin, draft_id, body)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		 ON CONFLICT (draft_id) WHERE draft_id IS NOT NULL DO NOTHING
 		 RETURNING created_at, updated_at`,
-		c.ID, c.SourceID, c.UnitLabel, c.UnitPath, c.Status, c.Revision, c.Origin, body).
+		c.ID, c.SourceID, c.UnitLabel, c.UnitPath, c.Status, c.Revision, c.Origin, draft, body).
 		Scan(&c.CreatedAt, &c.UpdatedAt)
-	if err != nil {
-		return fmt.Errorf("задача не заведена: %w", err)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
 	}
-	return keepRevision(ctx, tx, c.ID, c.Revision, string(c.Status), body, c.Origin)
+	if err != nil {
+		return false, fmt.Errorf("задача не заведена: %w", err)
+	}
+	return true, keepRevision(ctx, tx, c.ID, c.Revision, string(c.Status), body, c.Origin)
 }
 
 // Save правит содержание задачи со сверкой редакции.

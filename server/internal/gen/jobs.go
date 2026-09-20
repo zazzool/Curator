@@ -262,18 +262,19 @@ func (j *Jobs) SaveDraft(ctx context.Context, job Job, draft Draft) (int64, erro
 // Списком, а не одним: перегенерация пишет второй черновик по тому же
 // заданию, и прежний не затирается. Составитель сравнивает их и выбирает,
 // а затёртый черновик сравнить не с чем.
-func (j *Jobs) Drafts(ctx context.Context, jobID int64) ([]Draft, error) {
+func (j *Jobs) Drafts(ctx context.Context, jobID int64) ([]Stored, error) {
 	rows, err := j.gate.Query(ctx,
-		`SELECT body FROM case_drafts WHERE job_id = $1 ORDER BY id`, jobID)
+		`SELECT id, body FROM case_drafts WHERE job_id = $1 ORDER BY id`, jobID)
 	if err != nil {
 		return nil, fmt.Errorf("черновики задания %d не прочитаны: %w", jobID, err)
 	}
 	defer rows.Close()
 
-	out := []Draft{}
+	out := []Stored{}
 	for rows.Next() {
+		var id int64
 		var raw []byte
-		if err := rows.Scan(&raw); err != nil {
+		if err := rows.Scan(&id, &raw); err != nil {
 			return nil, fmt.Errorf("строка черновика не разобрана: %w", err)
 		}
 		var draft Draft
@@ -284,7 +285,7 @@ func (j *Jobs) Drafts(ctx context.Context, jobID int64) ([]Draft, error) {
 			// задачу, которой никто не писал.
 			return nil, fmt.Errorf("черновик задания %d не разобран: %w", jobID, err)
 		}
-		out = append(out, draft)
+		out = append(out, Stored{ID: id, Draft: draft})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("черновики дочитаны не до конца: %w", err)
