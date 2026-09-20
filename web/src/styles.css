@@ -605,6 +605,24 @@ label {
   line-height: 1.45;
 }
 
+/* Отклонённые правки редактора: «было» и «стало» читаются подряд, и
+   потому это список, а не абзац. Мера строки та же, что у пояснения, —
+   текст здесь для чтения, а не для взгляда. Тени нет и не будет:
+   плоскости разделяются волосяной границей. */
+.proofread-rejected {
+  margin: var(--gap-xs) 0 0;
+  padding-left: var(--gap-lg);
+  max-width: var(--measure);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.proofread-rejected li + li {
+  margin-top: var(--gap-xs);
+  padding-top: var(--gap-xs);
+  border-top: 1px solid var(--hairline);
+}
+
 .hint-warning {
   color: var(--warning);
 }

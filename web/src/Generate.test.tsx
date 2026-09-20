@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { Generate } from './Generate'
-import type { Check, Draft, Job, Me, SiblingCheck, Source, Unit } from './api'
+import type { Check, Draft, Job, Me, Proofread, SiblingCheck, Source, Unit } from './api'
 
 const SOURCE: Source = {
   id: 1,
@@ -466,14 +466,83 @@ describe('слепая сверка и повтор', () => {
     serve(сСоседями())
     const { unmount } = render(<Generate me={СОСТАВИТЕЛЬ} source={1} />)
     fireEvent.click(await screen.findByText('Открыть'))
-    expect(await screen.findByText(/не смотрел никто/)).toBeTruthy()
+    // Матчер — по началу строки, а не по общему хвосту: рядом стоят ещё
+    // две строки об отсутствии (слепой сверки и вычитки), и хвост
+    // «не смотрел никто» находит их все, то есть проверяет не то.
+    expect(await screen.findByText(/Различающей сверки у этого черновика нет/)).toBeTruthy()
     unmount()
 
     serve(сСоседями([]))
     render(<Generate me={СОСТАВИТЕЛЬ} source={1} />)
     fireEvent.click(await screen.findByText('Открыть'))
     expect(await screen.findByText(/нечего было смотреть/)).toBeTruthy()
-    expect(screen.queryByText(/не смотрел никто/)).toBeNull()
+    expect(screen.queryByText(/Различающей сверки у этого черновика нет/)).toBeNull()
+  })
+
+  /** То же задание, но со своим итогом вычитки. */
+  function сВычиткой(proofread?: Proofread) {
+    const draft = proofread === undefined ? ЧЕРНОВИК : { ...ЧЕРНОВИК, proofread }
+    return {
+      ...ОБЫЧНО,
+      '/admin/api/sources/1/jobs': { jobs: [job({ status: 'done' })] },
+      '/admin/api/jobs/7': job({ status: 'done', drafts: [draft] }),
+    }
+  }
+
+  it('отклонённая правка показана целиком: было, стало и почему', async () => {
+    // Отклонённая правка часто верна по сути и не прошла только по
+    // заслону. Составитель применит её рукой — но лишь если увидит обе
+    // половины и причину: одной строкой «правки отклонены» она пропадает
+    // так же, как пропадала, когда её не показывали вовсе.
+    serve(
+      сВычиткой({
+        done: true,
+        rejected: [
+          {
+            field: 's1',
+            before: 'Заявление подано 1 марта.',
+            after: 'Заявление подано 5 марта.',
+            reason: 'изменились числа',
+          },
+        ],
+      }),
+    )
+    render(<Generate me={СОСТАВИТЕЛЬ} source={1} />)
+    fireEvent.click(await screen.findByText('Открыть'))
+
+    expect(await screen.findByText(/отклонены заслоном/)).toBeTruthy()
+    expect(screen.getByText(/изменились числа/)).toBeTruthy()
+    expect(screen.getByText(/Заявление подано 1 марта/)).toBeTruthy()
+    expect(screen.getByText(/Заявление подано 5 марта/)).toBeTruthy()
+  })
+
+  it('несостоявшаяся вычитка названа, а не пропущена молча', async () => {
+    // Молчание составитель примет за «замечаний к языку нет» — и отпустит
+    // к обучающемуся условие, которого не читал никто.
+    serve(сВычиткой({ done: false, note: 'у поставщика кончились деньги' }))
+    render(<Generate me={СОСТАВИТЕЛЬ} source={1} />)
+    fireEvent.click(await screen.findByText('Открыть'))
+
+    const сказано = await screen.findByText(/Условие не вычитано/)
+    expect(сказано.textContent).toMatch(/кончились деньги/)
+  })
+
+  it('прошедшая вычитка без отказов не выглядит тревогой', async () => {
+    serve(сВычиткой({ done: true, changed: [{ field: 's1', before: 'а', after: 'б' }] }))
+    render(<Generate me={СОСТАВИТЕЛЬ} source={1} />)
+    fireEvent.click(await screen.findByText('Открыть'))
+
+    expect(await screen.findByText(/Вычитка прошла/)).toBeTruthy()
+    expect(screen.queryByText(/отклонены заслоном/)).toBeNull()
+  })
+
+  it('отсутствие вычитки сказано отдельно от неудавшейся', async () => {
+    serve(сВычиткой())
+    render(<Generate me={СОСТАВИТЕЛЬ} source={1} />)
+    fireEvent.click(await screen.findByText('Открыть'))
+
+    expect(await screen.findByText(/язык задачи не смотрел никто/)).toBeTruthy()
+    expect(screen.queryByText(/Условие не вычитано/)).toBeNull()
   })
 
   it('отказавшее задание можно повторить', async () => {

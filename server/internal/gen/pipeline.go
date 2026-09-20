@@ -76,6 +76,9 @@ type Result struct {
 
 	// Siblings — итоги различающей сверки по каждому неверному варианту.
 	Siblings []SiblingCheck
+
+	// Proofread — итог вычитки: что правлено и что отклонено заслоном.
+	Proofread Proofread
 }
 
 // Check — что известно о слепой сверке черновика.
@@ -151,11 +154,28 @@ func (r *Runner) run(ctx context.Context, job Job) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+
+	// Вычитка идёт ДО записи черновика и до обеих сверок. Поставь её
+	// после — и сверено было бы одно, а показано обучающемуся другое:
+	// вычитка правит условие, и мерить надо то, что уйдёт ему. Записывать
+	// же черновик дважды (до и после) значит хранить текст, которого
+	// никто не заказывал.
+	if err := r.jobs.Step(ctx, job.ID, NodeProofread); err != nil {
+		return Result{}, err
+	}
+	draft, proof := r.runProofread(ctx, job, draft)
+
 	draftID, err := r.jobs.SaveDraft(ctx, job, draft)
 	if err != nil {
 		return Result{}, err
 	}
-	result := Result{JobID: job.ID, DraftID: draftID, Draft: draft}
+	result := Result{JobID: job.ID, DraftID: draftID, Draft: draft, Proofread: proof}
+	if err := r.jobs.SaveProofread(ctx, draftID, proof); err != nil {
+		// Итог вычитки — пометка к задаче, а не сама задача: потерять её
+		// обидно, уронить из-за неё готовую задачу глупо. В журнал, как и
+		// у сверок.
+		log.Printf("задание %d: итог вычитки не записан в черновик %d: %v", job.ID, draftID, err)
+	}
 
 	if err := r.jobs.Step(ctx, job.ID, NodeVerify); err != nil {
 		return result, err
