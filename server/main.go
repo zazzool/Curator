@@ -437,10 +437,13 @@ func generation(ctx context.Context, gate *dbgate.Gate, desk *studio.Desk, sourc
 	if err := rulebook.Seed(seedCtx); err != nil {
 		log.Printf("встроенные правила не положены: %v", err)
 	}
-	rules.Routes(desk, rulebook)
-
 	providers := llmProviders()
 	if len(providers) == 0 {
+		// Ручки свода объявляются и без поставщика — по тому же доводу,
+		// что и ручки очереди. Уплотнение при этом откажет словами:
+		// сливать правила без модели некому, и сказать об этом полезнее,
+		// чем спрятать кнопку.
+		rules.Routes(desk, rulebook, nil)
 		log.Print("OPENROUTER_API_KEY не задан: очередь генерации разбирать некому")
 		return
 	}
@@ -456,6 +459,8 @@ func generation(ctx context.Context, gate *dbgate.Gate, desk *studio.Desk, sourc
 	}
 
 	chain := llm.NewChain(func() []llm.ProviderConfig { return providers }, publicOrigin(), "Куратор")
+
+	rules.Routes(desk, rulebook, chain)
 
 	// Chain.Record здесь намеренно не назначается: учёт ведёт исполнитель
 	// (Runner.account), и он один знает, к какому заданию и узлу относится
