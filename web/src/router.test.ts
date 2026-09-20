@@ -82,6 +82,7 @@ describe('адреса студии', () => {
       '/generate?source=2&unit=3.1',
       '/packs',
       '/sales',
+      '/audiences',
       '/reports',
       '/workshop',
     ]) {

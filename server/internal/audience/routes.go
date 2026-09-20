@@ -212,10 +212,26 @@ func (r *routes) ofClient(w http.ResponseWriter, req *http.Request, _ studio.Use
 	studio.WriteJSON(w, http.StatusOK, map[string]any{"audiences": out})
 }
 
+// ofPack отдаёт и связи набора, и все группы разом.
+//
+// Разом, потому что карточка набора закрыта правом НАБОРОВ, а список
+// групп — правом клиентов. Ходи она за списком отдельно — составитель с
+// правом собирать наборы, но без права на клиентов, получал бы на
+// карточке отказ вместо выбора: он видел бы, что набор кому-то открыт, и
+// не мог бы узнать кому.
+//
+// Отдаётся при этом только метка, название и поломка — то, чем группу
+// называют. Правило сюда не едет: кому что открыто, решают на карточке
+// набора, а из чего собрана группа — в разделе «Группы».
 func (r *routes) ofPack(w http.ResponseWriter, req *http.Request, _ studio.User) {
 	list, err := r.store.OfPack(req.Context(), req.PathValue("slug"))
 	if err != nil {
 		studio.WriteError(w, http.StatusInternalServerError, "Группы набора не прочитаны")
+		return
+	}
+	all, err := r.store.All(req.Context())
+	if err != nil {
+		studio.WriteError(w, http.StatusInternalServerError, "Группы не прочитаны")
 		return
 	}
 	out := make([]map[string]any, 0, len(list))
@@ -224,7 +240,13 @@ func (r *routes) ofPack(w http.ResponseWriter, req *http.Request, _ studio.User)
 			"slug": one.Slug, "title": one.Title, "mode": one.Mode,
 		})
 	}
-	studio.WriteJSON(w, http.StatusOK, map[string]any{"audiences": out})
+	known := make([]map[string]any, 0, len(all))
+	for _, one := range all {
+		known = append(known, map[string]any{
+			"slug": one.Slug, "title": one.Title, "broken": one.Broken,
+		})
+	}
+	studio.WriteJSON(w, http.StatusOK, map[string]any{"audiences": out, "all": known})
 }
 
 type packRequest struct {

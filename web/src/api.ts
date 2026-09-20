@@ -1,3 +1,5 @@
+import type { Условие } from './traits'
+
 // Обращение к редакционному API.
 //
 // Одно место на всю студию: токен, отказы и разбор ответа устроены
@@ -228,6 +230,40 @@ export type Client = {
   devices: number
   /** Живых прав: отозванное и истёкшее сюда не идут. */
   rights: number
+}
+
+// Группа врачей — гибкая роль пользователя приложения. Врач в группе,
+// если подходит по правилу ИЛИ назван в ней поимённо.
+export type Audience = {
+  slug: string
+  title: string
+  note: string
+  /** Признаки, соединённые «и». Пустое правило — НЕ «все»: только названные поимённо. */
+  rule: Условие[]
+  /** Сколько врачей названо поимённо. Это не размер группы: по правилу попадают и другие. */
+  members: number
+  /**
+   * Почему правило не применяется. Пусто — применяется.
+   *
+   * Сломанное правило не раздаёт и не отнимает, и сказать об этом надо
+   * словами: молча пустая группа читается как «никто не подошёл».
+   */
+  broken: string
+}
+
+// Врач, названный в группе поимённо.
+export type AudienceMember = {
+  account: number
+  email: string
+  addedBy: string
+  addedAt: string
+}
+
+// Связь набора с группой: набор ей открыт или от неё скрыт.
+export type PackAudience = {
+  slug: string
+  title: string
+  mode: 'open' | 'hidden'
 }
 
 // Цена. Копейки, а не рубли: рубль с копейками, приехавший дробным
@@ -671,6 +707,78 @@ export const api = {
 
   clientRights: (id: number) =>
     request<{ entitlements: Entitlement[] }>('GET', `/admin/api/clients/${id}/entitlements`),
+
+  // Группы врачей. Словарь признаков приезжает вместе со списком: студия
+  // рисует по нему выбор, и второй его редакции у неё быть не должно.
+  audiences: () =>
+    request<{ audiences: Audience[]; traits: string[]; windows: string[] }>(
+      'GET',
+      '/admin/api/audiences',
+    ),
+
+  audience: (slug: string) =>
+    request<Audience>('GET', `/admin/api/audiences/${encodeURIComponent(slug)}`),
+
+  createAudience: (group: { slug: string; title: string; note: string; rule: Условие[] }) =>
+    request<{ slug: string }>('POST', '/admin/api/audiences', group),
+
+  saveAudience: (slug: string, group: { title: string; note: string; rule: Условие[] }) =>
+    request<{ slug: string }>('PUT', `/admin/api/audiences/${encodeURIComponent(slug)}`, group),
+
+  dropAudience: (slug: string) =>
+    request<{ dropped: string }>('DELETE', `/admin/api/audiences/${encodeURIComponent(slug)}`),
+
+  // Размер спрашивается отдельно и тогда, когда на группу смотрят: счёт
+  // проходит по всем учётным записям, а у группы с поведенческим
+  // признаком — ещё и по всем попыткам. Считай его список, открытие
+  // раздела дорожало бы ровно от того, что групп становится больше.
+  audienceSize: (slug: string) =>
+    request<{ size: number }>('GET', `/admin/api/audiences/${encodeURIComponent(slug)}/size`),
+
+  audienceMembers: (slug: string) =>
+    request<{ members: AudienceMember[] }>(
+      'GET',
+      `/admin/api/audiences/${encodeURIComponent(slug)}/members`,
+    ),
+
+  addAudienceMember: (slug: string, account: number) =>
+    request<{ account: number }>(
+      'POST',
+      `/admin/api/audiences/${encodeURIComponent(slug)}/members`,
+      { account },
+    ),
+
+  dropAudienceMember: (slug: string, account: number) =>
+    request<{ account: number }>(
+      'DELETE',
+      `/admin/api/audiences/${encodeURIComponent(slug)}/members/${account}`,
+    ),
+
+  clientAudiences: (id: number) =>
+    request<{ audiences: { slug: string; title: string }[] }>(
+      'GET',
+      `/admin/api/clients/${id}/audiences`,
+    ),
+
+  // Связи набора и все группы приезжают одним ответом: карточка набора
+  // закрыта правом наборов, а список групп — правом клиентов, и вторым
+  // обращением составитель без права на клиентов получал бы отказ вместо
+  // выбора.
+  packAudiences: (slug: string) =>
+    request<{ audiences: PackAudience[]; all: { slug: string; title: string; broken: string }[] }>(
+      'GET',
+      `/admin/api/packs/${encodeURIComponent(slug)}/audiences`,
+    ),
+
+  // Связи задаются целиком: «кому открыт» — одно решение, и правится оно
+  // на одном экране. Правка по одной связи превратила бы его в череду
+  // мелких шагов, из которых итог не виден тому, кто их делает.
+  setPackAudiences: (slug: string, audiences: PackAudience[]) =>
+    request<{ audiences: number }>(
+      'PUT',
+      `/admin/api/packs/${encodeURIComponent(slug)}/audiences`,
+      { audiences: audiences.map((one) => ({ slug: one.slug, mode: one.mode })) },
+    ),
 
   prices: () => request<{ prices: Price[] }>('GET', '/admin/api/prices'),
 

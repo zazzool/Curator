@@ -79,6 +79,7 @@ export type Route =
     }
   | { name: 'packs' }
   | { name: 'sales' }
+  | { name: 'audiences' }
   | { name: 'reports' }
   | { name: 'workshop' }
   /**
@@ -116,6 +117,8 @@ export function sectionOf(route: Route): SectionId | null {
       return 'packs'
     case 'sales':
       return 'sales'
+    case 'audiences':
+      return 'audiences'
     case 'reports':
       return 'reports'
     case 'workshop':
@@ -192,6 +195,7 @@ export function readRoute(path: string): Route {
   if (parts.length === 1) {
     if (parts[0] === 'packs') return { name: 'packs' }
     if (parts[0] === 'sales') return { name: 'sales' }
+    if (parts[0] === 'audiences') return { name: 'audiences' }
     if (parts[0] === 'reports') return { name: 'reports' }
     if (parts[0] === 'workshop') return { name: 'workshop' }
   }

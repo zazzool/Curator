@@ -312,3 +312,52 @@ describe('подбор задач в набор', () => {
     expect(await screen.findByText(/Раздаваемых задач не нашлось/)).toBeTruthy()
   })
 })
+
+describe('кому ещё открыт', () => {
+  it('группы набора приезжают одним ответом, а не вторым обращением', async () => {
+    // Карточка набора закрыта правом НАБОРОВ, а список групп — правом
+    // клиентов. Ходи она за списком отдельно — составитель с правом
+    // собирать наборы, но без права на клиентов, получал бы на карточке
+    // отказ вместо выбора.
+    const пути: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string) => {
+        пути.push(path)
+        const ответ = path.startsWith('/admin/api/packs/cardio/audiences')
+          ? {
+              audiences: [{ slug: 'kafedra', title: 'Кафедра', mode: 'open' }],
+              all: [
+                { slug: 'kafedra', title: 'Кафедра', broken: '' },
+                { slug: 'ushedshie', title: 'Ушедшие', broken: '' },
+              ],
+            }
+          : path.startsWith('/admin/api/packs/cardio')
+            ? КАРТОЧКА
+            : path.startsWith('/admin/api/packs')
+              ? НАБОРЫ
+              : { cases: [] }
+        return Promise.resolve(new Response(JSON.stringify(ответ), { status: 200 }))
+      }),
+    )
+
+    render(<Packs me={СОСТАВИТЕЛЬ} />)
+    fireEvent.click(await screen.findByText('Кардиология'))
+    expect(await screen.findByText('Кому ещё открыт')).toBeTruthy()
+    await screen.findByText('Ушедшие')
+
+    expect(пути.some((one) => one.startsWith('/admin/api/audiences'))).toBe(false)
+  })
+
+  it('без единой группы объясняет, что набор раздаётся одной линейкой', async () => {
+    serve([
+      ['/admin/api/packs/cardio/audiences', { audiences: [], all: [] }],
+      ['/admin/api/packs/cardio', КАРТОЧКА],
+      ['/admin/api/packs', НАБОРЫ],
+      ['/admin/api/cases', { cases: [] }],
+    ])
+    render(<Packs me={СОСТАВИТЕЛЬ} />)
+    fireEvent.click(await screen.findByText('Кардиология'))
+    expect(await screen.findByText(/раздаётся одной\s+линейкой/)).toBeTruthy()
+  })
+})
