@@ -308,9 +308,13 @@ function ClientCard({ me, id, onBack }: { me: Me; id: number; onBack: () => void
 
   const canSell = me.permissions.includes('sales')
 
+  // В каких группах состоит врач. Отвечает на вопрос «откуда у него
+  // этот набор», который иначе разбирается перебором правил руками.
+  const [groups, setGroups] = useState<{ slug: string; title: string }[]>([])
+
   const read = useCallback(async () => {
-    // Четыре независимых чтения идут разом, а не в очередь. Ждать их
-    // по одному незачем: ни одно не зависит от прежнего, и четыре
+    // Пять независимых чтений идут разом, а не в очередь. Ждать их
+    // по одному незачем: ни одно не зависит от прежнего, и пять
     // круга по сети складываются в задержку, которую оператор видит
     // на каждом открытии карточки.
     //
@@ -318,15 +322,19 @@ function ClientCard({ me, id, onBack }: { me: Me; id: number; onBack: () => void
     // права на наборы у продавца может не быть, и отказ по ней не
     // должен ронять карточку клиента целиком. Остальные три ронять
     // обязаны: карточка без прав и приходов — это не карточка.
-    const [one, rights, payments, packs] = await Promise.all([
+    const [one, rights, payments, packs, groups] = await Promise.all([
       api.client(id),
       api.clientRights(id),
       api.clientPayments(id),
       api.packs().catch(() => null),
+      // Группы — тоже отдельным обещанием с собственным отказом, и по
+      // той же причине: права на клиентов у продавца может не быть.
+      api.clientAudiences(id).catch(() => null),
     ])
     setRights(rights?.entitlements ?? [])
     setPayments(payments?.payments ?? [])
     setPacks(packs?.packs ?? [])
+    setGroups(groups?.audiences ?? [])
     return one
   }, [id])
   const opened = useResource(read, 'Карточка не прочитана')
@@ -490,6 +498,29 @@ function ClientCard({ me, id, onBack }: { me: Me; id: number; onBack: () => void
             ))}
           </div>
         )}
+      </div>
+
+      <div className="page-section">
+        <h3>Группы</h3>
+        {groups.length === 0 ? (
+          <p className="empty">
+            Ни в одну группу не попадает: наборы ему раздаются линейкой и
+            купленным.
+          </p>
+        ) : (
+          <div className="list">
+            {groups.map((group) => (
+              <div key={group.slug} className="list-row">
+                <span>{group.title}</span>
+                <span className="muted">{group.slug}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        <p className="hint">
+          Состав считается сейчас: врач входит в группу, пока подходит по её
+          правилу или назван в ней поимённо. Правила — в разделе «Группы».
+        </p>
       </div>
 
       <div className="page-section">

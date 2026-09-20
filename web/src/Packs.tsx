@@ -4,7 +4,7 @@ import { счётом } from './words'
 import { ApiError, api } from './api'
 import { Loaded, useResource } from './useResource'
 import { confirmed } from './confirm'
-import type { Case, Me, PackItem } from './api'
+import type { Case, Me, PackAudience, PackItem } from './api'
 import { Banner } from './components/Banner'
 
 // Наборы задач: что собрано, из чего и что уехало на устройства.
@@ -551,6 +551,8 @@ function PackCard({ me, slug, onBack }: { me: Me; slug: string; onBack: () => vo
         </div>
       )}
 
+      {canPack && <PackAudiences slug={slug} />}
+
       {canPack && (
         <div className="page-section">
           <h3>Выпуск</h3>
@@ -615,3 +617,118 @@ function Picker({ chosen, onAdd }: { chosen: string[]; onAdd: (one: Case) => voi
   )
 }
 
+
+// Кому набор открыт помимо линейки.
+//
+// Отдельным разделом, а не строкой в карточке: линейка — это одно
+// решение, а группы — другое, и сохраняются они разными обращениями.
+// Смешай их в одну форму — и правка названия набора уносила бы с собой
+// правку того, кому он раздаётся.
+function PackAudiences({ slug }: { slug: string }) {
+  const [bound, setBound] = useState<PackAudience[]>([])
+  const [failure, setFailure] = useState('')
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const read = useCallback(async () => {
+    const answer = await api.packAudiences(slug)
+    return { mine: answer?.audiences ?? [], all: answer?.all ?? [] }
+  }, [slug])
+  const opened = useResource(read, 'Группы набора не прочитаны')
+  const reload = opened.reload
+  const loaded = opened.state === 'ready' ? opened.value : null
+
+  // Набранное заводится с прочитанного и переписывается только НОВЫМ
+  // ответом сервера: иначе снятая галочка возвращалась бы на место при
+  // любом перечитывании.
+  useEffect(() => {
+    if (loaded === null) return
+    setBound(loaded.mine)
+  }, [loaded])
+
+  function set(group: { slug: string; title: string }, mode: 'open' | 'hidden' | 'none') {
+    const без = bound.filter((one) => one.slug !== group.slug)
+    if (mode === 'none') {
+      setBound(без)
+      return
+    }
+    setBound([...без, { slug: group.slug, title: group.title, mode }])
+  }
+
+  async function save() {
+    setFailure('')
+    setNote('')
+    setBusy(true)
+    try {
+      await api.setPackAudiences(slug, bound)
+      await reload()
+      setNote('Сохранено. У врачей это отразится при следующем обращении приложения.')
+    } catch (error) {
+      setFailure(error instanceof ApiError ? error.message : 'Группы не сохранены')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="page-section">
+      <h3>Кому ещё открыт</h3>
+      <p className="hint">
+        Группы добавляются к линейке, а не заменяют её. Купленное не
+        отбирает ничто: врач, купивший набор и попавший потом под
+        скрывающую группу, набор сохраняет. При споре двух групп
+        выигрывает скрывающая.
+      </p>
+      {failure && <Banner kind="error">{failure}</Banner>}
+      {note && <Banner kind="success">{note}</Banner>}
+      <Loaded from={opened} while="Читаем группы…">
+        {({ all }) =>
+          all.length === 0 ? (
+            <p className="empty">
+              Групп пока не заведено. Пока их нет, набор раздаётся одной
+              линейкой — заводятся группы в разделе «Группы».
+            </p>
+          ) : (
+            <>
+              <ul className="units">
+                {all.map((group) => {
+                  const mine = bound.find((one) => one.slug === group.slug)
+                  return (
+                    <li key={group.slug} className="row-line">
+                      <span>
+                        {group.title}
+                        {group.broken !== '' && (
+                          <span className="tag retired">правило не разобрано</span>
+                        )}
+                      </span>
+                      <span className="row-tools">
+                        <label>
+                          <span className="visually-hidden">Как связан с набором</span>
+                          <select
+                            value={mine?.mode ?? 'none'}
+                            onChange={(e) =>
+                              set(group, e.target.value as 'open' | 'hidden' | 'none')
+                            }
+                          >
+                            <option value="none">не связан</option>
+                            <option value="open">открыт этой группе</option>
+                            <option value="hidden">скрыт от этой группы</option>
+                          </select>
+                        </label>
+                      </span>
+                    </li>
+                  )
+                })}
+              </ul>
+              <div className="form-actions">
+                <button onClick={save} disabled={busy}>
+                  Сохранить, кому открыт
+                </button>
+              </div>
+            </>
+          )
+        }
+      </Loaded>
+    </div>
+  )
+}

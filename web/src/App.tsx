@@ -34,6 +34,7 @@ import type { Me } from './api'
  * отдельно значит задержать ровно тот экран, который открывается сразу
  * после входа. Источник открывают следом за ним, с той же частотой.
  */
+const Audiences = lazy(() => import('./Audiences').then((m) => ({ default: m.Audiences })))
 const SourceImport = lazy(() => import('./SourceImport').then((m) => ({ default: m.SourceImport })))
 const Generate = lazy(() => import('./Generate').then((m) => ({ default: m.Generate })))
 const Packs = lazy(() => import('./Packs').then((m) => ({ default: m.Packs })))
@@ -231,6 +232,8 @@ export function App() {
                 <Packs me={me} />
               ) : route.name === 'sales' ? (
                 <Sales me={me} />
+              ) : route.name === 'audiences' ? (
+                <Audiences me={me} />
               ) : route.name === 'reports' ? (
                 <Reports me={me} />
               ) : route.name === 'workshop' ? (

@@ -36,6 +36,7 @@ export type SectionId =
   | 'sources'
   | 'packs'
   | 'sales'
+  | 'audiences'
   | 'reports'
   | 'workshop'
 
@@ -95,6 +96,12 @@ export const GROUPS: Group[] = [
   {
     label: 'Приложение',
     sections: [
+      {
+        id: 'audiences',
+        icon: 'people',
+        title: 'Группы',
+        hint: 'Кого считать одной аудиторией и какие наборы ей открыты помимо линейки',
+      },
       {
         id: 'reports',
         icon: 'analytics',
