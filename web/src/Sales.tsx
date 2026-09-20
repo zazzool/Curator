@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useRef, useState, type FormEvent } from 'react'
 
 import { рублями, вКопейки } from './Money'
 import { датой, счётом } from './words'
 import { ApiError, api } from './api'
-import type { Client, Entitlement, Me, Pack, Payment, Price } from './api'
+import { Loaded, useResource } from './useResource'
+import type { Client, Entitlement, Me, Pack, Payment } from './api'
 
 // Продажи: кому продано, за что и почём.
 //
@@ -52,7 +53,6 @@ export function Sales({ me }: { me: Me }) {
 
 // Цены: что и почём стоит на витрине.
 function Prices({ me }: { me: Me }) {
-  const [prices, setPrices] = useState<Price[] | null>(null)
   const [packs, setPacks] = useState<Pack[]>([])
   const [draft, setDraft] = useState({ purpose: 'subscription:month', rubles: '', enabled: true })
   const [failure, setFailure] = useState('')
@@ -60,25 +60,20 @@ function Prices({ me }: { me: Me }) {
 
   const canSell = me.permissions.includes('sales')
 
-  const reload = useCallback(async () => {
-    try {
-      setPrices((await api.prices())?.prices ?? [])
-    } catch (error) {
-      setFailure(error instanceof ApiError ? error.message : 'Цены не прочитаны')
-    }
+  const read = useCallback(async () => {
+    const list = (await api.prices())?.prices ?? []
     try {
       setPacks((await api.packs())?.packs ?? [])
     } catch {
       // Наборы нужны только для списка назначений. Без права на них
       // оператор всё равно назовёт подписку — раздел из-за этого молчать
-      // не должен.
+      // не должен, и отказ по ним не отказ раздела.
       setPacks([])
     }
+    return list
   }, [])
-
-  useEffect(() => {
-    void reload()
-  }, [reload])
+  const prices = useResource(read, 'Цены не прочитаны')
+  const reload = prices.reload
 
   async function save(event: FormEvent) {
     event.preventDefault()
@@ -116,15 +111,14 @@ function Prices({ me }: { me: Me }) {
       {note && <p className="banner success">{note}</p>}
 
       <div className="page-section">
-        {prices === null ? (
-          <p className="empty">Читаем цены…</p>
-        ) : prices.length === 0 ? (
+        <Loaded from={prices} while="Читаем цены…">
+        {(list) => list.length === 0 ? (
           <p className="empty">
             Цен нет ни одной: витрина ничего не предлагает, и купить нечего.
           </p>
         ) : (
           <div className="list">
-            {prices.map((price) => (
+            {list.map((price) => (
               <div key={price.purpose} className="list-row">
                 <span>
                   {назначением(price.purpose)}
@@ -135,6 +129,7 @@ function Prices({ me }: { me: Me }) {
             ))}
           </div>
         )}
+        </Loaded>
       </div>
 
       {canSell && (
@@ -190,21 +185,12 @@ function Prices({ me }: { me: Me }) {
 // найти его вовсе.
 function ClientSearch({ onOpen }: { onOpen: (id: number) => void }) {
   const [query, setQuery] = useState('')
-  const [clients, setClients] = useState<Client[] | null>(null)
-  const [failure, setFailure] = useState('')
-
-  const search = useCallback(async (q: string) => {
-    setFailure('')
-    try {
-      setClients((await api.clients(q))?.clients ?? [])
-    } catch (error) {
-      setFailure(error instanceof ApiError ? error.message : 'Клиенты не прочитаны')
-    }
-  }, [])
-
-  useEffect(() => {
-    void search('')
-  }, [search])
+  // Ищется по ПОСЛЕДНЕМУ набранному, а не по тому, что было при нажатии:
+  // запросы уходят по очереди, ответы возвращаются как придётся, и
+  // счётчик походов внутри чтения не даёт обогнавшему затереть свежий.
+  const [asked, setAsked] = useState('')
+  const read = useCallback(async () => (await api.clients(asked))?.clients ?? [], [asked])
+  const clients = useResource(read, 'Клиенты не прочитаны')
 
   return (
     <div className="page-section">
@@ -218,7 +204,7 @@ function ClientSearch({ onOpen }: { onOpen: (id: number) => void }) {
         className="field-with-action fld-long"
         onSubmit={(event) => {
           event.preventDefault()
-          void search(query)
+          setAsked(query)
         }}
       >
         <input
@@ -230,12 +216,9 @@ function ClientSearch({ onOpen }: { onOpen: (id: number) => void }) {
         <button type="submit">Найти</button>
       </form>
 
-      {failure && <p className="banner error">{failure}</p>}
-
       <div className="page-section">
-        {clients === null ? (
-          <p className="empty">Читаем…</p>
-        ) : clients.length === 0 ? (
+        <Loaded from={clients}>
+        {(list) => list.length === 0 ? (
           <p className="empty">
             {query
               ? 'По этому запросу никого. Проверьте почту — искать можно и по части её.'
@@ -243,7 +226,7 @@ function ClientSearch({ onOpen }: { onOpen: (id: number) => void }) {
           </p>
         ) : (
           <div className="list">
-            {clients.map((one) => (
+            {list.map((one) => (
               <button key={one.id} className="list-row" onClick={() => onOpen(one.id)}>
                 <span>
                   {именем(one)}
@@ -261,6 +244,7 @@ function ClientSearch({ onOpen }: { onOpen: (id: number) => void }) {
             ))}
           </div>
         )}
+        </Loaded>
       </div>
     </div>
   )
@@ -268,7 +252,6 @@ function ClientSearch({ onOpen }: { onOpen: (id: number) => void }) {
 
 // Карточка клиента: права, платежи и приход.
 function ClientCard({ me, id, onBack }: { me: Me; id: number; onBack: () => void }) {
-  const [client, setClient] = useState<Client | null>(null)
   const [rights, setRights] = useState<Entitlement[]>([])
   const [payments, setPayments] = useState<Payment[]>([])
   const [packs, setPacks] = useState<Pack[]>([])
@@ -280,24 +263,20 @@ function ClientCard({ me, id, onBack }: { me: Me; id: number; onBack: () => void
 
   const canSell = me.permissions.includes('sales')
 
-  const reload = useCallback(async () => {
-    try {
-      setClient(await api.client(id))
-      setRights((await api.clientRights(id))?.entitlements ?? [])
-      setPayments((await api.clientPayments(id))?.payments ?? [])
-    } catch (error) {
-      setFailure(error instanceof ApiError ? error.message : 'Карточка не прочитана')
-    }
+  const read = useCallback(async () => {
+    const one = await api.client(id)
+    setRights((await api.clientRights(id))?.entitlements ?? [])
+    setPayments((await api.clientPayments(id))?.payments ?? [])
     try {
       setPacks((await api.packs())?.packs ?? [])
     } catch {
       setPacks([])
     }
+    return one
   }, [id])
-
-  useEffect(() => {
-    void reload()
-  }, [reload])
+  const opened = useResource(read, 'Карточка не прочитана')
+  const reload = opened.reload
+  const client = opened.state === 'ready' ? opened.value : null
 
   async function accept(event: FormEvent) {
     event.preventDefault()
@@ -383,7 +362,9 @@ function ClientCard({ me, id, onBack }: { me: Me; id: number; onBack: () => void
           <h2>Клиент</h2>
           <button onClick={onBack}>К клиентам</button>
         </div>
-        {failure ? <p className="banner error">{failure}</p> : <p className="empty">Читаем карточку…</p>}
+        <Loaded from={opened} while="Читаем карточку…">
+          {() => null}
+        </Loaded>
       </div>
     )
   }

@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState, type ChangeEvent } from 'react'
+import { useCallback, useState, type ChangeEvent } from 'react'
 
 import { Cases } from './Cases'
 import { Generation } from './Generation'
 import { ApiError, api } from './api'
-import type { Document, Me, Source, Statement, Unit } from './api'
+import { Loaded, useResource } from './useResource'
+import type { Document, Me, Unit } from './api'
 
 // Экран источника: путь первого этапа целиком и в том же порядке, в каком
 // его проходят, — принести документ, посмотреть куски, принять разбор,
@@ -14,7 +15,6 @@ import type { Document, Me, Source, Statement, Unit } from './api'
 // Здесь скрывается только действие, которое всё равно отказало бы, и рядом
 // сказано, почему его нет.
 export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: () => void }) {
-  const [source, setSource] = useState<Source | null>(null)
   const [units, setUnits] = useState<Unit[]>([])
   const [documents, setDocuments] = useState<Document[]>([])
   const [path, setPath] = useState('')
@@ -26,28 +26,27 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
 
   const canAccept = me.permissions.includes('source:accept')
 
-  const reload = useCallback(
-    async (slicePath: string) => {
-      setFailure('')
-      try {
-        const [loaded, sliced, docs] = await Promise.all([
-          api.source(id),
-          api.units(id, slicePath),
-          api.documents(id),
-        ])
-        setSource(loaded)
-        setUnits(sliced.units)
-        setDocuments(docs.documents)
-      } catch (error) {
-        setFailure(error instanceof ApiError ? error.message : 'Источник не прочитан')
-      }
-    },
-    [id],
-  )
+  const read = useCallback(async () => {
+    const [loaded, sliced, docs] = await Promise.all([
+      api.source(id),
+      api.units(id, path),
+      api.documents(id),
+    ])
+    setUnits(sliced.units)
+    setDocuments(docs.documents)
+    return loaded
+  }, [id, path])
+  const opened = useResource(read, 'Источник не прочитан')
+  const source = opened.state === 'ready' ? opened.value : null
 
-  useEffect(() => {
-    void reload(path)
-  }, [reload, path])
+  // Перечитывание срезом: `path` уже в доводах чтения, и звать его надо
+  // тем же способом, что и всё остальное.
+  const reload = useCallback(
+    async (_slicePath: string) => {
+      await opened.reload()
+    },
+    [opened],
+  )
 
   async function upload(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
@@ -91,7 +90,10 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
     setNote('')
     try {
       const updated = await api.setSourceStatus(id, status)
-      setSource(updated)
+      // Подменяем прочитанное, а не перечитываем: сервер уже вернул новое
+      // состояние, и второй запрос показал бы составителю старое между
+      // двумя ответами.
+      opened.set(updated)
       setNote(
         updated.status === 'active'
           ? 'Источник объявлен действующим: врачи увидят его в справочнике приложения.'
@@ -110,7 +112,9 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
         <div className="page-head">
           <button onClick={onBack}>К источникам</button>
         </div>
-        {failure ? <p className="banner error">{failure}</p> : <p className="empty">Читаем источник…</p>}
+        <Loaded from={opened} while="Читаем источник…">
+          {() => null}
+        </Loaded>
       </div>
     )
   }
@@ -279,44 +283,29 @@ function DraftView({
   busy: boolean
   onAccept: () => void
 }) {
-  const [units, setUnits] = useState<Unit[] | null>(null)
-  const [statements, setStatements] = useState<Statement[]>([])
-  const [failure, setFailure] = useState('')
-
-  useEffect(() => {
-    let живы = true
-    void (async () => {
-      setFailure('')
-      setUnits(null)
-      try {
-        const loaded = await api.draft(document.id)
-        if (!живы) return
-        // Список без списка — пустой список, а не падение раздела.
-        setUnits(loaded?.units ?? [])
-        setStatements(loaded?.statements ?? [])
-      } catch (error) {
-        if (!живы) return
-        setUnits([])
-        setFailure(error instanceof ApiError ? error.message : 'Разбор не прочитан')
-      }
-    })()
-    return () => {
-      живы = false
+  // Ответ обогнавшего чтения отсекает счётчик походов внутри чтения —
+  // прежде здесь для того же стоял флаг «живы», и он же гасил показанное
+  // на время каждого перечитывания.
+  const read = useCallback(async () => {
+    const loaded = await api.draft(document.id)
+    // Список без списка — пустой список, а не падение раздела.
+    return {
+      units: loaded?.units ?? [],
+      statements: loaded?.statements ?? [],
     }
   }, [document.id])
-
-  const положенийУ = (label: string) =>
-    statements.filter((one) => one.unitLabel === label).length
+  const draft = useResource(read, 'Разбор не прочитан')
 
   return (
     <div className="page-section">
       <div className="page-head">
         <h3>Разбор файла «{document.filename}»</h3>
       </div>
-      {failure && <p className="banner error">{failure}</p>}
-      {units === null ? (
-        <p className="empty">Читаем…</p>
-      ) : units.length === 0 ? (
+      <Loaded from={draft}>
+      {({ units, statements }) => {
+      const положенийУ = (label: string) =>
+        statements.filter((one) => one.unitLabel === label).length
+      return units.length === 0 ? (
         <p className="empty">
           Из этого файла не вычиталось ни одной единицы. Принимать нечего:
           проверьте, тот ли это файл и тем ли способом он переведён в текст.
@@ -347,7 +336,9 @@ function DraftView({
             </button>
           </div>
         </>
-      )}
+      )
+      }}
+      </Loaded>
     </div>
   )
 }
