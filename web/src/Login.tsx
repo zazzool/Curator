@@ -39,7 +39,21 @@ const CODE_LENGTH = 6
  * Человек, ошибшийся кодом, должен исправить шесть цифр, а не искать, куда
  * делась форма.
  */
-export function Login({ onEnter }: { onEnter: (me: Me) => void }) {
+export function Login({
+  onEnter,
+  notice,
+}: {
+  onEnter: (me: Me) => void
+  /**
+   * Почему человек снова здесь, если он уже входил. Пустая строка —
+   * обычный вход.
+   *
+   * Без этой строки истёкшая сессия выглядела как самопроизвольный
+   * выход: только что была студия, теперь просят код, и непонятно,
+   * сломалось что-то или так задумано.
+   */
+  notice?: string
+}) {
   const [login, setLogin] = useState('')
   const [code, setCode] = useState('')
   const [failure, setFailure] = useState('')
@@ -108,6 +122,12 @@ export function Login({ onEnter }: { onEnter: (me: Me) => void }) {
         </div>
 
         <div className="stack">
+          {notice && (
+            <p className="banner" role="status">
+              {notice}
+            </p>
+          )}
+
           <div>
             <label htmlFor="gate-login">Имя</label>
             <input

@@ -181,4 +181,51 @@ describe('генерация по источнику', () => {
     expect(calls.length).toBe(1)
     vi.useRealTimers()
   })
+
+  it('опрос прекращается, когда очередь перестала читаться', async () => {
+    // Отказ оставлял очередь как была, а признак «идёт работа» считается
+    // по ней: опрос раз в три секунды не прекращался НИКОГДА. На
+    // истёкшей сессии это тысячи отказов подряд — ровно то, о чём
+    // предупреждает пояснение к опросу.
+    vi.useFakeTimers()
+    const calls: string[] = []
+    let первый = true
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string) => {
+        calls.push(path)
+        if (!path.includes('/jobs')) {
+          return Promise.resolve(new Response(JSON.stringify({}), { status: 200 }))
+        }
+        if (первый) {
+          первый = false
+          return Promise.resolve(
+            new Response(JSON.stringify({ jobs: [job({ status: 'running' })] }), { status: 200 }),
+          )
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify({ error: 'Сессия не найдена' }), { status: 401 }),
+        )
+      }),
+    )
+    render(<Generation me={СОСТАВИТЕЛЬ} source={SOURCE} units={UNITS} />)
+
+    // Ждём не обращения, а показанной строки: опрос заводится от
+    // прочитанной очереди, и до того, как она доедет до состояния,
+    // заводить ему нечего.
+    await vi.waitFor(() => expect(screen.getByText(/пишется/)).toBeTruthy())
+    const доТика = calls.length
+    await vi.advanceTimersByTimeAsync(3500)
+    expect(calls.length).toBeGreaterThan(доТика)
+    await vi.waitFor(() => expect(screen.getByText(/Сессия не найдена/)).toBeTruthy())
+
+    // Счёт снимается после того, как отказ доехал до состояния: до этого
+    // опрос ещё жив по праву, и мерить нечего. Дальше опрашивать нечего —
+    // сколько бы времени ни прошло.
+    await vi.advanceTimersByTimeAsync(3500)
+    const послеОтказа = calls.length
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(calls.length).toBe(послеОтказа)
+    vi.useRealTimers()
+  })
 })

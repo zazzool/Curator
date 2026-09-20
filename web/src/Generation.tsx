@@ -45,6 +45,13 @@ export function Generation({
       setJobs(list)
       return list
     } catch (error) {
+      // Очередь гасится, а не оставляется как была, и это не уборка.
+      // Признак «идёт работа» считается по jobs; оставленный прежний
+      // список держал его истинным, и опрос раз в три секунды не
+      // прекращался никогда — в том числе на истёкшей сессии, когда
+      // каждое обращение отвечает отказом. Ровно тысячи обращений в
+      // никуда, о которых предупреждает пояснение к опросу ниже.
+      setJobs([])
       setFailure(error instanceof ApiError ? error.message : 'Очередь не прочитана')
       return []
     }
@@ -216,8 +223,11 @@ function JobCard({ job, onClose }: { job: Job; onClose: () => void }) {
         drafts.map((draft, i) => (
           <div key={i} className="fragment">
             <h3>{draft.title}</h3>
+            {/* Черновик пишет модель, и объявленное обязательным она
+                может не написать. Перебор отсутствующего бросает во время
+                отрисовки — а отрисовка падает деревом целиком. */}
             <p>
-              {draft.segments.map((segment, j) => (
+              {(draft.segments ?? []).map((segment, j) => (
                 <span key={j}>
                   {segment.text}
                   {/* Разметка показывается прямо в условии: составитель
@@ -231,7 +241,7 @@ function JobCard({ job, onClose }: { job: Job; onClose: () => void }) {
               ))}
             </p>
             <ul className="units">
-              {draft.options.map((option, j) => (
+              {(draft.options ?? []).map((option, j) => (
                 <li key={j}>
                   {option.label && <span className="mono">{option.label}</span>} {option.text}
                   {(option.label || option.text) === draft.answer && (

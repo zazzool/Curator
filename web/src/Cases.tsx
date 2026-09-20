@@ -157,8 +157,13 @@ function CaseCard({ one, onClose }: { one: Case; onClose: () => void }) {
       <p className="hint">
         {one.statusWord} · {one.unitPath} · редакция {one.revision}
       </p>
+      {/* Поля тела объявлены обязательными, но пишет их модель, и
+          недописанное она отдаёт молча. Перебор отсутствующего бросает
+          во время отрисовки, а отказ отрисовки снимает дерево целиком —
+          граница отказа удержит его в этой панели, но и панель терять
+          незачем, когда цена бережности два знака. */}
       <p>
-        {one.body.segments.map((segment, i) => (
+        {(one.body?.segments ?? []).map((segment, i) => (
           <span key={i}>
             {segment.text}
             {/* Разметка показывается прямо в условии: составитель
@@ -171,10 +176,10 @@ function CaseCard({ one, onClose }: { one: Case; onClose: () => void }) {
         ))}
       </p>
       <ul className="units">
-        {one.body.options.map((option, i) => (
+        {(one.body?.options ?? []).map((option, i) => (
           <li key={i}>
             {option.label && <span className="mono">{option.label}</span>} {option.text}
-            {(option.label || option.text) === one.body.answer && (
+            {(option.label || option.text) === one.body?.answer && (
               <span className="muted"> — верный ответ</span>
             )}
           </li>

@@ -20,3 +20,21 @@ export function датой(raw: string): string {
   if (Number.isNaN(at.getTime())) return raw
   return at.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })
 }
+
+/**
+ * Дата и время — для того, что случилось только что.
+ *
+ * Одной даты хватает событию недельной давности, но не черновику,
+ * потерянному пять минут назад: «от 20 сентября» не говорит человеку,
+ * то ли это, что он набирал перед тем, как вкладка исчезла.
+ */
+export function датойИвременем(raw: string): string {
+  const at = new Date(raw)
+  if (Number.isNaN(at.getTime())) return raw
+  return at.toLocaleString('ru-RU', {
+    day: 'numeric',
+    month: 'long',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
