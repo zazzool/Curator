@@ -205,6 +205,60 @@ export type CueCheck = {
   remark?: string
 }
 
+/**
+ * Область действия правила свода.
+ *
+ * Пустая область — «всегда», и это законный случай: «не пиши в условии
+ * метку единицы» верно везде. Метка единицы без источника областью не
+ * считается — «3.1» есть в любом документе, — и сервер такую чистит.
+ */
+export type RuleScope = {
+  sources?: number[]
+  units?: string[]
+  taskKinds?: string[]
+  nodes?: string[]
+}
+
+/**
+ * Правило свода: то, чего конвейер держится, когда пишет задачу.
+ *
+ * `confirmations` против `quorum` — не украшение списка: выведенное
+ * правило до кворума в задание не уходит, и без этой пары составитель
+ * не отличит «правило работает» от «правило копится».
+ */
+export type Rule = {
+  id: string
+  title: string
+  text: string
+  why: string
+  kind: string
+  /** Род словами. Пишет его сервер — два места для одних слов расходятся молча. */
+  kindWord: string
+  source: string
+  status: string
+  /** Состояние назначено человеком, а не счётчиком подтверждений. */
+  pinned: boolean
+  scope: RuleScope
+  confirmations: number
+  seenJobs: number[]
+  /** Сколько подтверждений нужно выведенному правилу. Считает сервер. */
+  quorum: number
+  validFrom: string
+  validTo?: string
+  lastSeenAt?: string
+  updatedAt: string
+}
+
+/** Что составителю позволено назвать у правила. */
+export type RuleEdit = {
+  title: string
+  text: string
+  why: string
+  kind: string
+  status?: string
+  scope: RuleScope
+}
+
 export type Draft = {
   // Опознаватель записанного черновика. Им и только им черновик
   // принимается задачей: без него кнопке «Принять» не на чем стоять.
@@ -698,6 +752,13 @@ export const api = {
   retryJob: (id: number) => request<Job>('POST', `/admin/api/jobs/${id}/retry`, {}),
   cancelJob: (id: number) =>
     request<{ status: string }>('POST', `/admin/api/jobs/${id}/cancel`),
+
+  rules: () => request<{ rules: Rule[] }>('GET', '/admin/api/rules'),
+
+  createRule: (rule: RuleEdit) => request<Rule>('POST', '/admin/api/rules', rule),
+
+  saveRule: (id: string, rule: RuleEdit) =>
+    request<Rule>('PUT', `/admin/api/rules/${encodeURIComponent(id)}`, rule),
 
   prompts: () => request<{ prompts: Prompt[] }>('GET', '/admin/api/prompts'),
 
