@@ -29,7 +29,7 @@ import (
 
 func main() {
 	verify := flag.Bool("verify", false,
-		"развернуть снимок в отдельную базу и сверить числа строк")
+		"развернуть снимок в отдельную базу и сверить с живой")
 	prune := flag.Bool("prune", false, "убрать старые снимки")
 	flag.Parse()
 

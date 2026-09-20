@@ -3,6 +3,7 @@ package backup
 import (
 	"context"
 	"fmt"
+	"log"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -29,35 +30,81 @@ func testDSN(t *testing.T) string {
 	return dsn
 }
 
-// втораяБаза заводит отдельную базу под разворачивание и убирает её.
+// Съёмка идёт со СВОЕЙ базы, а не с общей проверочной.
 //
-// Отдельная — не придирка: разворачивание очищает таблицы перед вставкой,
-// и проверка, взявшая ту же базу, стёрла бы данные остальных проверок,
-// идущих рядом.
+// Это исправление красного сторожа, и цена промаха тут наглядна. Проверки
+// разных пакетов идут ОДНОВРЕМЕННО по одной базе, и снимать её посреди
+// чужой работы нельзя двояко. Во-первых, чужие строки, приехавшие после
+// съёмки, делают исправный снимок «неполным» — на этом и покраснел
+// сторож. Во-вторых, пакет схемы переименовывает и сносит public целыми
+// схемами, и pg_dump, читавший её в ту же секунду, получил взаимную
+// блокировку и оборванный COPY — отказ, которого в коде снимков нет
+// вовсе.
+//
+// Своя база снимает оба случая разом: в неё не пишет никто, кроме самой
+// проверки.
+var (
+	своя   string // откуда снимаем
+	чужая  string // куда разворачиваем
+	готовы bool
+)
+
+func TestMain(m *testing.M) {
+	dsn := os.Getenv("CURATOR_TEST_DSN")
+	if dsn != "" {
+		// Без строки подключения ничего не заводим и НЕ выходим: проверки
+		// на живой базе обязаны отказать поимённо, а не пропасть из
+		// отчёта. Отказ называет каждая из них сама (testDSN).
+		своя = заведиБазу(dsn, "curator_snapsrc")
+		чужая = заведиБазу(dsn, "curator_snapdst")
+		готовы = true
+	}
+	code := m.Run()
+	if готовы {
+		убериБазу(dsn, своя)
+		убериБазу(dsn, чужая)
+	}
+	os.Exit(code)
+}
+
+func заведиБазу(admin, prefix string) string {
+	name := fmt.Sprintf("%s_%d_%d", prefix, time.Now().UnixNano(), rand.IntN(1000))
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, admin)
+	if err != nil {
+		log.Fatalf("проверочная база недоступна: %v", err)
+	}
+	defer conn.Close(ctx)
+	if _, err := conn.Exec(ctx, `CREATE DATABASE "`+name+`"`); err != nil {
+		log.Fatalf("база под снимки не заведена: %v", err)
+	}
+	return подменитьБазу(admin, name)
+}
+
+func убериБазу(admin, dsn string) {
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, admin)
+	if err != nil {
+		return
+	}
+	defer conn.Close(ctx)
+	cut := strings.LastIndex(dsn, "/") + 1
+	name := dsn[cut:]
+	if q := strings.Index(name, "?"); q >= 0 {
+		name = name[:q]
+	}
+	_, _ = conn.Exec(ctx, `DROP DATABASE IF EXISTS "`+name+`" WITH (FORCE)`)
+}
+
+// втораяБаза отдаёт базу под разворачивание.
+//
+// Отдельная от снимаемой — не придирка: разворачивание очищает таблицы
+// перед вставкой, и проверка, взявшая ту же базу, стёрла бы то, что
+// стережёт.
 func втораяБаза(t *testing.T) string {
 	t.Helper()
-	ctx := context.Background()
-	live := testDSN(t)
-
-	name := fmt.Sprintf("curator_snap_%d_%d", time.Now().UnixNano(), rand.IntN(1000))
-
-	admin, err := pgx.Connect(ctx, live)
-	if err != nil {
-		t.Fatalf("проверочная база недоступна: %v", err)
-	}
-	defer admin.Close(ctx)
-	if _, err := admin.Exec(ctx, `CREATE DATABASE "`+name+`"`); err != nil {
-		t.Fatalf("вторая база не заведена: %v", err)
-	}
-	t.Cleanup(func() {
-		clean, err := pgx.Connect(context.Background(), live)
-		if err != nil {
-			return
-		}
-		defer clean.Close(context.Background())
-		_, _ = clean.Exec(context.Background(), `DROP DATABASE IF EXISTS "`+name+`" WITH (FORCE)`)
-	})
-	return подменитьБазу(live, name)
+	testDSN(t)
+	return чужая
 }
 
 // подменитьБазу меняет имя базы в строке подключения, не трогая прочего.
@@ -72,32 +119,45 @@ func подменитьБазу(dsn, name string) string {
 
 func хранитель(t *testing.T) *Keeper {
 	t.Helper()
-	return &Keeper{DSN: testDSN(t), Dir: t.TempDir()}
+	testDSN(t)
+	return &Keeper{DSN: своя, Dir: t.TempDir()}
 }
 
 func TestPgСнимокРазворачиваетсяИСходитсяПоСтрокам(t *testing.T) {
 	// Главная проверка: снимок, который никто не восстанавливал, — не
 	// снимок. Файл может быть непустым, читаемым и негодным.
+	ctx := context.Background()
 	k := хранитель(t)
 	k.VerifyDSN = втораяБаза(t)
 
-	snap, err := k.Take(context.Background())
+	name := свояТаблица(t, k.DSN)
+	выполни(t, k.DSN, `INSERT INTO "`+name+`" (что) VALUES ('строка снимка')`)
+
+	snap, err := k.Take(ctx)
 	if err != nil {
 		t.Fatalf("снимок не снят: %v", err)
 	}
 	if snap.Bytes == 0 {
 		t.Fatal("снимок пуст")
 	}
-	if err := k.Verify(context.Background(), snap.Path); err != nil {
+	if err := k.Verify(ctx, snap.Path); err != nil {
 		t.Fatalf("снимок не сошёлся: %v", err)
+	}
+
+	// Сверка сверкой, а строку смотрим глазами: «развернулось без отказа»
+	// и «данные на месте» — разные утверждения, и второе здесь главное.
+	вернулось := прочти(t, k.VerifyDSN, `SELECT что FROM "`+name+`"`)
+	if len(вернулось) != 1 || вернулось[0] != "строка снимка" {
+		t.Fatalf("из снимка вернулось %q, а клали одну строку", вернулось)
 	}
 }
 
 // свояТаблица заводит таблицу только для этой проверки и убирает её.
 //
-// Своя — не придирка: проверки разных пакетов идут ОДНОВРЕМЕННО по одной
-// базе, и чужие строки, приехавшие посреди съёмки, объявили бы отказом
-// исправный снимок.
+// База у пакета своя, но проверок в ней несколько, и идут они одна за
+// другой. Таблица, оставшаяся от предыдущей, задала бы следующей условия,
+// которых та не заказывала, — а разбирать такое пришлось бы по чужому
+// отказу.
 func свояТаблица(t *testing.T, dsn string) string {
 	t.Helper()
 	ctx := context.Background()
@@ -121,6 +181,34 @@ func свояТаблица(t *testing.T, dsn string) string {
 		_, _ = clean.Exec(context.Background(), `DROP TABLE IF EXISTS "`+name+`"`)
 	})
 	return name
+}
+
+// прочти отдаёт один столбец одним списком.
+func прочти(t *testing.T, dsn, sql string) []string {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	rows, err := conn.Query(ctx, sql)
+	if err != nil {
+		t.Fatalf("%s: %v", sql, err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var one string
+		if err := rows.Scan(&one); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, one)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 func выполни(t *testing.T, dsn, sql string) {
@@ -197,6 +285,13 @@ func TestPgРастущаяБазаНеОбъявляетИсправныйСн�
 	name := свояТаблица(t, k.DSN)
 	выполни(t, k.DSN, `INSERT INTO "`+name+`" (что) VALUES ('до снимка')`)
 
+	// Вторая таблица в час съёмки ПУСТА и наполняется после. Ровно на
+	// этом случае и покраснел сторож: прежняя сверка смотрела на каждую
+	// таблицу отдельно и объявляла такую «не развернувшейся». У нас таких
+	// таблиц полно — email_codes пуст, пока никто не привязывает почту, —
+	// и первая же привязка после ночного снимка давала бы ложный отказ.
+	пустая := свояТаблица(t, k.DSN)
+
 	snap, err := k.Take(ctx)
 	if err != nil {
 		t.Fatalf("снимок не снят: %v", err)
@@ -204,6 +299,7 @@ func TestPgРастущаяБазаНеОбъявляетИсправныйСн�
 	// Дописываем столько же, сколько было: строк в живой базе вдвое
 	// больше, чем в снимке, и это исправный случай.
 	выполни(t, k.DSN, `INSERT INTO "`+name+`" (что) VALUES ('после снимка')`)
+	выполни(t, k.DSN, `INSERT INTO "`+пустая+`" (что) VALUES ('первая за всё время')`)
 
 	if err := k.Verify(ctx, snap.Path); err != nil {
 		t.Fatalf("исправный снимок объявлен негодным из-за роста базы: %v", err)
@@ -217,6 +313,11 @@ func TestPgОборванныйСнимокНеПроходитСверку(t *t
 	ctx := context.Background()
 	k := хранитель(t)
 	k.VerifyDSN = втораяБаза(t)
+
+	// Со строками: обрывать пустой снимок нечестно — он и целиком-то
+	// состоит из заголовка, и отказ получился бы не про обрыв.
+	name := свояТаблица(t, k.DSN)
+	выполни(t, k.DSN, `INSERT INTO "`+name+`" (что) VALUES ('строка подлиннее, чтобы было что рубить')`)
 
 	snap, err := k.Take(ctx)
 	if err != nil {
