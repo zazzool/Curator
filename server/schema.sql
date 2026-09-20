@@ -716,6 +716,11 @@ CREATE TABLE IF NOT EXISTS packs (
     summary_md  TEXT        NOT NULL DEFAULT '',
     status      TEXT        NOT NULL DEFAULT 'draft'
                             CHECK (status IN ('draft', 'published', 'retired')),
+    -- Редакция набора — и карточки, и состава разом. Одна на двоих
+    -- намеренно: правятся они на одном экране, и составитель, чью правку
+    -- описания приняли поверх чужой перестановки задач, увидел бы
+    -- согласованную неверную картину — набор, которого никто не собирал.
+    revision    INTEGER     NOT NULL DEFAULT 1,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -914,6 +919,9 @@ CREATE TABLE IF NOT EXISTS prices (
                                    OR purpose ~ '^subscription:(month|year)$'),
     amount_kopecks BIGINT      NOT NULL CHECK (amount_kopecks > 0),
     enabled        BOOLEAN     NOT NULL DEFAULT TRUE,
+    -- Редакция цены. Нуль означает «строки не было»: заведение цены и её
+    -- правка приходят одной ручкой, и различить их можно только так.
+    revision       INTEGER     NOT NULL DEFAULT 1,
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

@@ -56,7 +56,7 @@ func TestPgОписьВыпускаСходитсяСЭталономИПодп�
 		t.Fatal(err)
 	}
 	caseID, _ := задача(t, gate)
-	if _, err := store.SetItems(context.Background(), slug, []string{caseID}); err != nil {
+	if _, _, err := store.SetItems(context.Background(), slug, []string{caseID}, 1); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Publish(context.Background(), slug, time.Now()); err != nil {
@@ -117,7 +117,7 @@ func TestPgОтпечатокИзОписиСходитсяСоСкачанно�
 		t.Fatal(err)
 	}
 	caseID, _ := задача(t, gate)
-	if _, err := store.SetItems(context.Background(), slug, []string{caseID}); err != nil {
+	if _, _, err := store.SetItems(context.Background(), slug, []string{caseID}, 1); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Publish(context.Background(), slug, time.Now()); err != nil {
@@ -171,13 +171,13 @@ func TestPgПлатныйНаборНеОтдаётСодержаниеБезП�
 		t.Fatal(err)
 	}
 	caseID, _ := задача(t, gate)
-	if _, err := store.SetItems(ctx, slug, []string{caseID}); err != nil {
+	if _, _, err := store.SetItems(ctx, slug, []string{caseID}, 1); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Publish(ctx, slug, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err := sales.NewPrices(gate).Set(ctx, "проверка", "pack:"+slug, 49900, true); err != nil {
+	if _, err := sales.NewPrices(gate).Set(ctx, "проверка", "pack:"+slug, 49900, true, 0); err != nil {
 		t.Fatal(err)
 	}
 

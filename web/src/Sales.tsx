@@ -78,6 +78,7 @@ function Prices({ me }: { me: Me }) {
   }, [])
   const prices = useResource(read, 'Цены не прочитаны')
   const reload = prices.reload
+  const известные = prices.state === 'ready' ? prices.value : []
 
   async function save(event: FormEvent) {
     event.preventDefault()
@@ -94,12 +95,22 @@ function Prices({ me }: { me: Me }) {
       setСуммаНеТа('Рублями и копейками: 1990 или 1990,00')
       return
     }
+    // Редакция берётся у той цены, которую оператор видел на экране; её
+    // отсутствие — нуль, и это значит «цены на этот товар не было».
+    // Сервер по ней и различает правку от заведения: пришедший с нулём к
+    // назначенной цене затёр бы чужое решение, ничего о нём не зная.
+    const revision = известные.find((one) => one.purpose === draft.purpose)?.revision ?? 0
     try {
-      await api.setPrice({ purpose: draft.purpose, kopecks, enabled: draft.enabled })
+      await api.setPrice({ purpose: draft.purpose, kopecks, enabled: draft.enabled, revision })
       await reload()
       setNote('Цена сохранена.')
     } catch (error) {
       setFailure(error instanceof ApiError ? error.message : 'Цена не сохранена')
+      // Здесь перечитать можно сразу, и это не то же, что у набора: на
+      // экране набора висит несохранённый состав, который перечитывание
+      // стёрло бы, а здесь набранное живёт в форме и никуда не денется.
+      // Оператор увидит чужую цену рядом со своим отказом и решит сам.
+      if (error instanceof ApiError && error.status === 409) await reload()
     }
   }
 

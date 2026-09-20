@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/ed25519"
 	crypto_rand "crypto/rand"
+	"errors"
 	"fmt"
 	"math/rand/v2"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -82,7 +84,7 @@ func TestPgВыпускПодписанИПодписьСходится(t *testi
 	первая := задача(t, gate, "published")
 	вторая := задача(t, gate, "published")
 
-	if _, err := store.SetItems(ctx, slug, []string{первая, вторая}); err != nil {
+	if _, _, err := store.SetItems(ctx, slug, []string{первая, вторая}, 1); err != nil {
 		t.Fatal(err)
 	}
 	out, err := store.Publish(ctx, slug, time.Now())
@@ -105,7 +107,7 @@ func TestPgПодписьСходитсяПослеЧтенияИзБазы(t *t
 	store, gate, pub := лавка(t)
 	ctx := context.Background()
 	slug := набор(t, store)
-	if _, err := store.SetItems(ctx, slug, []string{задача(t, gate, "published")}); err != nil {
+	if _, _, err := store.SetItems(ctx, slug, []string{задача(t, gate, "published")}, 1); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Publish(ctx, slug, time.Now()); err != nil {
@@ -129,7 +131,8 @@ func TestPgПравкаСоставаНеМеняетУжеВыпущенное(
 	ctx := context.Background()
 	slug := набор(t, store)
 	первая := задача(t, gate, "published")
-	if _, err := store.SetItems(ctx, slug, []string{первая}); err != nil {
+	_, редакция, err := store.SetItems(ctx, slug, []string{первая}, 1)
+	if err != nil {
 		t.Fatal(err)
 	}
 	первый, err := store.Publish(ctx, slug, time.Now())
@@ -138,7 +141,10 @@ func TestPgПравкаСоставаНеМеняетУжеВыпущенное(
 	}
 
 	// Состав переписан, но выпуска не делали.
-	if _, err := store.SetItems(ctx, slug, []string{первая, задача(t, gate, "published")}); err != nil {
+	// Правка идёт от той редакции, которую вернуло прошлое сохранение:
+	// набор поднимает её на каждую правку состава.
+	if _, _, err := store.SetItems(ctx, slug,
+		[]string{первая, задача(t, gate, "published")}, редакция); err != nil {
 		t.Fatal(err)
 	}
 	прежний, err := store.Latest(ctx, slug)
@@ -173,7 +179,7 @@ func TestPgЧерновикВВыпускНеПопадает(t *testing.T) {
 	готовая := задача(t, gate, "published")
 	черновик := задача(t, gate, "draft")
 
-	if _, err := store.SetItems(ctx, slug, []string{готовая, черновик}); err != nil {
+	if _, _, err := store.SetItems(ctx, slug, []string{готовая, черновик}, 1); err != nil {
 		t.Fatal(err)
 	}
 	out, err := store.Publish(ctx, slug, time.Now())
@@ -215,8 +221,8 @@ func TestPgНесуществующаяЗадачаВСоставеОтказы�
 	// является.
 	store, gate, _ := лавка(t)
 	slug := набор(t, store)
-	_, err := store.SetItems(context.Background(), slug,
-		[]string{задача(t, gate, "published"), "c-такой-нет"})
+	_, _, err := store.SetItems(context.Background(), slug,
+		[]string{задача(t, gate, "published"), "c-такой-нет"}, 1)
 	if err == nil {
 		t.Error("состав с несуществующей задачей принят молча")
 	}
@@ -230,7 +236,7 @@ func TestPgСтраницыЗадачНаборуПродолжаютсяСКу�
 	slug := набор(t, store)
 	ids := []string{задача(t, gate, "published"), задача(t, gate, "published"),
 		задача(t, gate, "published")}
-	if _, err := store.SetItems(ctx, slug, ids); err != nil {
+	if _, _, err := store.SetItems(ctx, slug, ids, 1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -259,7 +265,7 @@ func TestPgВитринаПоказываетТолькоВыпущенное(t 
 	ctx := context.Background()
 	без := набор(t, store)
 	с := набор(t, store)
-	if _, err := store.SetItems(ctx, с, []string{задача(t, gate, "published")}); err != nil {
+	if _, _, err := store.SetItems(ctx, с, []string{задача(t, gate, "published")}, 1); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Publish(ctx, с, time.Now()); err != nil {
@@ -316,7 +322,7 @@ func TestPgСоставЧитаетсяНазваниямиЗадач(t *testing
 	slug := набор(t, store)
 	первая := задача(t, gate, "published")
 	вторая := задача(t, gate, "published")
-	if _, err := store.SetItems(ctx, slug, []string{вторая, первая}); err != nil {
+	if _, _, err := store.SetItems(ctx, slug, []string{вторая, первая}, 1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -363,7 +369,8 @@ func TestPgСнятыйСВитриныНаборНеПоказывается(t 
 	store, gate, _ := лавка(t)
 	ctx := context.Background()
 	slug := набор(t, store)
-	if _, err := store.SetItems(ctx, slug, []string{задача(t, gate, "published")}); err != nil {
+	_, редакция, err := store.SetItems(ctx, slug, []string{задача(t, gate, "published")}, 1)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Publish(ctx, slug, time.Now()); err != nil {
@@ -373,7 +380,7 @@ func TestPgСнятыйСВитриныНаборНеПоказывается(t 
 		t.Fatal("выпущенный набор не попал на витрину")
 	}
 
-	if err := store.Update(ctx, slug, "Набор", "", "retired"); err != nil {
+	if _, err := store.Update(ctx, slug, "Набор", "", "retired", редакция); err != nil {
 		t.Fatalf("набор не снят: %v", err)
 	}
 	if наВитрине(t, store, slug) {
@@ -394,7 +401,7 @@ func TestPgСостоянияКоторогоНетНаборНеПринима�
 	// Словарь состояний закрыт, и отказ называет само состояние: молча
 	// принятое «удалён» не сняло бы набор ни с витрины, ни откуда-либо.
 	store, _, _ := лавка(t)
-	err := store.Update(context.Background(), набор(t, store), "Набор", "", "удалён")
+	_, err := store.Update(context.Background(), набор(t, store), "Набор", "", "удалён", 1)
 	if err == nil {
 		t.Fatal("состояние не из словаря принято")
 	}
@@ -415,4 +422,94 @@ func наВитрине(t *testing.T, store *Store, slug string) bool {
 		}
 	}
 	return false
+}
+
+func TestPgПравкаСоставаОтРедакцииКоторойНетОтказывает(t *testing.T) {
+	// Двое открыли «Кардиологию». Первый двадцать минут переставляет сорок
+	// задач, второй добавляет одну и сохраняет, первый сохраняет следом.
+	// Прежде добавленное исчезало молча, и экран тут же перечитывал состав:
+	// первый видел согласованную неверную картину и уходил домой.
+	store, gate, _ := лавка(t)
+	ctx := context.Background()
+	slug := набор(t, store)
+	первая := задача(t, gate, "published")
+	вторая := задача(t, gate, "published")
+
+	// Оба открыли набор на одной редакции.
+	открыт, err := store.One(ctx, slug)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := store.SetItems(ctx, slug, []string{первая, вторая}, открыт.Revision); err != nil {
+		t.Fatalf("первое сохранение не прошло: %v", err)
+	}
+	_, _, err = store.SetItems(ctx, slug, []string{вторая}, открыт.Revision)
+	if !errors.Is(err, ErrStale) {
+		t.Fatalf("правка от ушедшей редакции принята: %v", err)
+	}
+
+	// И главное: чужая правка на месте, а не затёрта опоздавшим.
+	стало, err := store.One(ctx, slug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(стало.Items) != 2 {
+		t.Fatalf("в составе %d задач вместо двух: опоздавший всё же затёр",
+			len(стало.Items))
+	}
+}
+
+func TestPgКарточкаИСоставДелятОднуРедакцию(t *testing.T) {
+	// Одна редакция на двоих намеренно: правятся они на одном экране, и
+	// «снял с витрины, пока ты переставлял» — та же потеря, что и
+	// потерянная перестановка.
+	store, gate, _ := лавка(t)
+	ctx := context.Background()
+	slug := набор(t, store)
+	открыт, err := store.One(ctx, slug)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := store.SetItems(ctx, slug,
+		[]string{задача(t, gate, "published")}, открыт.Revision); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.Update(ctx, slug, "Другое имя", "", "draft", открыт.Revision)
+	if !errors.Is(err, ErrStale) {
+		t.Fatalf("карточка сохранена поверх чужой правки состава: %v", err)
+	}
+}
+
+func TestPgОтказПоРедакцииНазываетОбаЧисла(t *testing.T) {
+	// «Перечитайте» без чисел составитель читает как сбой студии и жмёт
+	// ещё раз. Числа говорят ему, что случилось: его редакция отстала.
+	store, gate, _ := лавка(t)
+	ctx := context.Background()
+	slug := набор(t, store)
+	if _, _, err := store.SetItems(ctx, slug, []string{задача(t, gate, "published")}, 1); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := store.SetItems(ctx, slug, []string{}, 1)
+	if err == nil {
+		t.Fatal("правка от ушедшей редакции принята")
+	}
+	слова := err.Error()
+	if !strings.Contains(слова, "редакция 1") || !strings.Contains(слова, "уже 2") {
+		t.Errorf("в отказе нет обеих редакций: %s", слова)
+	}
+}
+
+func TestОтказПоРедакцииЭто409(t *testing.T) {
+	// 400 означает «так нельзя», и составитель пойдёт искать, что набрал
+	// не то, — а набрал он всё верно, просто опоздал. Студия по 409
+	// предлагает перечитать набор; по 400 такого предложения быть не
+	// должно, иначе оно появится и на «у набора должно быть название».
+	if code := stale(fmt.Errorf("%w: подробности", ErrStale)); code != http.StatusConflict {
+		t.Errorf("опоздавшая правка ответила %d вместо 409", code)
+	}
+	if code := stale(errors.New("у набора должно быть название")); code != http.StatusBadRequest {
+		t.Errorf("негодное название ответило %d вместо 400", code)
+	}
 }

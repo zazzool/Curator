@@ -24,6 +24,7 @@ const КАРТОЧКА = {
   summaryMd: 'Сорок задач',
   status: 'published',
   version: 3,
+  revision: 7,
   cases: [
     { id: 'c-1', ord: 0, title: 'Боль за грудиной', unitLabel: 'I21', status: 'published' },
     { id: 'c-2', ord: 1, title: 'Одышка', unitLabel: 'I50', status: 'published' },
@@ -124,7 +125,61 @@ describe('наборы', () => {
       const body = JSON.parse(String((sent![1] as { body?: string }).body))
       // Именно переставленный порядок, а не тот, что пришёл с сервера.
       expect(body.cases).toEqual(['c-2', 'c-1'])
+      // И та редакция, на которой состав открывали: без неё сервер не
+      // отличит правку от затирания чужой.
+      expect(body.revision).toBe(7)
     })
+  })
+
+  it('опоздавшая правка не стирает набранное и предлагает перечитать', async () => {
+    // Двое правят один набор. Отказ без выхода оставляет составителя с
+    // двадцатью минутами перестановок, которые больше никогда не
+    // сохранятся; перечитывание само, без спроса, стёрло бы их тут же.
+    let перечитано = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if (init?.method === 'PUT' && path.includes('/items')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                error: 'Набор успели поправить: у вас редакция 7, в наборе уже 8',
+              }),
+              { status: 409 },
+            ),
+          )
+        }
+        if (path.startsWith('/admin/api/packs/cardio')) {
+          перечитано++
+          return Promise.resolve(new Response(JSON.stringify(КАРТОЧКА), { status: 200 }))
+        }
+        const found: [string, unknown][] = [
+          ['/admin/api/packs', НАБОРЫ],
+          ['/admin/api/cases', { cases: [] }],
+        ]
+        const one = found.find(([key]) => path.startsWith(key))
+        return Promise.resolve(
+          new Response(JSON.stringify(one ? one[1] : {}), { status: 200 }),
+        )
+      }),
+    )
+    render(<Packs me={СОСТАВИТЕЛЬ} />)
+    fireEvent.click(await screen.findByText('Кардиология'))
+    await screen.findByText('Одышка')
+    const прочитаноДо = перечитано
+
+    fireEvent.click(screen.getAllByText('↓')[0]!)
+    fireEvent.click(screen.getByText('Сохранить состав'))
+
+    // Слова сервера показаны как есть, и рядом стоит единственный выход.
+    expect(await screen.findByText(/в наборе уже 8/)).toBeTruthy()
+    const перечитать = screen.getByRole('button', { name: 'Перечитать набор' })
+    // До нажатия набор не перечитан: переставленное на месте.
+    expect(перечитано).toBe(прочитаноДо)
+    expect(screen.getAllByText(/Одышка|Боль за грудиной/)[0]!.textContent).toContain('Одышка')
+
+    fireEvent.click(перечитать)
+    await waitFor(() => expect(перечитано).toBeGreaterThan(прочитаноДо))
   })
 
   it('пустой набор выпустить нечем, и кнопка об этом говорит', async () => {
