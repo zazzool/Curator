@@ -27,6 +27,7 @@ import (
 
 	"curator/server/internal/analytics"
 	"curator/server/internal/app"
+	"curator/server/internal/audience"
 	"curator/server/internal/backup"
 	"curator/server/internal/casestore"
 	"curator/server/internal/dbgate"
@@ -266,6 +267,7 @@ func routes(ctx context.Context, gate *dbgate.Gate) http.Handler {
 		casestore.Routes(desk, casestore.NewStore(gate))
 		app.KeyRoutes(desk, keys)
 		packs.Routes(desk, packStore)
+		audience.Routes(desk, audience.NewStore(gate))
 		sales.Routes(desk, sales.NewPayments(gate), prices, access, sales.NewClients(gate))
 
 		rollup := analytics.NewRollup(gate)
