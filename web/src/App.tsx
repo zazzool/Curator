@@ -27,6 +27,7 @@ import type { Me } from './api'
  * раздел по умолчанию, и подгружать его отдельно значит задержать ровно
  * тот экран, который открывается сразу после входа.
  */
+const Audiences = lazy(() => import('./Audiences').then((m) => ({ default: m.Audiences })))
 const Packs = lazy(() => import('./Packs').then((m) => ({ default: m.Packs })))
 const Reports = lazy(() => import('./Reports').then((m) => ({ default: m.Reports })))
 const Sales = lazy(() => import('./Sales').then((m) => ({ default: m.Sales })))
@@ -216,6 +217,8 @@ export function App() {
                 <Packs me={me} />
               ) : route.name === 'sales' ? (
                 <Sales me={me} />
+              ) : route.name === 'audiences' ? (
+                <Audiences me={me} />
               ) : route.name === 'reports' ? (
                 <Reports me={me} />
               ) : route.name === 'workshop' ? (

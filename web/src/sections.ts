@@ -30,7 +30,7 @@ export interface Group {
   sections: Section[]
 }
 
-export type SectionId = 'sources' | 'packs' | 'sales' | 'reports' | 'workshop'
+export type SectionId = 'sources' | 'packs' | 'sales' | 'audiences' | 'reports' | 'workshop'
 
 /**
  * Группы — существительные и только существительные: ни «Управления», ни
@@ -73,6 +73,12 @@ export const GROUPS: Group[] = [
   {
     label: 'Приложение',
     sections: [
+      {
+        id: 'audiences',
+        icon: 'people',
+        title: 'Группы',
+        hint: 'Кого считать одной аудиторией и какие наборы ей открыты помимо линейки',
+      },
       {
         id: 'reports',
         icon: 'analytics',
