@@ -6,7 +6,17 @@ import { ПРАВА, правоСловами, праваСловами } from '
 import { ApiError, api } from './api'
 import { Loaded, useResource } from './useResource'
 import { confirmed } from './confirm'
-import type { CompactionGroup, CompactionPlan, Me, Prompt, Rule, RuleEdit, StudioUser } from './api'
+import type {
+  CompactionGroup,
+  CompactionPlan,
+  Me,
+  PipelineNode,
+  Prompt,
+  Rule,
+  RuleEdit,
+  StudioUser,
+} from './api'
+import { долларами } from './Money'
 import { Banner } from './components/Banner'
 
 // Мастерская: пользователи студии, задания моделям и ключи программ.
@@ -20,6 +30,7 @@ export function Workshop({ me }: { me: Me }) {
   return (
     <div className="stack">
       <Users me={me} />
+      <Pipeline me={me} />
       <Prompts me={me} />
       <Rules me={me} />
       <AppKeys me={me} />
@@ -282,6 +293,133 @@ function Users({ me }: { me: Me }) {
 }
 
 // Задания моделям.
+/**
+ * Конвейер целиком: узлы по порядку, у каждого своя модель и своя цена.
+ *
+ * Отдельно от списка заданий, хотя настройка у них одна, потому что
+ * вопросы разные. Список заданий отвечает «что написано этому узлу»;
+ * конвейер — «во что обходится работа и где её менять». Второй вопрос
+ * задают обо ВСЁМ конвейере сразу, и, открывая узлы по одному, на него
+ * не ответить.
+ *
+ * Перечень узлов приходит с сервера, а не повторяется здесь: повторённый
+ * разошёлся бы молча на том узле, который добавили последним, и экран
+ * показал бы конвейер короче настоящего — не поломкой, а конвейером
+ * покороче.
+ */
+function Pipeline({ me }: { me: Me }) {
+  const read = useCallback(async () => await api.pipeline(), [])
+  const конвейер = useResource(read, 'Конвейер не прочитан')
+
+  if (!me.permissions.includes('prompts')) return null
+
+  return (
+    <div className="page-section">
+      <div className="page-head">
+        <h2>Конвейер</h2>
+      </div>
+      <Loaded from={конвейер}>
+        {(сведения) => (
+          <>
+            <p className="hint">
+              Узлы идут в том порядке, в каком через них проходит задача.
+              Числа — за {сведения.days} суток; модель узла меняют, и числа
+              за всё время смешали бы работу прежней модели с работой
+              нынешней.
+            </p>
+            <div className="table-wrap">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Узел</th>
+                    <th>Модель</th>
+                    <th>Обращений</th>
+                    <th>Отказов</th>
+                    <th>Цена обращения</th>
+                    <th>Время</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {сведения.nodes.map((узел, место) => (
+                    <tr key={узел.node}>
+                      <td>
+                        {место + 1}. {узел.word}
+                        {/*
+                          Узел без задания не работает вовсе, и сказать об
+                          этом надо здесь: пропусти мы строку, пропажа
+                          задания выглядела бы как пропажа узла, а искать
+                          её пошли бы в коде.
+                        */}
+                        {узел.promptId === '' && (
+                          <span className="tag">задания нет</span>
+                        )}
+                      </td>
+                      <td>{узел.model || <span className="muted">модель поставщика</span>}</td>
+                      <td>{узел.calls}</td>
+                      <td>{узел.failed > 0 ? узел.failed : <span className="muted">—</span>}</td>
+                      <td>
+                        <ЦенаУзла узел={узел} />
+                      </td>
+                      <td>
+                        {узел.calls === 0 ? (
+                          <span className="muted">—</span>
+                        ) : (
+                          `${узел.medianMs} мс`
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="hint">
+              Цена — медианная за одно состоявшееся обращение, а не средняя:
+              одно обращение разбора документа стоит десятка обращений
+              сверки, и среднее по узлу, куда попал один длинный документ,
+              показало бы дорогим узел, который дорог не был.
+            </p>
+          </>
+        )}
+      </Loaded>
+    </div>
+  )
+}
+
+/**
+ * Цена узла с оговоркой, если она оценка.
+ *
+ * Оценка не выдаётся за факт: цену обращения называет маршрутизатор, а
+ * остальным шлюзам её считают по прайсу, и расчёт не знает ни скидки
+ * префиксного кэша, ни наценки шлюза — там, где кэш работает, он
+ * ошибается в разы. Число, которое выглядит точным и таковым не
+ * является, хуже отсутствия числа.
+ */
+function ЦенаУзла({ узел }: { узел: PipelineNode }) {
+  // Считается по СОСТОЯВШИМСЯ, и потому «обращений не было» и «ни одно
+  // не состоялось» — один и тот же случай для цены и разные для узла.
+  // Отказ чаще всего не стоит ничего, и узел, у которого отказали все
+  // обращения, показал бы «$0» — то есть «бесплатный узел» там, где он
+  // просто не работал ни разу.
+  const состоялось = узел.calls - узел.failed
+  if (состоялось <= 0) {
+    return (
+      <span className="muted">
+        {узел.calls === 0 ? 'обращений не было' : 'ни одно не состоялось'}
+      </span>
+    )
+  }
+  return (
+    <>
+      {долларами(узел.medianNanoUsd)}
+      {узел.estimated > 0 && (
+        <span className="tag">
+          оценка у {узел.estimated} из {состоялось}
+        </span>
+      )}
+    </>
+  )
+}
+
 function Prompts({ me }: { me: Me }) {
   const [open, setOpen] = useState<string | null>(null)
   const [draft, setDraft] = useState({ name: '', systemMd: '', userMd: '', model: '', revision: 0 })

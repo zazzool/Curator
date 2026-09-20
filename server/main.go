@@ -424,7 +424,7 @@ func generation(ctx context.Context, gate *dbgate.Gate, desk *studio.Desk, sourc
 	// поломку студии и идёт искать её в студии — тот же довод, по
 	// которому и сами ручки объявляются всегда.
 	ledger := llmusage.NewStore(gate)
-	gen.Routes(desk, jobs, gen.NewResolver(gate), prompts, modelChoices(ledger))
+	gen.Routes(desk, jobs, gen.NewResolver(gate), prompts, modelChoices(ledger), nodeStats(ledger))
 
 	// Затравки кладутся при подъёме и только недостающие: правленое в
 	// студии задание затирать накатом нельзя. Отказ здесь не валит
@@ -663,6 +663,28 @@ func modelChoices(ledger *llmusage.Store) gen.ModelLister {
 				PromptNanoUSD:     one.PromptNanoUSD,
 				CompletionNanoUSD: one.CompletionNanoUSD,
 			})
+		}
+		return out, nil
+	}
+}
+
+// nodeStats — переходник от учёта расхода к числам конвейера.
+//
+// Тот же довод, что и у modelChoices: конвейер про учёт не знает, и
+// сводит их одно место — это.
+func nodeStats(ledger *llmusage.Store) gen.NodeStats {
+	return func(ctx context.Context, since, until time.Time) (map[string]gen.NodeUsage, error) {
+		list, err := ledger.ByNode(ctx, since, until)
+		if err != nil {
+			return nil, err
+		}
+		out := make(map[string]gen.NodeUsage, len(list))
+		for _, one := range list {
+			out[one.Node] = gen.NodeUsage{
+				Calls: one.Calls, Failed: one.Failed,
+				MedianNanoUSD: one.MedianNanoUSD, MedianMs: one.MedianMs,
+				Estimated: one.Estimated,
+			}
 		}
 		return out, nil
 	}

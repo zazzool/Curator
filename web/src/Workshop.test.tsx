@@ -26,6 +26,27 @@ const ЗАДАНИЯ = {
   ],
 }
 
+const КОНВЕЙЕР = {
+  days: 30,
+  nodes: [
+    {
+      node: 'compose', word: 'написание', promptId: 'compose-default',
+      promptName: 'Написание условия', model: 'дорогая/рассуждающая',
+      calls: 40, failed: 2, medianNanoUsd: 3_200_000, medianMs: 4200, estimated: 38,
+    },
+    {
+      node: 'verify', word: 'слепая сверка', promptId: 'verify-default',
+      promptName: 'Слепая сверка', model: '',
+      calls: 0, failed: 0, medianNanoUsd: 0, medianMs: 0, estimated: 0,
+    },
+    {
+      node: 'siblings', word: 'различающая сверка', promptId: '',
+      promptName: '', model: 'дешёвая/быстрая',
+      calls: 6, failed: 6, medianNanoUsd: 0, medianMs: 0, estimated: 0,
+    },
+  ],
+}
+
 const МОДЕЛИ = {
   models: [
     { provider: 'openrouter', model: 'дорогая/рассуждающая', promptNanoUsd: 3000, completionNanoUsd: 15000 },
@@ -123,6 +144,7 @@ function ответ(path: string, prompts: unknown, keys: unknown, users: unknow
   // что и остальные четыре: экран, которому не ответили, остаётся в
   // «Читаем…» и молча уводит проверку от её предмета.
   if (path.startsWith('/admin/api/models')) return МОДЕЛИ
+  if (path.startsWith('/admin/api/pipeline')) return КОНВЕЙЕР
   return keys
 }
 
@@ -204,6 +226,59 @@ describe('мастерская', () => {
     })
   })
 
+  it('конвейер показан целиком и в порядке прохождения', async () => {
+    // Перечень узлов приходит с сервера и в студии не повторяется:
+    // повторённый разошёлся бы молча на узле, который добавили
+    // последним, и экран показал бы конвейер короче настоящего — не
+    // поломкой, а конвейером покороче.
+    render(<Workshop me={МАСТЕР} />)
+    const заголовки = await screen.findAllByText(/написание|слепая сверка|различающая сверка/)
+    expect(заголовки.length).toBeGreaterThanOrEqual(3)
+    // Порядок — сведение, а не вёрстка: вычитка стоит между написанием и
+    // сверками потому, что сверки обязаны мерить то, что уйдёт
+    // обучающемуся.
+    const текст = заголовки.map((one) => one.textContent ?? '').join('|')
+    expect(текст.indexOf('написание')).toBeLessThan(текст.indexOf('слепая сверка'))
+  })
+
+  it('цена узла показана медианой и помечена оценкой', async () => {
+    // Оценка не выдаётся за факт: расчёт по прайсу не знает ни скидки
+    // префиксного кэша, ни наценки шлюза и ошибается в разы там, где кэш
+    // работает. Число, которое выглядит точным и таковым не является,
+    // хуже отсутствия числа.
+    render(<Workshop me={МАСТЕР} />)
+    expect(await screen.findByText('$0,0032')).toBeTruthy()
+    expect(screen.getByText(/оценка у 38 из 38/)).toBeTruthy()
+  })
+
+  it('узел без состоявшихся обращений не выглядит даровым', async () => {
+    // «$0» читается как «бесплатный узел», и решали бы по нему не то.
+    // Случая два, и они разные для узла, хотя одинаковые для цены: через
+    // узел не проходило ничего — и через узел проходило, но не
+    // состоялось ни разу. Второй прятался за нулём особенно охотно:
+    // отказ чаще всего не стоит ничего.
+    render(<Workshop me={МАСТЕР} />)
+    expect(await screen.findByText('обращений не было')).toBeTruthy()
+    expect(screen.getByText('ни одно не состоялось')).toBeTruthy()
+    expect(screen.queryByText('$0')).toBeNull()
+  })
+
+  it('узел без задания назван, а не пропущен', async () => {
+    // Задания нет — узел не работает вовсе. Пропусти студия строку, и
+    // пропажа задания выглядела бы как пропажа узла, а искать её пошли
+    // бы в коде.
+    render(<Workshop me={МАСТЕР} />)
+    expect(await screen.findByText('задания нет')).toBeTruthy()
+    expect(screen.getByText(/различающая сверка/)).toBeTruthy()
+  })
+
+  it('конвейер не показывается тому, кому не выдано право «задания»', async () => {
+    render(<Workshop me={РЕДАКТОР} />)
+    await waitFor(() => {
+      expect(screen.queryByText('Конвейер')).toBeNull()
+    })
+  })
+
   it('модель узла видна в списке, не открывая задание', async () => {
     // Узлов больше пяти, и «какой узел какой моделью» — вопрос обо ВСЁМ
     // конвейере сразу. Открывая задания по одному, ответить на него
@@ -218,11 +293,16 @@ describe('мастерская', () => {
       КЛЮЧИ,
     )
     render(<Workshop me={МАСТЕР} />)
-    expect(await screen.findByText(/дешёвая\/быстрая/)).toBeTruthy()
+    // Ищем В СТРОКЕ списка заданий, а не по всей странице: конвейер
+    // выше показывает те же имена моделей, и проверка по странице
+    // зеленела бы на списке, который модель потерял.
+    const строка = (await screen.findByText('Черновик задачи')).closest('.list-row')
+    expect(строка?.textContent).toMatch(/дешёвая\/быстрая/)
     // У узла без своей модели сказано словами, а не пусто: пустое место
     // читается как «не прочиталось», и составитель пойдёт перезагружать
     // экран, который работает.
-    expect(screen.getByText(/модель поставщика/)).toBeTruthy()
+    const вторая = screen.getByText('Слепая сверка').closest('.list-row')
+    expect(вторая?.textContent).toMatch(/модель поставщика/)
   })
 
   it('модель узла уезжает на сервер вместе с заданием', async () => {

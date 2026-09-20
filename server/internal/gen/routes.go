@@ -14,8 +14,9 @@ import (
 // Право стоит первым доводом у каждой: заказать задачу и читать промпты —
 // разные права, потому что править задание модели значит решать, какими
 // будут все будущие задачи, а заказать одну задачу — нет.
-func Routes(desk *studio.Desk, jobs *Jobs, resolver *Resolver, prompts *Prompts, models ModelLister) {
-	r := &routes{jobs: jobs, resolver: resolver, prompts: prompts, models: models}
+func Routes(desk *studio.Desk, jobs *Jobs, resolver *Resolver, prompts *Prompts,
+	models ModelLister, stats NodeStats) {
+	r := &routes{jobs: jobs, resolver: resolver, prompts: prompts, models: models, stats: stats}
 
 	desk.Handle(studio.PermGenerate, "POST /admin/api/sources/{id}/orders", r.place)
 	desk.Handle(studio.PermGenerate, "GET /admin/api/sources/{id}/jobs", r.list)
@@ -37,6 +38,7 @@ func Routes(desk *studio.Desk, jobs *Jobs, resolver *Resolver, prompts *Prompts,
 	// ради одного поля в них. Права без раздела не бывает — раздел
 	// мастерской закрыт правом на сервере, а не спрятан в студии.
 	desk.Handle(studio.PermPrompts, "GET /admin/api/models", r.listModels)
+	desk.Handle(studio.PermPrompts, "GET /admin/api/pipeline", r.pipeline)
 }
 
 type routes struct {
@@ -44,6 +46,7 @@ type routes struct {
 	resolver *Resolver
 	prompts  *Prompts
 	models   ModelLister
+	stats    NodeStats
 }
 
 type orderRequest struct {

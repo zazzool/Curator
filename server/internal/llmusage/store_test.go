@@ -2,6 +2,8 @@ package llmusage
 
 import (
 	"context"
+	"fmt"
+	"math/rand"
 	"os"
 	"strings"
 	"testing"
@@ -204,4 +206,126 @@ func TestPgПрайсБезПоставщикаНеКладётся(t *testing.T
 	if err == nil {
 		t.Fatal("прайс без поставщика лёг")
 	}
+}
+
+// свойУзел — имя узла, которого нет ни у кого другого.
+//
+// База одна на весь прогон, и расход по узлам считается по ИМЕНИ узла:
+// две проверки, взявшие «compose», считали бы обращения друг друга и
+// зеленели бы через раз.
+func свойУзел(t *testing.T) string {
+	t.Helper()
+	return fmt.Sprintf("узел-%d-%d", time.Now().UnixNano(), rand.Intn(1000))
+}
+
+func TestPgМедианаУзлаСчитаетсяПоСостоявшимсяОбращениям(t *testing.T) {
+	// Отказ чаще всего не стоит ничего: модель не ответила, токенов не
+	// потратила. Посчитай его вместе с работой — и узел, отказывающий
+	// половину раз, выглядел бы вдвое дешевле исправного. Решают по этому
+	// числу, где менять модель, и меняли бы там, где беда не в цене.
+	//
+	// И медиана, а не среднее: одно обращение разбора документа стоит
+	// десятка обращений сверки, и среднее по узлу, куда попал один
+	// длинный документ, показало бы дорогим узел, который дорог не был.
+	ctx := context.Background()
+	s := NewStore(testGate(t))
+	model := newModel(t)
+	node := свойУзел(t)
+	prices := llm.Prices{model: {Prompt: 1000}}
+
+	// Три состоявшихся по 10, 20 и 30 входных токенов: медиана — второе,
+	// то есть 20 000 нанодолларов. Среднее было бы тем же, поэтому
+	// четвёртым идёт длинное обращение: со средним оно даёт 132 500, с
+	// медианой — 25 000.
+	for _, tokens := range []int{10, 20, 30, 500} {
+		if err := s.Record(ctx, Call{Node: node, Provider: "шлюз", Model: model,
+			Usage: llm.Usage{PromptTokens: tokens}}, prices); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// И два отказа, не стоивших ничего.
+	for i := 0; i < 2; i++ {
+		if err := s.Record(ctx, Call{Node: node, Provider: "шлюз", Model: model,
+			Err: llm.ErrNotConfigured}, prices); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stats, err := s.ByNode(ctx, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mine *NodeStat
+	for i := range stats {
+		if stats[i].Node == node {
+			mine = &stats[i]
+		}
+	}
+	if mine == nil {
+		t.Fatalf("узел не попал в расход по узлам: %v", stats)
+	}
+	if mine.Calls != 6 || mine.Failed != 2 {
+		t.Fatalf("обращений %d и отказов %d вместо шести и двух", mine.Calls, mine.Failed)
+	}
+	if want := int64(25_000); mine.MedianNanoUSD != want {
+		t.Fatalf("медиана %d вместо %d: отказы или длинное обращение попали в счёт",
+			mine.MedianNanoUSD, want)
+	}
+	// Ни одной цены поставщик не называл — значит все состоявшиеся
+	// посчитаны по прайсу, и сказать об этом надо: оценка не выдаётся за
+	// факт.
+	if mine.Estimated != 4 {
+		t.Fatalf("оценочных обращений %d вместо четырёх", mine.Estimated)
+	}
+}
+
+func TestPgРасходПоУзламПустЗаСрокБезОбращений(t *testing.T) {
+	// Пустой список — [], а не nil: он уедет в ответ ручки, и null
+	// вместо списка роняет экран конвейера на исправном случае — на
+	// свежей установке, где не писали ещё ни одной задачи.
+	s := NewStore(testGate(t))
+	давно := time.Now().AddDate(-5, 0, 0)
+	stats, err := s.ByNode(context.Background(), давно, давно.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats == nil {
+		t.Fatal("расход по узлам отдан пустым значением, а не списком")
+	}
+	if len(stats) != 0 {
+		t.Fatalf("за срок без обращений нашлось %d узлов", len(stats))
+	}
+}
+
+func TestPgУзелОднихОтказовНеВыглядитДаровым(t *testing.T) {
+	// Узел, у которого не состоялось ни одно обращение, медианы не имеет
+	// вовсе. Ноль здесь — это «считать нечего», а не «бесплатно», и
+	// отличает их счёт состоявшихся: он тоже ноль. В студии по этой паре
+	// и сказано словами.
+	ctx := context.Background()
+	s := NewStore(testGate(t))
+	node := свойУзел(t)
+	for i := 0; i < 3; i++ {
+		if err := s.Record(ctx, Call{Node: node, Provider: "шлюз", Model: newModel(t),
+			Err: llm.ErrNotConfigured}, llm.Prices{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stats, err := s.ByNode(ctx, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, one := range stats {
+		if one.Node != node {
+			continue
+		}
+		if one.Calls != 3 || one.Failed != 3 {
+			t.Fatalf("обращений %d, отказов %d вместо трёх и трёх", one.Calls, one.Failed)
+		}
+		if one.MedianNanoUSD != 0 {
+			t.Fatalf("у узла без состоявшихся обращений взялась медиана %d", one.MedianNanoUSD)
+		}
+		return
+	}
+	t.Fatal("узел одних отказов выпал из расхода по узлам")
 }

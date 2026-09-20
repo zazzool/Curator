@@ -464,6 +464,36 @@ export type Prompt = {
   revision: number
 }
 
+/**
+ * Узел конвейера с его настройкой и его числами.
+ *
+ * Перечень узлов приходит С СЕРВЕРА и в студии не повторяется: повторённый
+ * список разошёлся бы молча — ровно на том узле, который добавили
+ * последним, — и экран показал бы конвейер из пяти узлов там, где их
+ * шесть. Узел, которого не видно, не настраивают.
+ */
+export type PipelineNode = {
+  node: string
+  word: string
+
+  /** Задание узла. Пусто — задания нет, и узел не работает вовсе. */
+  promptId: string
+  promptName: string
+
+  /** Модель узла; пустая строка — моделью поставщика. */
+  model: string
+
+  calls: number
+  failed: number
+
+  /** Медианная цена одного СОСТОЯВШЕГОСЯ обращения, в нанодолларах. */
+  medianNanoUsd: number
+  medianMs: number
+
+  /** Сколько обращений посчитано по прайсу, а не по названной цене. */
+  estimated: number
+}
+
 /** Модель, о которой что-то известно: для подсказки при выборе. */
 export type ModelChoice = {
   provider: string
@@ -922,6 +952,9 @@ export const api = {
     ),
 
   models: () => request<{ models: ModelChoice[] }>('GET', '/admin/api/models'),
+
+  pipeline: () =>
+    request<{ nodes: PipelineNode[]; days: number }>('GET', '/admin/api/pipeline'),
 
   cases: (
     query: {
