@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -335,6 +336,78 @@ func (s *Store) Catalog(ctx context.Context) ([]ModelPrice, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("прайс моделей дочитан не до конца: %w", err)
+	}
+	return out, nil
+}
+
+// NodeStat — что известно про один узел конвейера за срок.
+type NodeStat struct {
+	Node   string
+	Calls  int64
+	Failed int64
+
+	// MedianNanoUSD — медианная цена ОДНОГО состоявшегося обращения.
+	//
+	// Медиана, а не среднее: одно обращение разбора документа стоит
+	// десятка обращений сверки, и среднее по узлу, куда попал один
+	// длинный документ, показало бы дорогим узел, который дорог не был.
+	// Решают по этому числу, где менять модель, — и решили бы не там.
+	//
+	// По состоявшимся: отказ чаще всего не стоит ничего, и посчитанный
+	// вместе с работой он тянет медиану к нулю. Узел, отказывающий
+	// половину раз, выглядел бы вдвое дешевле исправного.
+	MedianNanoUSD int64
+
+	// MedianMs — медианное время одного состоявшегося обращения.
+	MedianMs int64
+
+	// Estimated — сколько обращений посчитано по прайсу, а не по цене,
+	// названной поставщиком. Оценка не выдаётся за факт: расчёт не знает
+	// ни скидки префиксного кэша, ни наценки шлюза и ошибается в разы
+	// там, где кэш работает.
+	Estimated int64
+}
+
+// ByNode — расход и отказы по узлам конвейера за срок.
+func (s *Store) ByNode(ctx context.Context, since, until time.Time) ([]NodeStat, error) {
+	rows, err := s.gate.Query(ctx,
+		`SELECT node,
+		        COUNT(*),
+		        COUNT(*) FILTER (WHERE status <> 'ok'),
+		        COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (
+		            ORDER BY cost_nano_usd) FILTER (WHERE status = 'ok'), 0),
+		        COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (
+		            ORDER BY latency_ms) FILTER (WHERE status = 'ok'), 0),
+		        COUNT(*) FILTER (WHERE status = 'ok' AND NOT cost_exact)
+		   FROM llm_calls
+		  WHERE created_at >= $1 AND created_at < $2
+		  GROUP BY node
+		  ORDER BY node`, since, until)
+	if err != nil {
+		return nil, fmt.Errorf("расход по узлам не прочитан: %w", err)
+	}
+	defer rows.Close()
+
+	// Пустой список — [], а не nil: он уедет в ответ ручки, и null вместо
+	// списка роняет студию на исправном случае — на свежей установке, где
+	// не писали ещё ни одной задачи.
+	out := []NodeStat{}
+	for rows.Next() {
+		var one NodeStat
+		// Медиана приезжает дробной — PERCENTILE_CONT усредняет два
+		// средних значения. Нанодоллар и миллисекунда дробными не
+		// бывают, и округление здесь честнее, чем дробь в ответе.
+		var cost, ms float64
+		if err := rows.Scan(&one.Node, &one.Calls, &one.Failed,
+			&cost, &ms, &one.Estimated); err != nil {
+			return nil, fmt.Errorf("строка расхода по узлам не разобрана: %w", err)
+		}
+		one.MedianNanoUSD = int64(math.Round(cost))
+		one.MedianMs = int64(math.Round(ms))
+		out = append(out, one)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("расход по узлам дочитан не до конца: %w", err)
 	}
 	return out, nil
 }

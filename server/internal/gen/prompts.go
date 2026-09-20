@@ -110,6 +110,16 @@ type Prompt struct {
 	// на отвечающей сразу работает иначе.
 	Model string
 
+	// IsDefault — по этому заданию узел и работает.
+	//
+	// Умолчание ровно одно на узел, и держит это указатель базы. Поле
+	// нужно там, где задания перебирают списком: запасное задание того
+	// же узла стоит в выдаче рядом с рабочим, и взятое по порядку вместо
+	// отмеченного показало бы настройку, которой конвейер не
+	// пользуется, — составитель поправил бы модель у задания, мимо
+	// которого задачи не ходят.
+	IsDefault bool
+
 	Revision int
 }
 
@@ -129,12 +139,12 @@ func NewPrompts(gate *dbgate.Gate) *Prompts { return &Prompts{gate: gate} }
 func (p *Prompts) ForNode(ctx context.Context, node string) (Prompt, error) {
 	var out Prompt
 	err := p.gate.QueryRow(ctx,
-		`SELECT id, name, node, system_md, user_md, model, revision
+		`SELECT id, name, node, system_md, user_md, model, is_default, revision
 		   FROM prompts
 		  WHERE node = $1 AND is_default
 		  LIMIT 1`, node).
 		Scan(&out.ID, &out.Name, &out.Node, &out.SystemMd, &out.UserMd,
-			&out.Model, &out.Revision)
+			&out.Model, &out.IsDefault, &out.Revision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Prompt{}, fmt.Errorf("у узла «%s» нет задания по умолчанию", NodeWord(node))
 	}
@@ -441,7 +451,7 @@ func seeds() []Prompt {
 // сбила бы его с того, что за чем идёт.
 func (p *Prompts) All(ctx context.Context) ([]Prompt, error) {
 	rows, err := p.gate.Query(ctx,
-		`SELECT id, name, node, system_md, user_md, model, revision
+		`SELECT id, name, node, system_md, user_md, model, is_default, revision
 		   FROM prompts
 		  ORDER BY node, id`)
 	if err != nil {
@@ -453,7 +463,7 @@ func (p *Prompts) All(ctx context.Context) ([]Prompt, error) {
 	for rows.Next() {
 		var one Prompt
 		if err := rows.Scan(&one.ID, &one.Name, &one.Node, &one.SystemMd,
-			&one.UserMd, &one.Model, &one.Revision); err != nil {
+			&one.UserMd, &one.Model, &one.IsDefault, &one.Revision); err != nil {
 			return nil, fmt.Errorf("задание не прочитано: %w", err)
 		}
 		byNode[one.Node] = append(byNode[one.Node], one)
@@ -532,11 +542,11 @@ func (p *Prompts) Save(ctx context.Context, edit Prompt, login string) (Prompt, 
 			        system_md = $3, user_md = $4, model = $5,
 			        revision = revision + 1, updated_at = NOW()
 			  WHERE id = $1 AND revision = $6
-			 RETURNING id, name, node, system_md, user_md, model, revision`,
+			 RETURNING id, name, node, system_md, user_md, model, is_default, revision`,
 			edit.ID, name, edit.SystemMd, edit.UserMd,
 			strings.TrimSpace(edit.Model), prevRevision).
 			Scan(&out.ID, &out.Name, &out.Node, &out.SystemMd, &out.UserMd,
-				&out.Model, &out.Revision)
+				&out.Model, &out.IsDefault, &out.Revision)
 		if err != nil {
 			return fmt.Errorf("задание %q не сохранено: %w", edit.ID, err)
 		}

@@ -46,6 +46,17 @@ func newDesk(t *testing.T, perms ...studio.Permission) (*httptest.Server, string
 // значение, и отличить их можно только прогнав оба.
 func newDeskModels(t *testing.T, models ModelLister, perms ...studio.Permission) (*httptest.Server, string) {
 	t.Helper()
+	return newDeskWith(t, models, nil, perms...)
+}
+
+// newDeskWith — та же студия со своим списком моделей и своим учётом.
+//
+// Учёт отдельным доводом потому, что пустой учёт — законное состояние
+// свежей установки, и экран конвейера обязан работать без него: узлы
+// настраивают до того, как по ним что-то прошло.
+func newDeskWith(t *testing.T, models ModelLister, stats NodeStats,
+	perms ...studio.Permission) (*httptest.Server, string) {
+	t.Helper()
 	gate := testGate(t)
 	users, sessions := studio.NewUsers(gate, nil), studio.NewSessions(gate)
 	desk := studio.NewDesk(users, sessions)
@@ -55,7 +66,7 @@ func newDeskModels(t *testing.T, models ModelLister, perms ...studio.Permission)
 	if err := prompts.Seed(context.Background()); err != nil {
 		t.Fatalf("затравки заданий не положены: %v", err)
 	}
-	Routes(desk, NewJobs(gate), NewResolver(gate), prompts, models)
+	Routes(desk, NewJobs(gate), NewResolver(gate), prompts, models, stats)
 
 	ctx := context.Background()
 	login := fmt.Sprintf("проверка-%d-%d", time.Now().UnixNano(), rand.Intn(1000))
