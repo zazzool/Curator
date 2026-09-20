@@ -23,7 +23,8 @@ export function Sidebar({
   collapsed,
   onCollapsed,
 }: {
-  section: SectionId
+  /** Раздел открытого адреса; пусто — ненайденная страница, и подсвечивать нечего. */
+  section: SectionId | null
   onGo: (to: SectionId) => void
   collapsed: boolean
   onCollapsed: (next: boolean) => void

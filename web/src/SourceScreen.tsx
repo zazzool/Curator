@@ -16,7 +16,25 @@ import { Banner } from './components/Banner'
 // скрытая вкладка при открытой ручке — подсказка, где искать, а не запрет.
 // Здесь скрывается только действие, которое всё равно отказало бы, и рядом
 // сказано, почему его нет.
-export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: () => void }) {
+export function SourceScreen({
+  me,
+  id,
+  onTitle,
+  onBack,
+}: {
+  me: Me
+  id: number
+  /**
+   * Прочитанное название — верхней полосе.
+   *
+   * В адресе стоит только номер, и пришедший по прямой ссылке иначе видел
+   * бы полосу без названия до самого ухода с экрана: полоса рисуется
+   * раньше, чем источник прочитан, и спросить у него название до ответа
+   * сервера нельзя.
+   */
+  onTitle: (title: string) => void
+  onBack: () => void
+}) {
   const [units, setUnits] = useState<Unit[]>([])
   /** Показаны ли все подошедшие единицы, и сколько их показывается за раз. */
   const [unitsCut, setUnitsCut] = useState<Cut>({})
@@ -66,6 +84,14 @@ export function SourceScreen({ me, id, onBack }: { me: Me; id: number; onBack: (
   }, [id, applied])
   const opened = useResource(read, 'Источник не прочитан')
   const source = opened.state === 'ready' ? opened.value : null
+
+  // Название уходит наверх после чтения, а не во время отрисовки: правка
+  // чужого состояния прямо в теле отрисовки — это второй проход по всему
+  // дереву на каждый кадр, и React о нём предупреждает недаром.
+  const title = source?.title ?? ''
+  useEffect(() => {
+    if (title !== '') onTitle(title)
+  }, [title, onTitle])
 
   // Перечитывание срезом: `path` уже в доводах чтения, и звать его надо
   // тем же способом, что и всё остальное.
