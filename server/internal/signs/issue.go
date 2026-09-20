@@ -3,6 +3,7 @@ package signs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -41,7 +42,7 @@ func Ensure(ctx context.Context, gate *dbgate.Gate) error {
 			err := tx.QueryRow(ctx,
 				`SELECT issued_count, edition_size FROM sign_editions WHERE slug = $1`,
 				s.Slug).Scan(&issued, &current)
-			if err != nil && err != pgx.ErrNoRows {
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 				return err
 			}
 			if err == nil && s.EditionSize > 0 && s.EditionSize < issued {
@@ -153,7 +154,7 @@ func rotate(ctx context.Context, tx pgx.Tx, accountID int64, m map[progress.Metr
 			 WHERE a.sign_slug = $1 AND a.revoked_at IS NULL
 			 ORDER BY a.issued_at DESC, a.id DESC
 			 LIMIT 1`, s.Slug).Scan(&holderID, &holderSignID, &raw)
-		if err != nil && err != pgx.ErrNoRows {
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return nil, 0, err
 		}
 
@@ -203,7 +204,7 @@ func take(ctx context.Context, tx pgx.Tx, s Sign) (int, bool, error) {
 	err := tx.QueryRow(ctx,
 		`SELECT issued_count, edition_size FROM sign_editions WHERE slug = $1 FOR UPDATE`,
 		s.Slug).Scan(&issued, &size)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		// Выпуска нет — знак не заведён. Это не повод ронять пачку
 		// разборов: врач потеряет вечер разбора из-за знака, которого он
 		// не просил.

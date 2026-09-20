@@ -146,6 +146,9 @@ func (e *Emails) StartBind(ctx context.Context, accountID int64, email string, n
 			return ErrTooOften
 		}
 
+		if err := extinguish(ctx, tx, email, purposeBind, now); err != nil {
+			return err
+		}
 		_, err = tx.Exec(ctx,
 			`INSERT INTO email_codes (account_id, email, code_hash, purpose, expires_at, created_at)
 			 VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -238,6 +241,9 @@ func (e *Emails) StartRecovery(ctx context.Context, email string, now time.Time)
 			return nil
 		}
 
+		if err := extinguish(ctx, tx, email, purposeRecovery, now); err != nil {
+			return err
+		}
 		_, err = tx.Exec(ctx,
 			`INSERT INTO email_codes (account_id, email, code_hash, purpose, expires_at, created_at)
 			 VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -300,6 +306,31 @@ const (
 	                WHERE email = $1 AND purpose = $2 AND used_at IS NULL
 	                ORDER BY id DESC LIMIT 1`
 )
+
+// extinguish гасит прежние неиспользованные коды того же назначения.
+//
+// # Зачем, если всё равно берётся новейший
+//
+// Затем, что «берётся новейший» и «прежний ещё жив» — это два разных
+// ответа на один вопрос, и жили они в базе одновременно. Строка прежнего
+// кода стояла неиспользованной, то есть по базе годной, а выбрать его
+// было нельзя никогда: pickByEmail смотрит только на последний.
+//
+// Стоило это не теории. Врач просит код, письма нет, он просит второй. Оба
+// письма приходят, он открывает ПЕРВОЕ — оно сверху в списке, — вводит
+// код и читает «код не подошёл или устарел». Код при этом не устарел и
+// подошёл бы, будь он один. Теперь живой код ровно один всегда, и отказ
+// на прежнем — правда, а не расхождение между базой и запросом.
+//
+// Заодно чинится счёт попыток: он ведётся на строке кода, и попытки,
+// потраченные на прежний, считались отдельно от нового.
+func extinguish(ctx context.Context, tx pgx.Tx, email, purpose string, now time.Time) error {
+	_, err := tx.Exec(ctx,
+		`UPDATE email_codes SET used_at = $3
+		  WHERE email = $1 AND purpose = $2 AND used_at IS NULL`,
+		email, purpose, now)
+	return err
+}
 
 // consume засчитывает попытку и гасит код, если он совпал.
 //

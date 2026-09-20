@@ -20,6 +20,21 @@ import (
 type Client struct {
 	cfg ProviderConfig
 
+	// Клиент HTTP собирается ОДИН раз на провайдера, а не на обращение.
+	//
+	// Собирался он первой строкой каждого do, и каждый новый Transport
+	// начинал с пустого пула соединений: TLS-рукопожатие на всякое
+	// обращение к модели, а брошенные простаивать соединения прежнего
+	// висели до полутора минут. На потоке генерации это сотни лишних
+	// рукопожатий в час и сотни висящих сокетов, и увидеть это в журнале
+	// нельзя ничем.
+	//
+	// Отказ разбора адреса прокси запоминается здесь же: собрать клиента
+	// в NewClient и промолчать об отказе значило бы ходить мимо прокси —
+	// то есть напрямую к провайдеру оттуда, откуда напрямую нельзя.
+	http    *http.Client
+	httpErr error
+
 	// origin и title уезжают заголовками атрибуции. Даются снаружи, а не
 	// берутся здесь из окружения: адрес контура задан в одном месте, и
 	// второе место для него разошлось бы с первым молча.
@@ -29,7 +44,9 @@ type Client struct {
 
 // NewClient собирает клиента провайдера.
 func NewClient(cfg ProviderConfig, origin, title string) *Client {
-	return &Client{cfg: cfg, origin: origin, title: title}
+	c := &Client{cfg: cfg, origin: origin, title: title}
+	c.http, c.httpErr = newHTTPClient(cfg)
+	return c
 }
 
 // Timeout — сколько ждать ответа.
@@ -50,14 +67,14 @@ func (c *Client) EffectiveModel(requested string) string {
 	return c.cfg.Model
 }
 
-// httpClient собирает клиента под канал этого провайдера.
+// newHTTPClient собирает клиента под канал этого провайдера.
 //
 // Прокси задаётся только здесь: через него ходит клиент провайдера и
 // больше никто.
-func (c *Client) httpClient() (*http.Client, error) {
+func newHTTPClient(cfg ProviderConfig) (*http.Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	if c.cfg.ProxyURL != "" {
-		u, err := url.Parse(c.cfg.ProxyURL)
+	if cfg.ProxyURL != "" {
+		u, err := url.Parse(cfg.ProxyURL)
 		if err != nil {
 			return nil, fmt.Errorf("адрес прокси не разобран: %w", err)
 		}
@@ -75,12 +92,13 @@ func (c *Client) httpClient() (*http.Client, error) {
 const providerRetries = 2
 
 func (c *Client) do(ctx context.Context, method, path string, body any) ([]byte, int, error) {
-	httpClient, err := c.httpClient()
-	if err != nil {
-		return nil, 0, &ProviderError{Provider: c.cfg.Name, Err: err}
+	if c.httpErr != nil {
+		return nil, 0, &ProviderError{Provider: c.cfg.Name, Err: c.httpErr}
 	}
+	httpClient := c.http
 
 	var rawBody []byte
+	var err error
 	if body != nil {
 		rawBody, err = json.Marshal(body)
 		if err != nil {

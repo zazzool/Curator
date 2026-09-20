@@ -71,7 +71,7 @@ func (s *Store) Publish(ctx context.Context, slug string, now time.Time) (Releas
 		err := tx.QueryRow(ctx,
 			`SELECT id, title, status FROM packs WHERE slug = $1 FOR UPDATE`,
 			slug).Scan(&packID, &title, &status)
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return errors.New("такого пакета нет")
 		}
 		if err != nil {
@@ -386,7 +386,7 @@ func (s *Store) SetItems(ctx context.Context, slug string, cases []string) (int,
 	err := s.gate.InTx(ctx, func(tx pgx.Tx) error {
 		var packID int64
 		err := tx.QueryRow(ctx, `SELECT id FROM packs WHERE slug = $1 FOR UPDATE`, slug).Scan(&packID)
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return errors.New("такого набора нет")
 		}
 		if err != nil {
@@ -489,7 +489,7 @@ func (s *Store) One(ctx context.Context, slug string) (Contents, error) {
 		       coalesce((SELECT max(version) FROM pack_releases r WHERE r.pack_id = p.id), 0)
 		  FROM packs p WHERE p.slug = $1`, slug).
 		Scan(&out.Slug, &out.Title, &out.SummaryMd, &out.Status, &out.Version)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return Contents{}, errors.New("такого набора нет")
 	}
 	if err != nil {

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/jackc/pgx/v5"
 
@@ -108,7 +109,7 @@ func loadMetrics(ctx context.Context, tx pgx.Tx, accountID int64) (Metrics, erro
 	var raw []byte
 	err := tx.QueryRow(ctx,
 		`SELECT metrics FROM account_progress WHERE account_id = $1`, accountID).Scan(&raw)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return out, nil
 	}
 	if err != nil {
