@@ -58,7 +58,7 @@ func (r *packRoutes) shelf(w http.ResponseWriter, req *http.Request, caller Call
 		slugs = append(slugs, one.Slug)
 	}
 	now := time.Now()
-	allowed, err := r.access.AllowedEach(req.Context(), caller.AccountID, slugs, now)
+	state, err := r.access.StateEach(req.Context(), caller.AccountID, slugs, now)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "Не вышло проверить доступ")
 		return
@@ -66,8 +66,18 @@ func (r *packRoutes) shelf(w http.ResponseWriter, req *http.Request, caller Call
 
 	out := make([]map[string]any, 0, len(list))
 	for _, one := range list {
+		mine := state[one.Slug]
+		// Скрытый группой набор не показывается вовсе, а не показывается
+		// закрытым: «скрыть» иначе значило бы «оставить на прилавке с
+		// ценником», и врач купил бы то, что мы от него прячем.
+		//
+		// Купивший его видит по-прежнему: право сильнее скрытия, и
+		// пропасть у него из витрины набор не должен.
+		if mine.Hidden && !mine.Open {
+			continue
+		}
 		kopecks := live["pack:"+one.Slug]
-		owned := allowed[one.Slug]
+		owned := mine.Open
 		out = append(out, map[string]any{
 			"slug": one.Slug, "title": one.Title, "summaryMd": one.SummaryMd,
 			"version": one.Version, "cases": one.Cases,

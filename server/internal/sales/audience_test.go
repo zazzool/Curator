@@ -158,6 +158,48 @@ func TestPgГруппаСкрываетНаборНоНеОтбираетКуп�
 	}
 }
 
+func TestPgСкрытыйНаборНеЗакрытАСкрыт(t *testing.T) {
+	gate := testGate(t)
+	access := NewAccess(gate)
+	ctx := context.Background()
+	slug := наборЛинейки(t, gate, packs.LinePaid)
+	packID := номер(t, gate, slug)
+
+	вГруппу(t, gate, slug, audience.Rule{{Trait: audience.TraitAge, N: 0}}, audience.ModeHidden)
+	скрытый := врач(t, gate)
+	купивший := врач(t, gate)
+	if _, err := gate.Exec(ctx, `
+		INSERT INTO entitlements (account_id, kind, pack_id, origin)
+		VALUES ($1, 'pack', $2, 'grant')`, купивший, packID); err != nil {
+		t.Fatal(err)
+	}
+
+	each, err := access.StateEach(ctx, скрытый, []string{slug}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !each[slug].Hidden {
+		t.Error("скрытый набор не назван скрытым: витрина оставит его на прилавке с ценником")
+	}
+	if each[slug].Open {
+		t.Error("скрытый набор назван открытым")
+	}
+
+	// Купивший видит его по-прежнему: право сильнее скрытия, и пропасть
+	// у него из витрины набор не должен. Скрытый и открытый разом — не
+	// противоречие, а именно этот случай.
+	его, err := access.StateEach(ctx, купивший, []string{slug}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !его[slug].Open {
+		t.Error("скрытие отобрало купленное")
+	}
+	if !его[slug].Hidden {
+		t.Error("купивший перестал считаться попавшим под скрывающую группу")
+	}
+}
+
 func TestPgБезГруппКорпусТакойЖеКакБылДоНих(t *testing.T) {
 	// Самая скучная и самая нужная проверка наряда: группы не должны
 	// менять ничего у того, кто ни в одну не попал. Линейка решает как

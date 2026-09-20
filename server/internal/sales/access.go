@@ -83,17 +83,35 @@ func (a *Access) verdicts(ctx context.Context, accountID int64, now time.Time) (
 // Бесплатным набор делается линейкой `sponsored`, и это видно в студии
 // словом, а не отсутствием числа.
 func (a *Access) Allowed(ctx context.Context, accountID int64, slug string, now time.Time) (bool, error) {
-	each, err := a.AllowedEach(ctx, accountID, []string{slug}, now)
+	each, err := a.StateEach(ctx, accountID, []string{slug}, now)
 	if err != nil {
 		return false, err
 	}
 	// Набора нет — и закрыт он не потому, что за него не заплатили.
 	// Отвечать «открыт» здесь значило бы пустить выгрузку дальше, к
 	// набору, которого нет.
-	return each[slug], nil
+	return each[slug].Open, nil
 }
 
-// AllowedEach отвечает про несколько наборов разом.
+// State — что показывать про набор этому врачу.
+type State struct {
+	// Open — набор открыт: качать можно.
+	Open bool
+
+	// Hidden — набор скрыт от врача группой.
+	//
+	// Отдельно от Open, потому что «закрыт» и «скрыт» — разные ответы
+	// витрине. Закрытый набор показывается и предлагает открыть себя
+	// покупкой или входом; скрытый не показывается вовсе, иначе
+	// «скрыть» означало бы «оставить на прилавке с ценником» — и врач
+	// купил бы то, что мы от него прячем.
+	//
+	// Скрытый и при этом открытый — не противоречие, а купивший: право
+	// сильнее скрытия, и такой набор остаётся на витрине.
+	Hidden bool
+}
+
+// StateEach отвечает про несколько наборов разом.
 //
 // # Зачем разом, а не по одному
 //
@@ -107,8 +125,8 @@ func (a *Access) Allowed(ctx context.Context, accountID int64, slug string, now 
 // же делает Allowed частным случаем: место сборки Rights в службе одно.
 // У донора таких мест было четыре, каждое собирало по-своему, и однажды
 // они разошлись — заказные наборы знали не все четыре.
-func (a *Access) AllowedEach(ctx context.Context, accountID int64, slugs []string, now time.Time) (map[string]bool, error) {
-	out := map[string]bool{}
+func (a *Access) StateEach(ctx context.Context, accountID int64, slugs []string, now time.Time) (map[string]State, error) {
+	out := map[string]State{}
 	if len(slugs) == 0 {
 		return out, nil
 	}
@@ -150,10 +168,13 @@ func (a *Access) AllowedEach(ctx context.Context, accountID int64, slugs []strin
 			return nil, err
 		}
 		v := verdicts[id]
-		out[slug] = packs.OpenTo(line, packs.Rights{
-			Owns: owns, Subscribed: subscribed, EmailBound: emailBound,
-			Granted: v.Granted, Hidden: v.Hidden,
-		})
+		out[slug] = State{
+			Open: packs.OpenTo(line, packs.Rights{
+				Owns: owns, Subscribed: subscribed, EmailBound: emailBound,
+				Granted: v.Granted, Hidden: v.Hidden,
+			}),
+			Hidden: v.Hidden,
+		}
 	}
 	return out, rows.Err()
 }
