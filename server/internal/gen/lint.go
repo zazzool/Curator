@@ -59,6 +59,16 @@ type Cue struct {
 	// Where — где нашлось: "segments" или "segments[2]".
 	Where   string `json:"where"`
 	Message string `json:"message"`
+
+	// Terms — сами протёкшие слова, как они стояли в условии.
+	//
+	// Отдельным полем, а не разбором Message обратно. Свод учится на
+	// повторяющемся слове — «в условиях по этому источнику слово X
+	// протекло трижды» становится правилом про этот источник, — и
+	// вытаскивать слово из готовой фразы значило бы завести вторую
+	// сборку того же перечня. Расходятся такие пары молча: перепиши
+	// фразу для составителя, и обучение начнёт копить пустоту.
+	Terms []string `json:"terms,omitempty"`
 }
 
 // CueCheck — что детектор сказал о черновике.
@@ -259,6 +269,10 @@ func LintDraft(draft Draft, plan Plan, lex Lexicon) CueCheck {
 	out := []Cue{}
 	названо := []string{}
 	изНазвания := []string{}
+	// Те же находки голыми словами — для свода. Собираются здесь же и
+	// тем же проходом: второй проход разошёлся бы с первым молча.
+	словаПоложений := []string{}
+	словаНазвания := []string{}
 	отмечено := map[string]bool{}
 
 	// Метки единиц круга, записанные в условии буквально: это готовый
@@ -347,8 +361,10 @@ func LintDraft(draft Draft, plan Plan, lex Lexicon) CueCheck {
 				отмечено[matched] = true
 				if origin == originTitle {
 					изНазвания = append(изНазвания, "«"+word+"»")
+					словаНазвания = append(словаНазвания, word)
 				} else {
 					названо = append(названо, fmt.Sprintf("«%s» — %s", word, origin))
+					словаПоложений = append(словаПоложений, word)
 				}
 			}
 		}
@@ -364,6 +380,7 @@ func LintDraft(draft Draft, plan Plan, lex Lexicon) CueCheck {
 			// Через точку с запятой: внутри самих формулировок положений
 			// запятые обычны, и по запятым перечень не разбирается.
 			Message: "в условии названо то, что надо показать: " + strings.Join(названо, "; "),
+			Terms:   словаПоложений,
 		})
 	}
 	if len(изНазвания) > 0 {
@@ -372,6 +389,7 @@ func LintDraft(draft Draft, plan Plan, lex Lexicon) CueCheck {
 			Where: "segments",
 			Message: "в условии стоят слова из названия эталона: " +
 				strings.Join(изНазвания, ", ") + " — это готовый ответ",
+			Terms: словаНазвания,
 		})
 	}
 	return CueCheck{Done: true, Cues: out}
