@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError, api } from './api'
 import { Loaded, useResource } from './useResource'
 import { go } from './router'
-import type { Check, Draft, Job, Me, Proofread, SiblingCheck, Source, Unit } from './api'
+import type { Check, CueCheck, Draft, Job, Me, Proofread, SiblingCheck, Source, Unit } from './api'
 import { Banner } from './components/Banner'
 
 /**
@@ -415,6 +415,7 @@ function JobCard({ me, job, onClose }: { me: Me; job: Job; onClose: () => void }
             <CheckNote check={draft.check} />
             <SiblingNote siblings={draft.siblings} />
             <ProofreadNote proofread={draft.proofread} />
+            <CueNote cues={draft.cues} />
             {accepted[draft.id] ? (
               // Выход к заведённой задаче даётся здесь же: принявший
               // черновик пришёл её выпускать, и искать её в списке
@@ -584,6 +585,53 @@ function SiblingNote({ siblings }: { siblings?: SiblingCheck[] }) {
  * причину. Показанная одной строкой «правки отклонены», она пропадает
  * так же, как пропадала до этого.
  */
+/**
+ * Что детектор подсказок нашёл в условии.
+ *
+ * Подсказка — это признак, НАЗВАННЫЙ словом вместо показа: обучающийся
+ * сводит слово со словом, а решает при этом будто бы задачу. Такая
+ * задача выглядит исправной и на деле не проверяет ничего, и заметить
+ * это глазами почти нельзя — потому детектор и заведён.
+ *
+ * Три исхода разделены намеренно. «Судить не могу» — у источника мало
+ * единиц, и редкость слова мерить не по чему; слей его с «чисто», и
+ * молодой источник за одно утро выпустил бы весь набор непроверенным.
+ * Слова замечаний берутся из ответа сервера: напиши их здесь второй раз,
+ * и две записи одних слов разойдутся молча.
+ */
+function CueNote({ cues }: { cues?: CueCheck }) {
+  if (!cues) {
+    return <p className="hint">Подсказок в условии не искали: детектор до этого черновика не дошёл.</p>
+  }
+  if (!cues.done) {
+    return (
+      <Banner kind="warning">
+        {cues.remark || 'Подсказки в условии не искали: причина не записана.'}
+      </Banner>
+    )
+  }
+  const найдено = cues.cues ?? []
+  if (найдено.length === 0) {
+    return <p className="hint">Подсказок в условии не найдено.</p>
+  }
+  // Полоса и список рядом, а не список внутри полосы: `Banner` — это
+  // абзац, и вложенный в абзац список браузер выносит наружу сам,
+  // разрывая разметку (тот же случай, что у отклонённых правок выше).
+  return (
+    <>
+      <Banner kind="error">
+        В условии есть подсказки: обучающийся сведёт слово со словом, не
+        разбирая случая. Перепишите названное показом.
+      </Banner>
+      <ul className="cue-list">
+        {найдено.map((c, i) => (
+          <li key={i}>{c.message}</li>
+        ))}
+      </ul>
+    </>
+  )
+}
+
 function ProofreadNote({ proofread }: { proofread?: Proofread }) {
   if (!proofread) {
     return <p className="hint">Вычитки у этого черновика не было: язык задачи не смотрел никто.</p>

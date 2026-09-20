@@ -583,6 +583,24 @@ func (j *Jobs) SaveProofread(ctx context.Context, draftID int64, report Proofrea
 	return nil
 }
 
+// SaveCueCheck записывает итог детектора подсказок в черновик.
+func (j *Jobs) SaveCueCheck(ctx context.Context, draftID int64, check CueCheck) error {
+	check.Remark = ""
+	body, err := json.Marshal(check)
+	if err != nil {
+		return fmt.Errorf("итог детектора подсказок не записан: %w", err)
+	}
+	res, err := j.gate.Exec(ctx,
+		`UPDATE case_drafts SET cue_check = $2 WHERE id = $1`, draftID, body)
+	if err != nil {
+		return fmt.Errorf("итог детектора подсказок не сохранён: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("черновик %d не найден: итог детектора подсказок не сохранён", draftID)
+	}
+	return nil
+}
+
 // Drafts — черновики, написанные по заданию.
 //
 // Списком, а не одним: перегенерация пишет второй черновик по тому же
@@ -590,7 +608,7 @@ func (j *Jobs) SaveProofread(ctx context.Context, draftID int64, report Proofrea
 // а затёртый черновик сравнить не с чем.
 func (j *Jobs) Drafts(ctx context.Context, jobID int64) ([]Stored, error) {
 	rows, err := j.gate.Query(ctx,
-		`SELECT id, body, blind_check, sibling_checks, proofread
+		`SELECT id, body, blind_check, sibling_checks, proofread, cue_check
 		   FROM case_drafts WHERE job_id = $1 ORDER BY id`, jobID)
 	if err != nil {
 		return nil, fmt.Errorf("черновики задания %d не прочитаны: %w", jobID, err)
@@ -600,8 +618,8 @@ func (j *Jobs) Drafts(ctx context.Context, jobID int64) ([]Stored, error) {
 	out := []Stored{}
 	for rows.Next() {
 		var id int64
-		var raw, rawCheck, rawSiblings, rawProofread []byte
-		if err := rows.Scan(&id, &raw, &rawCheck, &rawSiblings, &rawProofread); err != nil {
+		var raw, rawCheck, rawSiblings, rawProofread, rawCues []byte
+		if err := rows.Scan(&id, &raw, &rawCheck, &rawSiblings, &rawProofread, &rawCues); err != nil {
 			return nil, fmt.Errorf("строка черновика не разобрана: %w", err)
 		}
 		var draft Draft
@@ -648,6 +666,15 @@ func (j *Jobs) Drafts(ctx context.Context, jobID int64) ([]Stored, error) {
 			} else {
 				report.Remark = report.Remarks()
 				stored.Proofread = &report
+			}
+		}
+		if len(rawCues) > 0 {
+			var check CueCheck
+			if err := json.Unmarshal(rawCues, &check); err != nil {
+				log.Printf("черновик %d: итог детектора подсказок не разобран: %v", id, err)
+			} else {
+				check.Remark = check.Remarks()
+				stored.Cues = &check
 			}
 		}
 		out = append(out, stored)

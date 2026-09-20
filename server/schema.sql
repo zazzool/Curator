@@ -551,6 +551,15 @@ CREATE TABLE IF NOT EXISTS case_drafts (
                    CHECK (proofread IS NULL
                           OR jsonb_typeof(proofread) = 'object'),
 
+    -- Итог детектора подсказок: не называет ли условие ответ прямо.
+    -- NULL — детектор не дошёл; done: false — дошёл и судить не смог
+    -- (словаря источника не набралось). Второе не то же, что «чисто»:
+    -- прими одно за другое, и источник без словаря объявил бы чистым
+    -- весь набор.
+    cue_check      JSONB   NULL
+                   CHECK (cue_check IS NULL
+                          OR jsonb_typeof(cue_check) = 'object'),
+
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
