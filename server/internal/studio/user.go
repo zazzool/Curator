@@ -112,23 +112,47 @@ func (u *Users) ByLogin(ctx context.Context, login string) (User, string, error)
 	return user, secret, nil
 }
 
+// decoySecret — секрет-подставка для сверки, которой нечего сверять.
+//
+// Лежит открыто, и беды в этом нет: секрет пользователя — двадцать
+// случайных байт, и совпасть с написанным здесь он не может. Работа у
+// подставки одна — стоить столько же времени, сколько настоящая сверка.
+const decoySecret = "CURATORDECOYSECRETFORTIMINGONLY2"
+
 // VerifyCode сверяет одноразовый код пользователя.
 //
 // Отключённый пользователь не входит, и проверяется это здесь, а не
 // вызывающим: забыть проверку в одном из мест входа легче всего, а цена
 // забывчивости — работающий вход у того, кого уволили.
+//
+// # Негодный случай не уходит раньше годного
+//
+// Неизвестное имя, закрытый вход и непривязанный аутентификатор проходят ту
+// же сверку кода, что и годный пользователь, — по секрету-подставке. Выйди
+// они раньше, и ответ на них приходил бы заметно быстрее: разное время
+// ответа отвечает на вопрос, существует ли имя, — ровно на тот, ради
+// которого снаружи держится один отказ на все случаи (см. ErrGate).
+//
+// Чуда здесь нет: запрос к базе за ненайденным именем и за найденным стоит
+// по-разному, и отсюда этого не выправить. Выправлено выправимое — разница
+// в собственной работе входа.
 func (u *Users) VerifyCode(ctx context.Context, login, code string, at time.Time) (User, error) {
-	user, secret, err := u.ByLogin(ctx, login)
-	if err != nil {
-		return User{}, err
-	}
-	if user.Disabled {
-		return User{}, errors.New("вход отключён")
+	user, secret, reason := u.ByLogin(ctx, login)
+	if reason == nil && user.Disabled {
+		reason = errors.New("вход отключён")
 	}
 	if secret == "" {
-		return User{}, errors.New("у пользователя не привязан аутентификатор")
+		secret = decoySecret
+		if reason == nil {
+			reason = errors.New("у пользователя не привязан аутентификатор")
+		}
 	}
-	if !totp.Verify(secret, code, at) {
+
+	fits := totp.Verify(secret, code, at)
+	if reason != nil {
+		return User{}, reason
+	}
+	if !fits {
 		return User{}, errors.New("код не подошёл")
 	}
 	return user, nil
